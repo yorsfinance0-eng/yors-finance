@@ -82,7 +82,8 @@
         // ─── Constants ────────────────────────────────────────
         const BOTTLE_TYPES = ["200ml", "500ml", "1L"];
         const GODOWNS = ["Hazra", "Dunlop", "Bhawanipur", "Alipore", "Howrah"];
-        const TABS = ["Dashboard", "Trading A/C", "Inventory", "Stock In", "Stock Out", "P&L Account", "Cash Book", "Creditors", "Debtors", "Balance Sheet", "Depreciation", "Charts"];
+        const TABS = ["Dashboard", "Trading A/C", "Inventory", "Stock In", "Stock Out", "P&L Account", "Cash Book", "Creditors", "Debtors", "Clients", "Balance Sheet", "Depreciation", "Charts"];
+        const CLIENT_TYPES = ["Retailer", "Distributor"];
         const CASH_IN_TYPES = ["Sales Receipt", "Debtor Payment", "Capital Introduced", "Loan Received", "Other Income Receipt"];
         const CASH_OUT_TYPES = ["Expense Payment", "Creditor Payment", "Stock Purchase Payment", "Loan Repayment", "Other Payment"];
         const PL_CATS = { income: ["Other Income", "Finance Income"], expenses: ["Employee Benefit Expense", "Finance Costs", "Other Expenses", "Admin Expenses"] };
@@ -93,7 +94,7 @@
         const DEPR_METHODS = ["Straight Line (SLM)", "Written Down Value (WDV)"];
         const DEPR_PERIODS = ["Monthly", "Half-Yearly", "Yearly"];
         const C = { dark: "#0f172a", mid: "#1e293b", border: "#334155", text: "#e2e8f0", muted: "#64748b", purple: "#a855f7", green: "#22c55e", red: "#ef4444", blue: "#38bdf8", amber: "#f59e0b", violet: "#8b5cf6", teal: "#14b8a6" };
-        const INIT = { stockIn: [], stockOut: [], creditors: [], debtors: [], plEntries: [], balanceSheet: { assets: {}, liabilities: {} }, cashEntries: [], tradingEntries: [], depreciationAssets: [], openingStock: {} };
+        const INIT = { stockIn: [], stockOut: [], creditors: [], debtors: [], clients: [], plEntries: [], balanceSheet: { assets: {}, liabilities: {} }, cashEntries: [], tradingEntries: [], depreciationAssets: [], openingStock: {} };
         const INP = { width: "100%", padding: "8px 11px", borderRadius: 7, border: "1.5px solid #334155", background: "#1e293b", color: "#e2e8f0", fontSize: 13, marginBottom: 9, boxSizing: "border-box" };
         const BTNP = (bg) => ({ background: bg || "linear-gradient(90deg,#6366f1,#8b5cf6)", color: "#fff", border: "none", borderRadius: 7, padding: "8px 18px", cursor: "pointer", fontWeight: 700, fontSize: 12 });
         const BTND = { background: "#ef4444", color: "#fff", border: "none", borderRadius: 5, padding: "3px 9px", cursor: "pointer", fontWeight: 600, fontSize: 11 };
@@ -154,6 +155,29 @@
                 <div style={{ display: "flex", justifyContent: "space-between", fontSize: 9, color: "#64748b", marginTop: 2 }}><span>{data[0].l}</span><span style={{ color, fontWeight: 700 }}>{fc(data[data.length - 1].v)}</span><span>{data[data.length - 1].l}</span></div></div>);
         }
 
+        function BarChart({ data, color, height = 160 }) {
+            if (!data || data.length === 0) return <div style={{ height, display: "flex", alignItems: "center", justifyContent: "center", color: "#64748b", fontSize: 11 }}>No data yet</div>;
+            const vals = data.map(d => d.v), max = Math.max(...vals, 1);
+            const w = 400, pad = 30, barGap = 4, bw = Math.min(36, (w - pad * 2 - barGap * data.length) / data.length);
+            const chartH = height - 30;
+            return (<svg width="100%" viewBox={`0 0 ${w} ${height}`} style={{ display: "block" }}>
+                {/* Grid lines */}
+                {[0, 0.25, 0.5, 0.75, 1].map((f, i) => {
+                    const y = pad / 2 + (1 - f) * (chartH - pad); return <g key={i}><line x1={pad} y1={y} x2={w - 10} y2={y} stroke="#1e293b" strokeWidth="1" /><text x={pad - 4} y={y + 3} fill="#64748b" fontSize="8" textAnchor="end">{Math.round(max * f / 1000)}k</text></g>;
+                })}
+                {/* Bars */}
+                {data.map((d, i) => {
+                    const x = pad + i * (bw + barGap) + barGap, bh = (d.v / max) * (chartH - pad), y = pad / 2 + (chartH - pad) - bh;
+                    return <g key={i}>
+                        <defs><linearGradient id={`bar${i}`} x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={color} stopOpacity="0.95" /><stop offset="100%" stopColor={color} stopOpacity="0.5" /></linearGradient></defs>
+                        <rect x={x} y={y} width={bw} height={bh} rx={3} fill={`url(#bar${i})`} />
+                        <text x={x + bw / 2} y={y - 4} fill={color} fontSize="7" fontWeight="700" textAnchor="middle">{d.v >= 1000 ? Math.round(d.v / 1000) + "k" : d.v}</text>
+                        <text x={x + bw / 2} y={height - 4} fill="#94a3b8" fontSize="7" textAnchor="middle">{d.l}</text>
+                    </g>;
+                })}
+            </svg>);
+        }
+
         function SettlePanel({ form, setForm, creds, debs }) {
             const mode = form._settleContext; if (!mode) return null;
             const isIn = ["sale", "trading_cr", "bs_liability_reduce", "pl_income"].includes(mode);
@@ -176,7 +200,7 @@
                     </select>
                     {form.linkedPartyId === "__new__" && <div>
                         <input style={INP} placeholder="Name *" value={form.newPartyName || ""} onChange={e => setForm(f => ({ ...f, newPartyName: e.target.value }))} />
-                        <input type="number" style={INP} placeholder="Credit Period (days)" value={form.newPartyCredit || 30} onChange={e => setForm(f => ({ ...f, newPartyCredit: e.target.value }))} />
+                        <input type="number" style={INP} placeholder="Credit Period (days) *" value={form.newPartyCredit || ""} onChange={e => setForm(f => ({ ...f, newPartyCredit: e.target.value }))} />
                     </div>}
                 </div>)}
             </div>);
@@ -274,10 +298,20 @@
             const [tab, setTab] = useState("Dashboard");
             const [modal, setModal] = useState(null);
             const [form, setForm] = useState({});
-            const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All" });
+            const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All", dateFrom: "", dateTo: "", status: "All", search: "" });
+            const [selectedClient, setSelectedClient] = useState(null);
+            const [clSearch, setClSearch] = useState("");
+            const [clTypeF, setClTypeF] = useState("All");
+            const [clSort, setClSort] = useState("name");
+            const [clSortDir, setClSortDir] = useState(1);
+            const [clCatView, setClCatView] = useState("normal");
+            const [clDetailCat, setClDetailCat] = useState("all");
+            const toggleSort = (col) => { if (clSort === col) setClSortDir(d => d * -1); else { setClSort(col); setClSortDir(1); } };
+            const sortArrow = (col) => clSort === col ? (clSortDir === 1 ? " ▲" : " ▼") : "";
 
             const si = state.stockIn || [], so = state.stockOut || [], creds = state.creditors || [], debs = state.debtors || [];
             const cash = state.cashEntries || [], ple = state.plEntries || [], te = state.tradingEntries || [], da = state.depreciationAssets || [];
+            const clients = state.clients || [];
             const fifo = useMemo(() => computeFIFO(si, so), [si, so]);
 
             const totalPurchases = si.reduce((a, b) => a + Number(b.totalAmount), 0);
@@ -356,17 +390,23 @@
                 const total = Number(qty) * Number(ratePerUnit), id = gid(), res = resolveSettle(form, total, date, "Stock In: " + bottleType + " Batch " + batchNo, id, "out");
                 upd(p => {
                     let np = { ...p, stockIn: [...p.stockIn, { id, date, godown, bottleType, category, batchNo, qty: Number(qty), ratePerUnit: Number(ratePerUnit), totalAmount: total, settleMode: form.settleMode, linkedPartyId: res.partyId, linkedPartyName: res.partyName, createdCreditorId: res.createdCreditorId }] };
-                    if (res.createdCreditorId) np.creditors = [...np.creditors, { id: res.createdCreditorId, name: form.newPartyName, date, amount: 0, creditPeriod: form.newPartyCredit || 30, notified: false, checked: false }];
+                    if (res.createdCreditorId) np.creditors = [...np.creditors, { id: res.createdCreditorId, name: form.newPartyName, date, amount: 0, creditPeriod: form.newPartyCredit || "", notified: false, checked: false }];
                     res.cashEffects.forEach(e => { np.cashEntries = [...np.cashEntries, { ...e, payType: "Stock Purchase Payment" }]; }); return np;
                 }); closeM();
             };
             const applyStockOut = () => {
                 const { date, godown, bottleType, category, qty, ratePerUnit } = form;
                 if (!date || !godown || !bottleType || !category || !qty || !ratePerUnit || !form.settleMode) { alert("Fill all fields & select receipt mode"); return; }
+                if (form.linkClient === "yes" && !form.clientId) { alert("Please select or create a client"); return; }
+                if (form.linkClient === "yes" && form.clientId === "__new__" && !form.newClientName) { alert("Enter client name"); return; }
                 const total = Number(qty) * Number(ratePerUnit), id = gid(), res = resolveSettle(form, total, date, "Stock Out: " + bottleType + " " + date, id, "in");
+                let clientId = null, clientName = "";
+                if (form.linkClient === "yes" && form.clientId === "__new__") { clientId = gid(); clientName = form.newClientName; }
+                else if (form.linkClient === "yes" && form.clientId) { clientId = form.clientId; const cl = (state.clients || []).find(c => c.id === form.clientId); clientName = cl ? cl.name : ""; }
                 upd(p => {
-                    let np = { ...p, stockOut: [...p.stockOut, { id, date, godown, bottleType, category, qty: Number(qty), ratePerUnit: Number(ratePerUnit), totalAmount: total, settleMode: form.settleMode, linkedPartyId: res.partyId, linkedPartyName: res.partyName, createdDebtorId: res.createdDebtorId }] };
-                    if (res.createdDebtorId) np.debtors = [...np.debtors, { id: res.createdDebtorId, name: form.newPartyName, date, amount: 0, creditPeriod: form.newPartyCredit || 30, notified: false, checked: false }];
+                    let np = { ...p, stockOut: [...p.stockOut, { id, date, godown, bottleType, category, qty: Number(qty), ratePerUnit: Number(ratePerUnit), totalAmount: total, settleMode: form.settleMode, linkedPartyId: res.partyId, linkedPartyName: res.partyName, createdDebtorId: res.createdDebtorId, clientId, clientName }] };
+                    if (res.createdDebtorId) { const debtorEntry = { id: res.createdDebtorId, name: form.newPartyName, date, amount: 0, creditPeriod: form.newPartyCredit || "", notified: false, checked: false }; if (clientId) debtorEntry.clientId = clientId; np.debtors = [...np.debtors, debtorEntry]; }
+                    if (clientId && form.clientId === "__new__") np.clients = [...(np.clients || []), { id: clientId, name: form.newClientName, type: form.newClientType || "Retailer", date, phone: form.newClientPhone || "", address: form.newClientAddress || "" }];
                     res.cashEffects.forEach(e => { np.cashEntries = [...np.cashEntries, { ...e, payType: "Sales Receipt" }]; }); return np;
                 }); closeM();
             };
@@ -375,8 +415,8 @@
                 const amt = Number(form.amount), id = gid(), direction = form.side === "dr" ? "out" : "in", res = resolveSettle(form, amt, form.date, "Trading: " + form.description, id, direction);
                 upd(p => {
                     let np = { ...p, tradingEntries: [...p.tradingEntries, { id, date: form.date, side: form.side, description: form.description, amount: amt, settleMode: form.settleMode, linkedPartyId: res.partyId, linkedPartyName: res.partyName }] };
-                    if (res.createdCreditorId) np.creditors = [...np.creditors, { id: res.createdCreditorId, name: form.newPartyName, date: form.date, amount: 0, creditPeriod: form.newPartyCredit || 30, notified: false, checked: false }];
-                    if (res.createdDebtorId) np.debtors = [...np.debtors, { id: res.createdDebtorId, name: form.newPartyName, date: form.date, amount: 0, creditPeriod: form.newPartyCredit || 30, notified: false, checked: false }];
+                    if (res.createdCreditorId) np.creditors = [...np.creditors, { id: res.createdCreditorId, name: form.newPartyName, date: form.date, amount: 0, creditPeriod: form.newPartyCredit || "", notified: false, checked: false }];
+                    if (res.createdDebtorId) np.debtors = [...np.debtors, { id: res.createdDebtorId, name: form.newPartyName, date: form.date, amount: 0, creditPeriod: form.newPartyCredit || "", notified: false, checked: false }];
                     res.cashEffects.forEach(e => { np.cashEntries = [...np.cashEntries, e]; }); return np;
                 }); closeM();
             };
@@ -385,8 +425,8 @@
                 const amt = Number(form.amount), id = gid(), isExpense = form.side === "expense", direction = isExpense ? "out" : "in", res = resolveSettle(form, amt, form.date, form.description, id, direction);
                 upd(p => {
                     let np = { ...p, plEntries: [...p.plEntries, { id, date: form.date, side: form.side, category: form.category, description: form.description, amount: amt, settleMode: form.settleMode, linkedPartyId: res.partyId, linkedPartyName: res.partyName }] };
-                    if (res.createdCreditorId) np.creditors = [...np.creditors, { id: res.createdCreditorId, name: form.newPartyName, date: form.date, amount: 0, creditPeriod: form.newPartyCredit || 30, notified: false, checked: false }];
-                    if (res.createdDebtorId) np.debtors = [...np.debtors, { id: res.createdDebtorId, name: form.newPartyName, date: form.date, amount: 0, creditPeriod: form.newPartyCredit || 30, notified: false, checked: false }];
+                    if (res.createdCreditorId) np.creditors = [...np.creditors, { id: res.createdCreditorId, name: form.newPartyName, date: form.date, amount: 0, creditPeriod: form.newPartyCredit || "", notified: false, checked: false }];
+                    if (res.createdDebtorId) np.debtors = [...np.debtors, { id: res.createdDebtorId, name: form.newPartyName, date: form.date, amount: 0, creditPeriod: form.newPartyCredit || "", notified: false, checked: false }];
                     res.cashEffects.forEach(e => { np.cashEntries = [...np.cashEntries, { ...e, payType: isExpense ? "Expense Payment" : "Other Income Receipt" }]; }); return np;
                 }); closeM();
             };
@@ -396,8 +436,8 @@
                 const entry = { id, side: form.side, category: form.category, subCategory: form.subCategory, description: form.description, date: form.date || today(), amount: amt, settleMode: form.settleMode, linkedPartyId: res.partyId, linkedPartyName: res.partyName };
                 upd(p => {
                     let np = { ...p, balanceSheet: { ...p.balanceSheet, [form.side]: { ...p.balanceSheet[form.side], [id]: entry } } };
-                    if (res.createdCreditorId) np.creditors = [...np.creditors, { id: res.createdCreditorId, name: form.newPartyName, date: form.date || today(), amount: 0, creditPeriod: form.newPartyCredit || 30, notified: false, checked: false }];
-                    if (res.createdDebtorId) np.debtors = [...np.debtors, { id: res.createdDebtorId, name: form.newPartyName, date: form.date || today(), amount: 0, creditPeriod: form.newPartyCredit || 30, notified: false, checked: false }];
+                    if (res.createdCreditorId) np.creditors = [...np.creditors, { id: res.createdCreditorId, name: form.newPartyName, date: form.date || today(), amount: 0, creditPeriod: form.newPartyCredit || "", notified: false, checked: false }];
+                    if (res.createdDebtorId) np.debtors = [...np.debtors, { id: res.createdDebtorId, name: form.newPartyName, date: form.date || today(), amount: 0, creditPeriod: form.newPartyCredit || "", notified: false, checked: false }];
                     res.cashEffects.forEach(e => { np.cashEntries = [...np.cashEntries, { ...e, payType: isAsset ? "Other Payment" : "Capital Introduced" }]; }); return np;
                 }); closeM();
             };
@@ -497,38 +537,118 @@
                         </div>
                     </div>}
 
-                    {tab === "Inventory" && <div>
-                        <div style={{ fontSize: 16, fontWeight: 800, marginBottom: 14, color: C.blue }}>📦 Inventory (FIFO)</div>
-                        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
-                            {[["Purchased", fc(totalPurchases), "#6366f1,#8b5cf6"], ["Sold", fc(totalSales), "#0ea5e9,#0284c7"], ["COGS", fc(fifoCOGS), "#f59e0b,#d97706"], ["Closing Value", fc(fifoClosing), "#8b5cf6,#7c3aed"]].map(([l, v, g]) => (
-                                <div key={l} style={CARD(g)}><div style={{ fontSize: 9 }}>{l}</div><div style={{ fontSize: 13, fontWeight: 900 }}>{v}</div></div>
-                            ))}
-                        </div>
-                        <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
-                            {[["bt", ["All", ...BOTTLE_TYPES]], ["cat", ["All", "normal", "customized"]], ["godown", ["All", ...GODOWNS]]].map(([k, opts]) => (
-                                <select key={k} style={{ ...INP, width: "auto", marginBottom: 0 }} value={invFilter[k]} onChange={e => setInvFilter(f => ({ ...f, [k]: e.target.value }))}>{opts.map(o => <option key={o}>{o}</option>)}</select>
-                            ))}
-                        </div>
-                        {Object.keys(fifo).filter(k => { const [bt, cat] = k.split("_"); if (!fifo[k].inQty) return false; if (invFilter.bt !== "All" && bt !== invFilter.bt) return false; if (invFilter.cat !== "All" && cat !== invFilter.cat) return false; return true; }).map(k => {
+                    {tab === "Inventory" && (() => {
+                        /* ── Apply all filters to get filtered batches per FIFO group ── */
+                        const getFilteredBatches = (batches) => {
+                            return batches.filter(b => {
+                                if (invFilter.godown !== "All" && b.godown !== invFilter.godown) return false;
+                                if (invFilter.dateFrom && b.date < invFilter.dateFrom) return false;
+                                if (invFilter.dateTo && b.date > invFilter.dateTo) return false;
+                                if (invFilter.search && !(b.batchNo || "").toLowerCase().includes(invFilter.search.toLowerCase())) return false;
+                                if (invFilter.status !== "All") {
+                                    const st = b.remQty === 0 ? "Exhausted" : b.remQty === b.origQty ? "Untouched" : "Partial";
+                                    if (invFilter.status !== st) return false;
+                                }
+                                return true;
+                            });
+                        };
+
+                        /* ── Compute filtered totals across all FIFO groups ── */
+                        const filteredGroups = Object.keys(fifo).filter(k => {
+                            const [bt, cat] = k.split("_");
+                            if (!fifo[k].inQty) return false;
+                            if (invFilter.bt !== "All" && bt !== invFilter.bt) return false;
+                            if (invFilter.cat !== "All" && cat !== invFilter.cat) return false;
+                            return true;
+                        }).map(k => {
                             const [bt, cat] = k.split("_"), f = fifo[k];
+                            const fb = getFilteredBatches(f.batches);
+                            const filteredInQty = fb.reduce((a, b) => a + b.origQty, 0);
+                            const filteredOutQty = fb.reduce((a, b) => a + (b.origQty - b.remQty), 0);
+                            const filteredClosing = fb.reduce((a, b) => a + b.remQty * b.rate, 0);
+                            const filteredCogs = fb.reduce((a, b) => a + (b.origQty - b.remQty) * b.rate, 0);
+                            const filteredPurchased = fb.reduce((a, b) => a + b.origQty * b.rate, 0);
+                            return { key: k, bt, cat, f, fb, filteredInQty, filteredOutQty, filteredClosing, filteredCogs, filteredPurchased };
+                        });
+
+                        const fTotalPurchased = filteredGroups.reduce((a, g) => a + g.filteredPurchased, 0);
+                        const fTotalSold = filteredGroups.reduce((a, g) => a + g.filteredCogs, 0);
+                        const fTotalCOGS = filteredGroups.reduce((a, g) => a + g.filteredCogs, 0);
+                        const fTotalClosing = filteredGroups.reduce((a, g) => a + g.filteredClosing, 0);
+                        const fTotalUnits = filteredGroups.reduce((a, g) => a + g.filteredInQty - g.filteredOutQty, 0);
+                        const hasActiveFilter = invFilter.bt !== "All" || invFilter.cat !== "All" || invFilter.godown !== "All" || invFilter.dateFrom || invFilter.dateTo || invFilter.status !== "All" || invFilter.search;
+
+                        return <div>
+                        <div style={{ fontSize: 16, fontWeight: 800, marginBottom: 14, color: C.blue }}>📦 Inventory (FIFO)</div>
+
+                        {/* ── Summary Cards ── */}
+                        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
+                            {[["Purchased", fc(fTotalPurchased), "#6366f1,#8b5cf6"], ["COGS", fc(fTotalCOGS), "#f59e0b,#d97706"], ["Closing Value", fc(fTotalClosing), "#8b5cf6,#7c3aed"], ["Balance", fTotalUnits + " units", "#0ea5e9,#0284c7"]].map(([l, v, g]) => (
+                                <div key={l} style={CARD(g)}><div style={{ fontSize: 9 }}>{l}{hasActiveFilter ? " (filtered)" : ""}</div><div style={{ fontSize: 13, fontWeight: 900 }}>{v}</div></div>
+                            ))}
+                        </div>
+
+                        {/* ── Filter Bar ── */}
+                        <div style={{ background: C.mid, borderRadius: 12, padding: 14, marginBottom: 14, border: "1px solid " + C.border }}>
+                            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+                                <div style={{ fontSize: 11, fontWeight: 700, color: C.muted }}>🔍 FILTERS</div>
+                                {hasActiveFilter && <button onClick={() => setInvFilter({ bt: "All", cat: "All", godown: "All", dateFrom: "", dateTo: "", status: "All", search: "" })} style={{ ...BTNP("#ef4444"), padding: "4px 12px", fontSize: 10 }}>✕ Clear All</button>}
+                            </div>
+                            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                                {/* Dropdowns */}
+                                {[["bt", "Bottle Type", ["All", ...BOTTLE_TYPES]], ["cat", "Category", ["All", "normal", "customized"]], ["godown", "Godown", ["All", ...GODOWNS]], ["status", "Status", ["All", "Untouched", "Partial", "Exhausted"]]].map(([k, label, opts]) => (
+                                    <div key={k} style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                                        <label style={{ fontSize: 9, color: C.muted, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5 }}>{label}</label>
+                                        <select style={{ ...INP, width: "auto", marginBottom: 0, minWidth: 90, border: invFilter[k] !== "All" ? "1.5px solid #818cf8" : "1.5px solid " + C.border }} value={invFilter[k]} onChange={e => setInvFilter(f => ({ ...f, [k]: e.target.value }))}>{opts.map(o => <option key={o}>{o}</option>)}</select>
+                                    </div>
+                                ))}
+                                {/* Date Range */}
+                                <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                                    <label style={{ fontSize: 9, color: C.muted, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5 }}>From</label>
+                                    <input type="date" style={{ ...INP, width: "auto", marginBottom: 0, minWidth: 120, border: invFilter.dateFrom ? "1.5px solid #818cf8" : "1.5px solid " + C.border }} value={invFilter.dateFrom} max="2099-12-31" onChange={e => setInvFilter(f => ({ ...f, dateFrom: e.target.value }))} />
+                                </div>
+                                <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                                    <label style={{ fontSize: 9, color: C.muted, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5 }}>To</label>
+                                    <input type="date" style={{ ...INP, width: "auto", marginBottom: 0, minWidth: 120, border: invFilter.dateTo ? "1.5px solid #818cf8" : "1.5px solid " + C.border }} value={invFilter.dateTo} max="2099-12-31" onChange={e => setInvFilter(f => ({ ...f, dateTo: e.target.value }))} />
+                                </div>
+                                {/* Batch Search */}
+                                <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                                    <label style={{ fontSize: 9, color: C.muted, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5 }}>Batch #</label>
+                                    <input type="text" placeholder="Search batch…" style={{ ...INP, width: "auto", marginBottom: 0, minWidth: 120, border: invFilter.search ? "1.5px solid #818cf8" : "1.5px solid " + C.border }} value={invFilter.search} onChange={e => setInvFilter(f => ({ ...f, search: e.target.value }))} />
+                                </div>
+                            </div>
+                            {hasActiveFilter && <div style={{ marginTop: 8, fontSize: 10, color: "#818cf8" }}>
+                                📋 Showing {filteredGroups.reduce((a, g) => a + g.fb.length, 0)} batch(es) across {filteredGroups.filter(g => g.fb.length > 0).length} group(s)
+                            </div>}
+                        </div>
+
+                        {/* ── FIFO Groups ── */}
+                        {filteredGroups.map(({ key: k, bt, cat, f, fb, filteredInQty, filteredOutQty, filteredClosing, filteredCogs }) => {
+                            if (fb.length === 0) return null;
                             return (<div key={k} style={{ background: C.mid, borderRadius: 14, padding: 16, marginBottom: 14, borderLeft: "4px solid #818cf8" }}>
                                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, flexWrap: "wrap", gap: 6 }}>
-                                    <div style={{ display: "flex", gap: 8 }}><span style={{ fontSize: 13, fontWeight: 900, color: "#818cf8" }}>💧 {bt}</span><Badge label={cat.toUpperCase()} color={cat === "normal" ? "#0ea5e9" : C.amber} /></div>
+                                    <div style={{ display: "flex", gap: 8, alignItems: "center" }}><span style={{ fontSize: 13, fontWeight: 900, color: "#818cf8" }}>💧 {bt}</span><Badge label={cat.toUpperCase()} color={cat === "normal" ? "#0ea5e9" : C.amber} />{hasActiveFilter && <span style={{ fontSize: 9, color: C.muted, fontStyle: "italic" }}>({fb.length}/{f.batches.length} batches)</span>}</div>
                                     <div style={{ display: "flex", gap: 8 }}>
-                                        {[["Bal", f.balQty + " units", C.text], ["Value", fc(f.closingValue), C.violet], ["COGS", fc(f.cogs), C.amber]].map(([l, v, c]) => (
+                                        {[["Bal", (filteredInQty - filteredOutQty) + " units", C.text], ["Value", fc(filteredClosing), C.violet], ["COGS", fc(filteredCogs), C.amber]].map(([l, v, c]) => (
                                             <div key={l} style={{ background: C.dark, borderRadius: 7, padding: "4px 9px", fontSize: 11 }}><span style={{ color: C.muted }}>{l}: </span><span style={{ fontWeight: 800, color: c }}>{v}</span></div>
                                         ))}
                                     </div>
                                 </div>
                                 <table style={TBL}><thead><tr>{["Batch", "Date", "Godown", "Orig", "Rate", "Issued", "Rem", "Rem Val", "Status"].map(h => <th key={h} style={THS}>{h}</th>)}</tr></thead>
-                                    <tbody>{f.batches.map(b => {
+                                    <tbody>{fb.map(b => {
                                         const issued = b.origQty - b.remQty, pct = b.origQty > 0 ? Math.round((issued / b.origQty) * 100) : 0, st = b.remQty === 0 ? "Exhausted" : b.remQty === b.origQty ? "Untouched" : "Partial " + pct + "%", sc = b.remQty === 0 ? C.red : b.remQty === b.origQty ? C.green : C.amber;
                                         return (<tr key={b.batchNo}><td style={TDS}><span style={{ fontFamily: "monospace", color: "#818cf8", fontSize: 10 }}>{b.batchNo}</span></td><td style={TDS}>{b.date}</td><td style={TDS}><Badge label={b.godown} color="#7c3aed" /></td><td style={TDS}>{b.origQty}</td><td style={TDS}>{fc(b.rate)}</td><td style={{ ...TDS, color: C.red }}>{issued}</td><td style={{ ...TDS, fontWeight: 700, color: b.remQty > 0 ? C.green : C.muted }}>{b.remQty}</td><td style={{ ...TDS, color: C.violet }}>{fc(b.remQty * b.rate)}</td><td style={TDS}><Badge label={st} color={sc} /></td></tr>);
                                     })}</tbody>
                                 </table>
                             </div>);
                         })}
-                    </div>}
+                        {filteredGroups.every(g => g.fb.length === 0) && <div style={{ background: C.mid, borderRadius: 12, padding: 32, textAlign: "center", color: C.muted }}>
+                            <div style={{ fontSize: 28, marginBottom: 8 }}>🔍</div>
+                            <div style={{ fontSize: 13, fontWeight: 600 }}>No batches match your filters</div>
+                            <div style={{ fontSize: 11, marginTop: 4 }}>Try adjusting your filter criteria or <span style={{ color: "#818cf8", cursor: "pointer" }} onClick={() => setInvFilter({ bt: "All", cat: "All", godown: "All", dateFrom: "", dateTo: "", status: "All", search: "" })}>clear all filters</span></div>
+                        </div>}
+                    </div>;
+                    })()}
 
                     {tab === "Stock In" && <div>
                         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
@@ -550,9 +670,9 @@
                             <button style={BTNP()} onClick={() => openM("stockOut")}>+ Add Stock Out</button>
                         </div>
                         <div style={{ background: C.mid, borderRadius: 12, overflowX: "auto" }}>
-                            <table style={TBL}><thead><tr>{["Date", "Godown", "Bottle", "Cat", "Qty", "Rate", "Total", "Mode", "Party", "Del"].map(h => <th key={h} style={THS}>{h}</th>)}</tr></thead>
-                                <tbody>{!so.length && <tr><td colSpan={10} style={{ ...TDS, textAlign: "center", color: C.muted }}>No entries</td></tr>}
-                                    {so.map(e => <tr key={e.id}><td style={TDS}>{e.date}</td><td style={TDS}><Badge label={e.godown} color="#7c3aed" /></td><td style={TDS}><Badge label={e.bottleType} color="#6366f1" /></td><td style={TDS}><Badge label={e.category} color={e.category === "normal" ? "#0ea5e9" : C.amber} /></td><td style={{ ...TDS, fontWeight: 700 }}>{e.qty}</td><td style={TDS}>{fc(e.ratePerUnit)}</td><td style={{ ...TDS, fontWeight: 800, color: C.red }}>{fc(e.totalAmount)}</td><td style={TDS}><Badge label={e.settleMode === "cash" ? "Cash" : e.settleMode === "debtor" ? "Debtor" : "Journal"} color={e.settleMode === "cash" ? C.green : C.violet} /></td><td style={TDS}>{e.linkedPartyName || "—"}</td><td style={TDS}><button style={BTND} onClick={() => cascadeDelete("stockOut", e.id)}>Del</button></td></tr>)}
+                            <table style={TBL}><thead><tr>{["Date", "Godown", "Bottle", "Cat", "Qty", "Rate", "Total", "Mode", "Party", "Client", "Del"].map(h => <th key={h} style={THS}>{h}</th>)}</tr></thead>
+                                <tbody>{!so.length && <tr><td colSpan={11} style={{ ...TDS, textAlign: "center", color: C.muted }}>No entries</td></tr>}
+                                    {so.map(e => <tr key={e.id}><td style={TDS}>{e.date}</td><td style={TDS}><Badge label={e.godown} color="#7c3aed" /></td><td style={TDS}><Badge label={e.bottleType} color="#6366f1" /></td><td style={TDS}><Badge label={e.category} color={e.category === "normal" ? "#0ea5e9" : C.amber} /></td><td style={{ ...TDS, fontWeight: 700 }}>{e.qty}</td><td style={TDS}>{fc(e.ratePerUnit)}</td><td style={{ ...TDS, fontWeight: 800, color: C.red }}>{fc(e.totalAmount)}</td><td style={TDS}><Badge label={e.settleMode === "cash" ? "Cash" : e.settleMode === "debtor" ? "Debtor" : "Journal"} color={e.settleMode === "cash" ? C.green : C.violet} /></td><td style={TDS}>{e.linkedPartyName || "—"}</td><td style={TDS}>{e.clientName ? <span style={{ color: C.teal, cursor: "pointer", fontWeight: 600 }} onClick={() => { setSelectedClient(e.clientId); setTab("Clients"); }}>{e.clientName}</span> : "—"}</td><td style={TDS}><button style={BTND} onClick={() => cascadeDelete("stockOut", e.id)}>Del</button></td></tr>)}
                                 </tbody>
                             </table>
                         </div>
@@ -627,8 +747,9 @@
                                         <tbody>{!items.length && <tr><td colSpan={12} style={{ ...TDS, textAlign: "center", color: C.muted }}>No entries</td></tr>}
                                             {items.map(e => {
                                                 const fromS = getFromStock(e.id), fromO = getFromOther(e.id), cp = getCash(e.id), totalDue = Number(e.amount) + fromS + fromO, bal = Math.max(0, totalDue - cp);
-                                                const due = new Date(e.date); due.setDate(due.getDate() + Number(e.creditPeriod));
-                                                const days = Math.ceil((due - new Date()) / 86400000), sl = days > 5 ? days + "d left" : days > 0 ? days + "d left" : "OVERDUE", sc = days > 5 ? C.green : days > 0 ? C.amber : C.red;
+                                                const hasTerm = e.creditPeriod !== "" && e.creditPeriod !== undefined && e.creditPeriod !== null;
+                                                const due = new Date(e.date); if (hasTerm) due.setDate(due.getDate() + Number(e.creditPeriod));
+                                                const days = hasTerm ? Math.ceil((due - new Date()) / 86400000) : null, sl = !hasTerm ? "No term" : days > 5 ? days + "d left" : days > 0 ? days + "d left" : "OVERDUE", sc = !hasTerm ? C.muted : days > 5 ? C.green : days > 0 ? C.amber : C.red;
                                                 return (<tr key={e.id} style={{ opacity: e.checked ? 0.45 : 1 }}>
                                                     <td style={TDS}><input type="checkbox" checked={!!e.checked} onChange={() => toggleChk(isC ? "creditors" : "debtors", e.id)} style={{ accentColor: ac, width: 14, height: 14 }} /></td>
                                                     <td style={{ ...TDS, fontWeight: 700, textDecoration: e.checked ? "line-through" : "none" }}>{e.name}</td>
@@ -637,8 +758,8 @@
                                                     <td style={{ ...TDS, fontWeight: 700 }}>{fc(totalDue)}</td>
                                                     <td style={{ ...TDS, color: C.green }}>{fc(cp)}</td>
                                                     <td style={{ ...TDS, fontWeight: 800, color: bal > 0 ? ac : C.green }}>{fc(bal)}</td>
-                                                    <td style={TDS}>{e.creditPeriod}d</td>
-                                                    <td style={TDS}>{due.toLocaleDateString("en-IN")}</td>
+                                                    <td style={TDS}>{hasTerm ? e.creditPeriod + "d" : "—"}</td>
+                                                    <td style={TDS}>{hasTerm ? due.toLocaleDateString("en-IN") : "—"}</td>
                                                     <td style={TDS}><Badge label={sl} color={sc} /></td>
                                                     <td style={TDS}><button style={BTND} onClick={() => cascadeDelete(isC ? "creditors" : "debtors", e.id)}>Del</button></td>
                                                 </tr>);
@@ -653,6 +774,238 @@
                             </div>);
                         })()}
                     </div>}
+
+                    {tab === "Clients" && (() => {
+                        const MONTH_NAMES = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+
+                        /* ── Detail View ── */
+                        if (selectedClient) {
+                            const cl = clients.find(c => c.id === selectedClient);
+                            if (!cl) { setSelectedClient(null); return null; }
+                            const allOrders = so.filter(e => e.clientId === cl.id).sort((a,b) => new Date(b.date) - new Date(a.date));
+                            const clOrders = clDetailCat === "all" ? allOrders : allOrders.filter(e => e.category === clDetailCat);
+
+                            const totalQty = clOrders.reduce((a,b) => a + Number(b.qty), 0);
+                            const totalAmt = clOrders.reduce((a,b) => a + Number(b.totalAmount), 0);
+                            const avgOrder = clOrders.length > 0 ? totalAmt / clOrders.length : 0;
+                            const linkedDebtors = debs.filter(d => d.clientId === cl.id);
+                            const outstandingBal = linkedDebtors.reduce((a,d) => a + debtorBal(d), 0);
+                            const relatedCash = linkedDebtors.length > 0 ? cash.filter(e => e.dir === "in" && linkedDebtors.some(d => e.linkedId === d.id)) : [];
+
+                            const monthMap = {};
+                            clOrders.forEach(e => { const d = new Date(e.date), k = d.getFullYear() + "-" + String(d.getMonth()+1).padStart(2,"0"); monthMap[k] = (monthMap[k] || { amt: 0, qty: 0 }); monthMap[k].amt += Number(e.totalAmount); monthMap[k].qty += Number(e.qty); });
+                            const monthKeys = Object.keys(monthMap).sort();
+                            const monthAmtData = monthKeys.map(k => ({ l: MONTH_NAMES[Number(k.split("-")[1])-1] + " " + k.split("-")[0].slice(2), v: monthMap[k].amt }));
+                            const monthQtyData = monthKeys.map(k => ({ l: MONTH_NAMES[Number(k.split("-")[1])-1] + " " + k.split("-")[0].slice(2), v: monthMap[k].qty }));
+
+                            const productMap = {};
+                            clOrders.forEach(e => { const k = e.bottleType; if (!productMap[k]) productMap[k] = { qty: 0, amt: 0, count: 0, rates: [] }; productMap[k].qty += Number(e.qty); productMap[k].amt += Number(e.totalAmount); productMap[k].count++; productMap[k].rates.push(Number(e.ratePerUnit)); });
+
+                            const catColors = { all: C.purple, normal: C.teal, customized: C.amber };
+                            const catLabel = { all: "All Orders", normal: "🏷 Normal", customized: "✨ Customized" };
+
+                            return <div>
+                                <button onClick={() => setSelectedClient(null)} style={{ ...BTNP(C.mid), border: "1px solid " + C.border, marginBottom: 14, color: C.muted }}>← Back to Clients</button>
+
+                                {/* Client Header */}
+                                <div style={{ background: "linear-gradient(135deg,#1e1b4b,#312e81)", borderRadius: 16, padding: 20, marginBottom: 16, border: "1px solid #4338ca" }}>
+                                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 10 }}>
+                                        <div>
+                                            <div style={{ fontSize: 20, fontWeight: 900, color: "#fff", marginBottom: 4 }}>👤 {cl.name}</div>
+                                            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                                                <Badge label={cl.type} color={cl.type === "Retailer" ? C.teal : C.amber} />
+                                                <span style={{ fontSize: 10, color: C.muted }}>Since {cl.date}</span>
+                                            </div>
+                                            {cl.phone && <div style={{ fontSize: 11, color: "#a5b4fc", marginTop: 6 }}>📞 {cl.phone}</div>}
+                                            {cl.address && <div style={{ fontSize: 11, color: "#a5b4fc" }}>📍 {cl.address}</div>}
+                                        </div>
+                                        <div style={{ display: "flex", gap: 8 }}>
+                                            <div style={{ background: "rgba(0,0,0,0.3)", borderRadius: 10, padding: "8px 14px", textAlign: "center" }}><div style={{ fontSize: 8, color: C.muted }}>Total Orders</div><div style={{ fontSize: 16, fontWeight: 900, color: "#fff" }}>{allOrders.length}</div></div>
+                                            <div style={{ background: "rgba(0,0,0,0.3)", borderRadius: 10, padding: "8px 14px", textAlign: "center" }}><div style={{ fontSize: 8, color: C.muted }}>Normal</div><div style={{ fontSize: 16, fontWeight: 900, color: C.teal }}>{allOrders.filter(e => e.category === "normal").length}</div></div>
+                                            <div style={{ background: "rgba(0,0,0,0.3)", borderRadius: 10, padding: "8px 14px", textAlign: "center" }}><div style={{ fontSize: 8, color: C.muted }}>Customized</div><div style={{ fontSize: 16, fontWeight: 900, color: C.amber }}>{allOrders.filter(e => e.category === "customized").length}</div></div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* Category Toggle */}
+                                <div style={{ display: "flex", gap: 6, marginBottom: 16, background: C.mid, borderRadius: 10, padding: 6, border: "1px solid " + C.border }}>
+                                    {["all","normal","customized"].map(cat => (
+                                        <button key={cat} onClick={() => setClDetailCat(cat)} style={{ flex: 1, padding: "8px 4px", border: "none", borderRadius: 7, background: clDetailCat === cat ? catColors[cat] + "22" : "transparent", color: clDetailCat === cat ? catColors[cat] : C.muted, fontWeight: clDetailCat === cat ? 800 : 500, fontSize: 11, cursor: "pointer", outline: clDetailCat === cat ? "2px solid " + catColors[cat] : "none" }}>
+                                            {catLabel[cat]}
+                                        </button>
+                                    ))}
+                                </div>
+
+                                {/* Summary Cards */}
+                                <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 16 }}>
+                                    {[["Orders", clOrders.length, "#6366f1,#8b5cf6"], ["Total Qty", totalQty, "#0ea5e9,#0284c7"], ["Revenue", fc(totalAmt), "#8b5cf6,#7c3aed"], ["Avg Order", fc(avgOrder), "#14b8a6,#0d9488"], ["Outstanding", fc(outstandingBal), outstandingBal > 0 ? "#f59e0b,#d97706" : "#22c55e,#16a34a"], ["Last Order", clOrders.length > 0 ? clOrders[0].date : "—", "#7c3aed,#6d28d9"]].map(([l, v, g]) => (
+                                        <div key={l} style={CARD(g)}><div style={{ fontSize: 9 }}>{l}</div><div style={{ fontSize: 12, fontWeight: 900 }}>{v}</div></div>
+                                    ))}
+                                </div>
+
+                                {/* Charts */}
+                                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 16 }}>
+                                    <div style={{ background: C.mid, borderRadius: 14, padding: 16, border: "1px solid " + C.border }}>
+                                        <div style={{ fontSize: 12, fontWeight: 800, color: catColors[clDetailCat], marginBottom: 10 }}>📊 Monthly Revenue — {catLabel[clDetailCat]}</div>
+                                        <BarChart data={monthAmtData} color={catColors[clDetailCat]} height={170} />
+                                        {monthAmtData.length >= 2 && (() => { const last = monthAmtData[monthAmtData.length-1].v, prev = monthAmtData[monthAmtData.length-2].v, change = prev > 0 ? ((last - prev) / prev * 100).toFixed(1) : 0; return <div style={{ marginTop: 8, fontSize: 11, color: change >= 0 ? C.green : C.red, fontWeight: 700 }}>{change >= 0 ? "▲" : "▼"} {Math.abs(change)}% vs prev month</div>; })()}
+                                    </div>
+                                    <div style={{ background: C.mid, borderRadius: 14, padding: 16, border: "1px solid " + C.border }}>
+                                        <div style={{ fontSize: 12, fontWeight: 800, color: catColors[clDetailCat], marginBottom: 10 }}>📈 Monthly Qty — {catLabel[clDetailCat]}</div>
+                                        <BarChart data={monthQtyData} color={catColors[clDetailCat]} height={170} />
+                                    </div>
+                                </div>
+
+                                {/* Product Breakdown */}
+                                <div style={{ background: C.mid, borderRadius: 14, padding: 16, marginBottom: 16, border: "1px solid " + C.border }}>
+                                    <div style={{ fontSize: 12, fontWeight: 800, color: C.blue, marginBottom: 10 }}>🧴 Product Breakdown — {catLabel[clDetailCat]}</div>
+                                    {Object.keys(productMap).length === 0 ? <div style={{ color: C.muted, fontSize: 11, textAlign: "center", padding: 16 }}>No orders in this view</div> : (
+                                        <table style={TBL}><thead><tr>{["Bottle Type","Orders","Total Qty","Avg Rate","Total Amount","% Share"].map(h => <th key={h} style={THS}>{h}</th>)}</tr></thead>
+                                            <tbody>{Object.entries(productMap).map(([bt, d]) => {
+                                                const avgRate = d.rates.reduce((a,b) => a+b, 0) / d.rates.length, pct = totalAmt > 0 ? (d.amt / totalAmt * 100).toFixed(1) : 0;
+                                                return <tr key={bt}><td style={TDS}><Badge label={bt} color="#6366f1" /></td><td style={TDS}>{d.count}</td><td style={{ ...TDS, fontWeight: 700 }}>{d.qty}</td><td style={TDS}>{fc(avgRate)}</td><td style={{ ...TDS, fontWeight: 700, color: C.violet }}>{fc(d.amt)}</td><td style={TDS}><span style={{ color: catColors[clDetailCat], fontWeight: 700 }}>{pct}%</span></td></tr>;
+                                            })}</tbody>
+                                        </table>
+                                    )}
+                                </div>
+
+                                {/* Stock History */}
+                                <div style={{ background: C.mid, borderRadius: 14, padding: 16, marginBottom: 16, border: "1px solid " + C.border }}>
+                                    <div style={{ fontSize: 12, fontWeight: 800, color: C.red, marginBottom: 10 }}>📦 Stock History — {catLabel[clDetailCat]} ({clOrders.length})</div>
+                                    {clOrders.length === 0 ? <div style={{ color: C.muted, fontSize: 11, textAlign: "center", padding: 16 }}>No entries in this view</div> : (
+                                        <div style={{ overflowX: "auto" }}><table style={TBL}><thead><tr>{["Date","Godown","Bottle","Cat","Qty","Rate","Total","Mode"].map(h => <th key={h} style={THS}>{h}</th>)}</tr></thead>
+                                            <tbody>{clOrders.map(e => <tr key={e.id}><td style={TDS}>{e.date}</td><td style={TDS}><Badge label={e.godown} color="#7c3aed" /></td><td style={TDS}><Badge label={e.bottleType} color="#6366f1" /></td><td style={TDS}><Badge label={e.category} color={e.category === "normal" ? C.teal : C.amber} /></td><td style={{ ...TDS, fontWeight: 700 }}>{e.qty}</td><td style={TDS}>{fc(e.ratePerUnit)}</td><td style={{ ...TDS, fontWeight: 700, color: C.red }}>{fc(e.totalAmount)}</td><td style={TDS}><Badge label={e.settleMode === "cash" ? "Cash" : e.settleMode === "debtor" ? "Debtor" : "Journal"} color={e.settleMode === "cash" ? C.green : C.violet} /></td></tr>)}</tbody>
+                                        </table></div>
+                                    )}
+                                </div>
+
+                                {relatedCash.length > 0 && <div style={{ background: C.mid, borderRadius: 14, padding: 16, border: "1px solid " + C.border }}>
+                                    <div style={{ fontSize: 12, fontWeight: 800, color: C.green, marginBottom: 10 }}>💵 Payments Received ({relatedCash.length})</div>
+                                    <table style={TBL}><thead><tr>{["Date","Description","Amount"].map(h => <th key={h} style={THS}>{h}</th>)}</tr></thead>
+                                        <tbody>{relatedCash.map(e => <tr key={e.id}><td style={TDS}>{e.date}</td><td style={TDS}>{e.description}</td><td style={{ ...TDS, fontWeight: 700, color: C.green }}>{fc(e.amount)}</td></tr>)}</tbody>
+                                    </table>
+                                </div>}
+                            </div>;
+                        }
+
+                        /* ── List View ── */
+                        /* Per-category enrichment */
+                        const enrichedClients = clients.map(cl => {
+                            const allO = so.filter(e => e.clientId === cl.id);
+                            const catO = clCatView === "all" ? allO : allO.filter(e => e.category === clCatView);
+                            const tQty = catO.reduce((a,b) => a + Number(b.qty), 0);
+                            const tAmt = catO.reduce((a,b) => a + Number(b.totalAmount), 0);
+                            const avgO = catO.length > 0 ? tAmt / catO.length : 0;
+                            const lastDate = catO.length > 0 ? catO.sort((a,b) => new Date(b.date) - new Date(a.date))[0].date : "";
+                            return { ...cl, allO, catO, tQty, tAmt, avgO, lastDate };
+                        });
+
+                        const totalClientRevenue = enrichedClients.reduce((a,c) => a + c.tAmt, 0);
+                        const retailerCount = clients.filter(c => c.type === "Retailer").length;
+                        const distributorCount = clients.filter(c => c.type === "Distributor").length;
+                        const normalRevenue = so.filter(e => e.clientId && e.category === "normal").reduce((a,b) => a + Number(b.totalAmount), 0);
+                        const customRevenue = so.filter(e => e.clientId && e.category === "customized").reduce((a,b) => a + Number(b.totalAmount), 0);
+
+                        const filtered = enrichedClients.filter(cl => {
+                            if (clTypeF !== "All" && cl.type !== clTypeF) return false;
+                            if (clSearch && !cl.name.toLowerCase().includes(clSearch.toLowerCase()) && !(cl.phone || "").includes(clSearch)) return false;
+                            return true;
+                        }).sort((a, b) => {
+                            let av = a[clSort], bv = b[clSort];
+                            if (clSort === "lastDate") { av = av || ""; bv = bv || ""; }
+                            if (clSort === "tAmt" || clSort === "tQty" || clSort === "avgO") return (bv - av) * clSortDir;
+                            return String(av).localeCompare(String(bv)) * clSortDir;
+                        });
+
+                        const hasFilter = clTypeF !== "All" || clSearch;
+                        const viewColor = clCatView === "normal" ? C.teal : clCatView === "customized" ? C.amber : C.purple;
+
+                        return <div>
+                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+                                <div style={{ fontSize: 16, fontWeight: 800, color: C.teal }}>👥 Clients</div>
+                                <button style={BTNP()} onClick={() => openM("addClient")}>+ Add Client</button>
+                            </div>
+
+                            {/* Normal / Customized main toggle */}
+                            <div style={{ display: "flex", gap: 0, marginBottom: 16, background: C.mid, borderRadius: 12, padding: 5, border: "1px solid " + C.border }}>
+                                {[["normal","🏷 Normal Clients", C.teal], ["customized","✨ Customized Clients", C.amber]].map(([v, l, col]) => (
+                                    <button key={v} onClick={() => setClCatView(v)} style={{ flex: 1, padding: "10px 8px", border: "none", borderRadius: 8, background: clCatView === v ? col + "22" : "transparent", color: clCatView === v ? col : C.muted, fontWeight: clCatView === v ? 800 : 500, fontSize: 12, cursor: "pointer", outline: clCatView === v ? "2px solid " + col : "none", transition: "all .15s" }}>
+                                        {l}
+                                        <div style={{ fontSize: 9, opacity: 0.8, marginTop: 2 }}>{v === "normal" ? fc(normalRevenue) + " revenue" : fc(customRevenue) + " revenue"}</div>
+                                    </button>
+                                ))}
+                            </div>
+
+                            {/* Summary Cards */}
+                            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 16 }}>
+                                {[["Total Clients", clients.length, "#6366f1,#8b5cf6"], ["Retailers", retailerCount, "#14b8a6,#0d9488"], ["Distributors", distributorCount, "#f59e0b,#d97706"], [clCatView === "normal" ? "Normal Revenue" : "Custom Revenue", fc(totalClientRevenue), clCatView === "normal" ? "#14b8a6,#0d9488" : "#f59e0b,#d97706"]].map(([l, v, g]) => (
+                                    <div key={l} style={CARD(g)}><div style={{ fontSize: 9 }}>{l}</div><div style={{ fontSize: 13, fontWeight: 900 }}>{v}</div></div>
+                                ))}
+                            </div>
+
+                            {/* Filter Bar */}
+                            <div style={{ background: C.mid, borderRadius: 12, padding: 14, marginBottom: 14, border: "1px solid " + C.border }}>
+                                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+                                    <div style={{ fontSize: 11, fontWeight: 700, color: C.muted }}>🔍 FILTERS</div>
+                                    {hasFilter && <button onClick={() => { setClSearch(""); setClTypeF("All"); }} style={{ ...BTNP("#ef4444"), padding: "4px 12px", fontSize: 10 }}>✕ Clear</button>}
+                                </div>
+                                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-end" }}>
+                                    <div style={{ display: "flex", flexDirection: "column", gap: 3, flex: 1, minWidth: 160 }}>
+                                        <label style={{ fontSize: 9, color: C.muted, fontWeight: 600, textTransform: "uppercase" }}>Search Name / Phone</label>
+                                        <input type="text" placeholder="Search…" style={{ ...INP, marginBottom: 0, border: clSearch ? "1.5px solid " + viewColor : "1.5px solid " + C.border }} value={clSearch} onChange={e => setClSearch(e.target.value)} />
+                                    </div>
+                                    <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                                        <label style={{ fontSize: 9, color: C.muted, fontWeight: 600, textTransform: "uppercase" }}>Type</label>
+                                        <select style={{ ...INP, width: "auto", marginBottom: 0, minWidth: 120, border: clTypeF !== "All" ? "1.5px solid " + viewColor : "1.5px solid " + C.border }} value={clTypeF} onChange={e => setClTypeF(e.target.value)}>
+                                            {["All","Retailer","Distributor"].map(o => <option key={o}>{o}</option>)}
+                                        </select>
+                                    </div>
+                                    <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                                        <label style={{ fontSize: 9, color: C.muted, fontWeight: 600, textTransform: "uppercase" }}>Sort By</label>
+                                        <select style={{ ...INP, width: "auto", marginBottom: 0, minWidth: 130 }} value={clSort} onChange={e => { setClSort(e.target.value); setClSortDir(1); }}>
+                                            {[["name","Name"],["tAmt","Revenue"],["tQty","Total Qty"],["avgO","Avg Order"],["lastDate","Last Order"]].map(([v,l]) => <option key={v} value={v}>{l}</option>)}
+                                        </select>
+                                    </div>
+                                    <button onClick={() => setClSortDir(d => d * -1)} style={{ ...BTNP(C.mid), border: "1px solid " + C.border, color: C.muted, padding: "8px 14px", fontSize: 12 }}>{clSortDir === 1 ? "▲ Asc" : "▼ Desc"}</button>
+                                </div>
+                                {hasFilter && <div style={{ marginTop: 8, fontSize: 10, color: viewColor }}>📋 Showing {filtered.length} of {clients.length} client(s)</div>}
+                            </div>
+
+                            {clients.length === 0 ? <div style={{ background: C.mid, borderRadius: 12, padding: 32, textAlign: "center", color: C.muted }}>
+                                <div style={{ fontSize: 28, marginBottom: 8 }}>👥</div>
+                                <div style={{ fontSize: 13, fontWeight: 600 }}>No clients yet</div>
+                                <div style={{ fontSize: 11, marginTop: 4 }}>Link a client when adding Stock Out, or add one manually</div>
+                            </div> : filtered.length === 0 ? <div style={{ background: C.mid, borderRadius: 12, padding: 32, textAlign: "center", color: C.muted }}>
+                                <div style={{ fontSize: 24, marginBottom: 8 }}>🔍</div>
+                                <div style={{ fontSize: 13, fontWeight: 600 }}>No clients match your filters</div>
+                                <div style={{ fontSize: 11, marginTop: 4, cursor: "pointer", color: viewColor }} onClick={() => { setClSearch(""); setClTypeF("All"); }}>Clear filters</div>
+                            </div> : (
+                                <div style={{ background: C.mid, borderRadius: 12, overflowX: "auto", border: "1px solid " + C.border }}>
+                                    <table style={TBL}><thead><tr>
+                                        {[["name","Name"],["type","Type"],["date","Since"],["phone","Phone"],["catO.length","Orders"],["tQty","Qty"],["tAmt","Revenue"],["avgO","Avg Order"],["lastDate","Last Order"],[null,"Actions"]].map(([col, h]) => (
+                                            <th key={h} style={{ ...THS, cursor: col ? "pointer" : "default", userSelect: "none", color: clSort === col ? viewColor : "#94a3b8" }} onClick={() => col && toggleSort(col)}>{h}{col ? sortArrow(col) : ""}</th>
+                                        ))}
+                                    </tr></thead>
+                                        <tbody>{filtered.map(cl => (
+                                            <tr key={cl.id} style={{ cursor: "pointer" }} onClick={() => { setClDetailCat(clCatView); setSelectedClient(cl.id); }}>
+                                                <td style={{ ...TDS, fontWeight: 700, color: "#818cf8" }}>{cl.name}</td>
+                                                <td style={TDS}><Badge label={cl.type} color={cl.type === "Retailer" ? C.teal : C.amber} /></td>
+                                                <td style={TDS}>{cl.date}</td>
+                                                <td style={TDS}>{cl.phone || "—"}</td>
+                                                <td style={{ ...TDS, fontWeight: 700 }}>{cl.catO.length}<span style={{ color: C.muted, fontSize: 9, marginLeft: 3 }}>/{cl.allO.length}</span></td>
+                                                <td style={TDS}>{cl.tQty}</td>
+                                                <td style={{ ...TDS, fontWeight: 700, color: viewColor }}>{fc(cl.tAmt)}</td>
+                                                <td style={TDS}>{fc(cl.avgO)}</td>
+                                                <td style={TDS}>{cl.lastDate || "—"}</td>
+                                                <td style={TDS}><button style={BTND} onClick={ev => { ev.stopPropagation(); cascadeDelete("clients", cl.id); }}>Del</button></td>
+                                            </tr>
+                                        ))}</tbody>
+                                    </table>
+                                </div>
+                            )}
+                        </div>;
+                    })()}
+
 
                     {tab === "Balance Sheet" && <div>
                         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
@@ -788,6 +1141,28 @@
                             <input type="number" style={INP} placeholder="Sale Rate/Unit (₹) *" value={form.ratePerUnit || ""} onChange={e => setForm(f => ({ ...f, ratePerUnit: e.target.value }))} />
                             {form.qty && form.ratePerUnit && <div style={{ background: C.mid, border: "1.5px solid #6366f1", borderRadius: 7, padding: "7px 11px", marginBottom: 9, display: "flex", justifyContent: "space-between" }}><span style={{ color: C.muted, fontSize: 12 }}>Total</span><span style={{ color: C.purple, fontWeight: 800, fontSize: 15 }}>{fc(Number(form.qty) * Number(form.ratePerUnit))}</span></div>}
                             <SettlePanel {...sp} form={{ ...form, _settleContext: "sale" }} setForm={setForm} />
+                            {/* Client Linking */}
+                            <div style={{ background: "#0a0f1e", borderRadius: 8, padding: 12, marginBottom: 9, border: "1px solid " + C.border }}>
+                                <div style={{ fontSize: 11, color: "#94a3b8", fontWeight: 700, marginBottom: 7 }}>👤 Link to Client?</div>
+                                <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
+                                    {["yes", "no"].map(opt => <button key={opt} onClick={() => setForm(f => ({ ...f, linkClient: opt, clientId: "", newClientName: "", newClientType: "Retailer", newClientPhone: "", newClientAddress: "" }))} style={{ flex: 1, padding: "7px 4px", border: "2px solid " + (form.linkClient === opt ? C.teal : C.border), borderRadius: 7, background: form.linkClient === opt ? C.teal + "18" : C.mid, color: form.linkClient === opt ? C.teal : C.muted, fontWeight: 700, fontSize: 11, cursor: "pointer" }}>{opt === "yes" ? "✓ Yes" : "✕ No"}</button>)}
+                                </div>
+                                {form.linkClient === "yes" && <div>
+                                    <select style={INP} value={form.clientId || ""} onChange={e => setForm(f => ({ ...f, clientId: e.target.value }))}>
+                                        <option value="">Select Client</option>
+                                        {(state.clients || []).map(c => <option key={c.id} value={c.id}>{c.name} ({c.type})</option>)}
+                                        <option value="__new__">+ Create New Client</option>
+                                    </select>
+                                    {form.clientId === "__new__" && <div>
+                                        <input style={INP} placeholder="Client Name *" value={form.newClientName || ""} onChange={e => setForm(f => ({ ...f, newClientName: e.target.value }))} />
+                                        <select style={INP} value={form.newClientType || "Retailer"} onChange={e => setForm(f => ({ ...f, newClientType: e.target.value }))}>
+                                            {CLIENT_TYPES.map(t => <option key={t}>{t}</option>)}
+                                        </select>
+                                        <input style={INP} placeholder="Phone" value={form.newClientPhone || ""} onChange={e => setForm(f => ({ ...f, newClientPhone: e.target.value }))} />
+                                        <input style={INP} placeholder="Address" value={form.newClientAddress || ""} onChange={e => setForm(f => ({ ...f, newClientAddress: e.target.value }))} />
+                                    </div>}
+                                </div>}
+                            </div>
                             <button style={{ ...BTNP("linear-gradient(90deg,#ef4444,#dc2626)"), width: "100%" }} onClick={applyStockOut}>Save</button>
                         </div>}
 
@@ -875,6 +1250,22 @@
                                     <input type="number" style={INP} placeholder="Annual Depreciation Rate (%) *" value={form.depRate || ""} onChange={e => setForm(f => ({ ...f, depRate: e.target.value }))} />
                                     <button style={{ ...BTNP("linear-gradient(90deg,#f59e0b,#d97706)"), width: "100%" }} onClick={applyDepr}>Save Depreciation</button>
                                 </div>}
+                        </div>}
+
+                        {modal === "addClient" && <div>
+                            <div style={{ fontWeight: 800, fontSize: 15, color: C.teal, marginBottom: 12 }}>👤 Add Client</div>
+                            <input style={INP} placeholder="Client Name *" value={form.name || ""} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} />
+                            <select style={INP} value={form.clientType || ""} onChange={e => setForm(f => ({ ...f, clientType: e.target.value }))}>
+                                <option value="">Client Type *</option>
+                                {CLIENT_TYPES.map(t => <option key={t}>{t}</option>)}
+                            </select>
+                            <DateInput value={form.date} onChange={v => setForm(f => ({ ...f, date: v }))} />
+                            <input style={INP} placeholder="Phone" value={form.phone || ""} onChange={e => setForm(f => ({ ...f, phone: e.target.value }))} />
+                            <input style={INP} placeholder="Address" value={form.address || ""} onChange={e => setForm(f => ({ ...f, address: e.target.value }))} />
+                            <button style={{ ...BTNP("linear-gradient(90deg,#14b8a6,#0d9488)"), width: "100%" }} onClick={() => {
+                                if (!form.name || !form.clientType) { alert("Fill name and type"); return; }
+                                upd(p => ({ ...p, clients: [...(p.clients || []), { id: gid(), name: form.name, type: form.clientType, date: form.date || today(), phone: form.phone || "", address: form.address || "" }] })); closeM();
+                            }}>Save Client</button>
                         </div>}
 
                         <button onClick={closeM} style={{ width: "100%", marginTop: 8, background: C.mid, color: "#94a3b8", border: "none", borderRadius: 7, padding: "7px 0", cursor: "pointer", fontSize: 12 }}>Cancel</button>
