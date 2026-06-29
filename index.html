@@ -1,0 +1,890 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Yors Water — Accounting Suite</title>
+    <link rel="icon"
+        href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💧</text></svg>" />
+    <!-- Firebase -->
+    <script src="https://www.gstatic.com/firebasejs/10.7.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.0/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.0/firebase-firestore-compat.js"></script>
+    <!-- React -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+    <!-- Babel for JSX in browser -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            background: #0f172a;
+            font-family: Inter, system-ui, sans-serif;
+            color: #e2e8f0;
+        }
+
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: #1e293b;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: #475569;
+            border-radius: 3px;
+        }
+
+        input[type=date]::-webkit-calendar-picker-indicator {
+            filter: invert(1);
+            opacity: .5;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="root">
+        <div
+            style="min-height:100vh;display:flex;align-items:center;justify-content:center;background:#0f172a;color:#a855f7;font-size:16px;font-weight:700">
+            💧 Loading…</div>
+    </div>
+
+    <script>
+        // ══════════════════════════════════════════════════════
+        // 🔥 PASTE YOUR FIREBASE CONFIG HERE
+        // Get from: Firebase Console → Project Settings → Your Apps → Web
+        // ══════════════════════════════════════════════════════
+        const FIREBASE_CONFIG = {
+            apiKey: "AIzaSyD3jkODPOVohZ-g0cqTONpDM0HPv0sS784",
+            authDomain: "yors-finance.firebaseapp.com",
+            projectId: "yors-finance",
+            storageBucket: "yors-finance.firebasestorage.app",
+            messagingSenderId: "926133907239",
+            appId: "1:926133907239:web:aefe93ac611f2a74fe0302",
+            measurementId: "G-SRHDB3ZD8G"
+        };
+        firebase.initializeApp(FIREBASE_CONFIG);
+        const auth = firebase.auth();
+        const db = firebase.firestore();
+    </script>
+
+    <script type="text/babel">
+        const { useState, useEffect, useMemo, useRef, useCallback } = React;
+
+        // ─── Constants ────────────────────────────────────────
+        const BOTTLE_TYPES = ["200ml", "500ml", "1L"];
+        const GODOWNS = ["Hazra", "Dunlop", "Bhawanipur", "Alipore"];
+        const TABS = ["Dashboard", "Trading A/C", "Inventory", "Stock In", "Stock Out", "P&L Account", "Cash Book", "Creditors", "Debtors", "Balance Sheet", "Depreciation", "Charts"];
+        const CASH_IN_TYPES = ["Sales Receipt", "Debtor Payment", "Capital Introduced", "Loan Received", "Other Income Receipt"];
+        const CASH_OUT_TYPES = ["Expense Payment", "Creditor Payment", "Stock Purchase Payment", "Loan Repayment", "Other Payment"];
+        const PL_CATS = { income: ["Other Income", "Finance Income"], expenses: ["Employee Benefit Expense", "Finance Costs", "Other Expenses", "Admin Expenses"] };
+        const SCHEDULE3 = {
+            assets: { "Non-Current Assets": ["Fixed Assets", "Capital Work in Progress", "Long Term Investments", "Deferred Tax Assets"], "Current Assets": ["Inventories", "Trade Receivables", "Cash and Cash Equivalents", "Short Term Loans", "Other Current Assets"] },
+            liabilities: { "Equity and Reserves": ["Share Capital", "Retained Earnings / Net Profit", "Other Reserves"], "Non-Current Liabilities": ["Long Term Borrowings", "Deferred Tax Liabilities", "Other Long Term Liabilities"], "Current Liabilities": ["Trade Payables", "Short Term Borrowings", "Other Current Liabilities", "Provisions"] }
+        };
+        const DEPR_METHODS = ["Straight Line (SLM)", "Written Down Value (WDV)"];
+        const DEPR_PERIODS = ["Monthly", "Half-Yearly", "Yearly"];
+        const C = { dark: "#0f172a", mid: "#1e293b", border: "#334155", text: "#e2e8f0", muted: "#64748b", purple: "#a855f7", green: "#22c55e", red: "#ef4444", blue: "#38bdf8", amber: "#f59e0b", violet: "#8b5cf6", teal: "#14b8a6" };
+        const INIT = { stockIn: [], stockOut: [], creditors: [], debtors: [], plEntries: [], balanceSheet: { assets: {}, liabilities: {} }, cashEntries: [], tradingEntries: [], depreciationAssets: [], openingStock: {} };
+        const INP = { width: "100%", padding: "8px 11px", borderRadius: 7, border: "1.5px solid #334155", background: "#1e293b", color: "#e2e8f0", fontSize: 13, marginBottom: 9, boxSizing: "border-box" };
+        const BTNP = (bg) => ({ background: bg || "linear-gradient(90deg,#6366f1,#8b5cf6)", color: "#fff", border: "none", borderRadius: 7, padding: "8px 18px", cursor: "pointer", fontWeight: 700, fontSize: 12 });
+        const BTND = { background: "#ef4444", color: "#fff", border: "none", borderRadius: 5, padding: "3px 9px", cursor: "pointer", fontWeight: 600, fontSize: 11 };
+        const TBL = { width: "100%", borderCollapse: "collapse", fontSize: 12 };
+        const THS = { background: "#1e293b", color: "#94a3b8", padding: "8px 9px", textAlign: "left", borderBottom: "1px solid #334155", whiteSpace: "nowrap", fontSize: 11 };
+        const TDS = { padding: "7px 9px", borderBottom: "1px solid #1e293b", color: "#e2e8f0", verticalAlign: "middle" };
+        const CARD = (c) => ({ background: "linear-gradient(135deg," + c + ")", borderRadius: 12, padding: "13px 15px", color: "#fff", flex: 1, minWidth: 115, boxShadow: "0 4px 18px rgba(0,0,0,0.18)" });
+
+        // ─── Helpers ──────────────────────────────────────────
+        const gid = () => Date.now().toString(36) + Math.random().toString(36).slice(2);
+        const fc = n => "₹" + Number(n || 0).toLocaleString("en-IN", { minimumFractionDigits: 2 });
+        const fabs = n => fc(Math.abs(n));
+        const today = () => { const d = new Date(); return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0"); };
+
+        function computeFIFO(stockIn, stockOut) {
+            const results = {};
+            BOTTLE_TYPES.forEach(bt => {
+                ["normal", "customized"].forEach(cat => {
+                    const key = bt + "_" + cat;
+                    const batches = stockIn.filter(x => x.bottleType === bt && x.category === cat).sort((a, b) => new Date(a.date) - new Date(b.date)).map(x => ({ ...x, origQty: Number(x.qty), remQty: Number(x.qty), rate: Number(x.ratePerUnit) }));
+                    const outs = stockOut.filter(x => x.bottleType === bt && x.category === cat).sort((a, b) => new Date(a.date) - new Date(b.date));
+                    let cogs = 0;
+                    outs.forEach(out => { let needed = Number(out.qty); for (let i = 0; i < batches.length && needed > 0; i++) { const take = Math.min(batches[i].remQty, needed); if (take > 0) { cogs += take * batches[i].rate; batches[i].remQty -= take; needed -= take; } } });
+                    const inQty = batches.reduce((a, b) => a + b.origQty, 0), outQty = outs.reduce((a, b) => a + Number(b.qty), 0);
+                    let closingValue = 0; batches.forEach(b => { closingValue += b.remQty * b.rate; });
+                    results[key] = { batches, cogs, closingValue, inQty, outQty, balQty: inQty - outQty };
+                });
+            });
+            return results;
+        }
+
+        function calcDepreciation(asset) {
+            const cost = Number(asset.cost || 0), rate = Number(asset.depRate || 0) / 100;
+            const startDate = new Date(asset.startDate || today()), now = new Date();
+            let mo = (now.getFullYear() - startDate.getFullYear()) * 12 + (now.getMonth() - startDate.getMonth());
+            if (mo < 0) mo = 0;
+            let totalDepr = 0;
+            if (asset.method === "Straight Line (SLM)") { const annual = cost * rate, md = annual / 12; if (asset.period === "Monthly") totalDepr = md * Math.max(1, Math.min(mo, 1)); else if (asset.period === "Half-Yearly") totalDepr = md * Math.max(1, Math.min(mo, 6)); else totalDepr = md * Math.max(1, Math.min(mo, 12)); }
+            else { totalDepr = cost - cost * Math.pow(1 - rate, Math.max(mo / 12, 0)); }
+            return { totalDepr: Math.min(Math.max(totalDepr, 0), cost), wdv: Math.max(0, cost - Math.min(Math.max(totalDepr, 0), cost)) };
+        }
+
+        // ─── Components ───────────────────────────────────────
+        function Badge({ label, color }) { return <span style={{ background: color + "25", color, borderRadius: 5, padding: "2px 7px", fontSize: 10, fontWeight: 700, whiteSpace: "nowrap" }}>{label}</span>; }
+        function DateInput({ value, onChange }) { return <input type="date" style={INP} value={value || ""} max="2099-12-31" onChange={e => onChange(e.target.value)} />; }
+
+        function MiniChart({ data, color, height = 60 }) {
+            if (!data || data.length < 2) return <div style={{ height, display: "flex", alignItems: "center", justifyContent: "center", color: "#64748b", fontSize: 10 }}>Not enough data</div>;
+            const vals = data.map(d => d.v), max = Math.max(...vals, 0.01), min = Math.min(...vals), range = max - min || 1, w = 280, pad = 4;
+            const pts = data.map((d, i) => `${pad + (i / (data.length - 1)) * (w - pad * 2)},${height - pad - ((d.v - min) / range) * (height - pad * 2)}`);
+            const gId = "g" + color.replace("#", "");
+            return (<div><svg width="100%" viewBox={`0 0 ${w} ${height}`} style={{ display: "block" }}>
+                <defs><linearGradient id={gId} x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={color} stopOpacity="0.3" /><stop offset="100%" stopColor={color} stopOpacity="0" /></linearGradient></defs>
+                <polygon points={`${pad},${height} ${pts.join(" ")} ${w - pad},${height}`} fill={`url(#${gId})`} />
+                <polyline points={pts.join(" ")} fill="none" stroke={color} strokeWidth="2" />
+                {data.map((d, i) => { const x = pad + (i / (data.length - 1)) * (w - pad * 2), y = height - pad - ((d.v - min) / range) * (height - pad * 2); return <circle key={i} cx={x} cy={y} r="3" fill={color} />; })}
+            </svg>
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 9, color: "#64748b", marginTop: 2 }}><span>{data[0].l}</span><span style={{ color, fontWeight: 700 }}>{fc(data[data.length - 1].v)}</span><span>{data[data.length - 1].l}</span></div></div>);
+        }
+
+        function SettlePanel({ form, setForm, creds, debs }) {
+            const mode = form._settleContext; if (!mode) return null;
+            const isIn = ["sale", "trading_cr", "bs_liability_reduce", "pl_income"].includes(mode);
+            const canCreditor = ["purchase", "trading_dr", "bs_asset_increase", "pl_expense"].includes(mode);
+            const canDebtor = ["sale", "trading_cr", "bs_liability_reduce", "pl_income"].includes(mode);
+            const canNone = ["bs_asset_increase", "bs_liability_reduce", "trading_dr", "trading_cr"].includes(mode);
+            const options = ["cash", canCreditor && "creditor", canDebtor && "debtor", canNone && "none"].filter(Boolean);
+            const mColors = { cash: C.green, creditor: C.amber, debtor: C.violet, none: C.muted };
+            const mLabels = { cash: isIn ? "💵 Cash In" : "💵 Cash Out", creditor: "🏦 Creditor", debtor: "📋 Debtor", none: "📝 Journal Only" };
+            return (<div style={{ background: "#0a0f1e", borderRadius: 8, padding: 12, marginBottom: 9, border: "1px solid #334155" }}>
+                <div style={{ fontSize: 11, color: "#94a3b8", fontWeight: 700, marginBottom: 7 }}>💳 Settlement Mode</div>
+                <div style={{ display: "flex", gap: 6, marginBottom: 8, flexWrap: "wrap" }}>
+                    {options.map(opt => <button key={opt} onClick={() => setForm(f => ({ ...f, settleMode: opt, linkedPartyId: "", newPartyName: "", newPartyCredit: "" }))} style={{ flex: 1, minWidth: 70, padding: "7px 4px", border: "2px solid " + (form.settleMode === opt ? mColors[opt] : C.border), borderRadius: 7, background: form.settleMode === opt ? mColors[opt] + "18" : C.mid, color: form.settleMode === opt ? mColors[opt] : C.muted, fontWeight: 700, fontSize: 11, cursor: "pointer" }}>{mLabels[opt]}</button>)}
+                </div>
+                {(form.settleMode === "creditor" || form.settleMode === "debtor") && (<div>
+                    <select style={INP} value={form.linkedPartyId || ""} onChange={e => setForm(f => ({ ...f, linkedPartyId: e.target.value, newPartyName: "", newPartyCredit: "" }))}>
+                        <option value="">{form.settleMode === "creditor" ? "Select Creditor" : "Select Debtor"}</option>
+                        {(form.settleMode === "creditor" ? creds : debs).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                        <option value="__new__">+ Create New</option>
+                    </select>
+                    {form.linkedPartyId === "__new__" && <div>
+                        <input style={INP} placeholder="Name *" value={form.newPartyName || ""} onChange={e => setForm(f => ({ ...f, newPartyName: e.target.value }))} />
+                        <input type="number" style={INP} placeholder="Credit Period (days)" value={form.newPartyCredit || 30} onChange={e => setForm(f => ({ ...f, newPartyCredit: e.target.value }))} />
+                    </div>}
+                </div>)}
+            </div>);
+        }
+
+        // ─── Auth Screen ──────────────────────────────────────
+        function AuthScreen() {
+            const [mode, setMode] = useState("login");
+            const [email, setEmail] = useState("");
+            const [password, setPassword] = useState("");
+            const [confirm, setConfirm] = useState("");
+            const [error, setError] = useState("");
+            const [info, setInfo] = useState("");
+            const [loading, setLoading] = useState(false);
+            const INP2 = { ...INP, marginBottom: 10, background: "#0f172a" };
+            const BTN = (bg) => ({ ...BTNP(bg), width: "100%", padding: 12, fontSize: 14, marginBottom: 8 });
+
+            const handle = async () => {
+                setError(""); setInfo(""); setLoading(true);
+                try {
+                    if (mode === "login") { await auth.signInWithEmailAndPassword(email, password); }
+                    else if (mode === "register") {
+                        if (password !== confirm) { setError("Passwords do not match"); setLoading(false); return; }
+                        if (password.length < 6) { setError("Password must be at least 6 characters"); setLoading(false); return; }
+                        await auth.createUserWithEmailAndPassword(email, password);
+                    } else { await auth.sendPasswordResetEmail(email); setInfo("Reset email sent! Check your inbox."); }
+                } catch (e) { setError(e.message.replace("Firebase: ", "").replace(/\(auth\/.*\)/, "").trim()); }
+                setLoading(false);
+            };
+
+            return (<div style={{ minHeight: "100vh", background: "linear-gradient(135deg,#0f172a 60%,#1e1b4b)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                <div style={{ background: "#1e293b", borderRadius: 20, padding: 36, width: 360, border: "1.5px solid #334155", boxShadow: "0 20px 60px rgba(0,0,0,0.5)" }}>
+                    <div style={{ textAlign: "center", marginBottom: 28 }}>
+                        <div style={{ fontSize: 40, marginBottom: 6 }}>💧</div>
+                        <div style={{ fontSize: 22, fontWeight: 900, color: "#fff" }}>YORS WATER</div>
+                        <div style={{ fontSize: 12, color: "#64748b", marginTop: 2 }}>Accounting Suite</div>
+                    </div>
+                    {error && <div style={{ background: "#450a0a", border: "1px solid #ef4444", borderRadius: 8, padding: "9px 13px", marginBottom: 12, color: "#fca5a5", fontSize: 12 }}>{error}</div>}
+                    {info && <div style={{ background: "#052e16", border: "1px solid #22c55e", borderRadius: 8, padding: "9px 13px", marginBottom: 12, color: "#86efac", fontSize: 12 }}>{info}</div>}
+                    <input style={INP2} type="email" placeholder="Email address" value={email} onChange={e => setEmail(e.target.value)} onKeyDown={e => e.key === "Enter" && handle()} />
+                    {mode !== "reset" && <input style={INP2} type="password" placeholder="Password" value={password} onChange={e => setPassword(e.target.value)} onKeyDown={e => e.key === "Enter" && handle()} />}
+                    {mode === "register" && <input style={INP2} type="password" placeholder="Confirm password" value={confirm} onChange={e => setConfirm(e.target.value)} onKeyDown={e => e.key === "Enter" && handle()} />}
+                    <button style={BTN()} onClick={handle} disabled={loading}>{loading ? "Please wait…" : mode === "login" ? "Sign In" : mode === "register" ? "Create Account" : "Send Reset Link"}</button>
+                    <div style={{ textAlign: "center", fontSize: 12, color: "#64748b", display: "flex", flexDirection: "column", gap: 6, marginTop: 4 }}>
+                        {mode === "login" && <><span style={{ color: "#a855f7", cursor: "pointer" }} onClick={() => setMode("register")}>Don't have an account? Register</span><span style={{ color: "#64748b", cursor: "pointer" }} onClick={() => setMode("reset")}>Forgot password?</span></>}
+                        {mode === "register" && <span style={{ color: "#a855f7", cursor: "pointer" }} onClick={() => setMode("login")}>Already have an account? Sign In</span>}
+                        {mode === "reset" && <span style={{ color: "#a855f7", cursor: "pointer" }} onClick={() => setMode("login")}>← Back to Sign In</span>}
+                    </div>
+                </div>
+            </div>);
+        }
+
+        // ─── Firestore Hook ───────────────────────────────────
+        function useFirestore(uid) {
+            const [state, setState] = useState(INIT);
+            const [loading, setLoading] = useState(true);
+            const [saving, setSaving] = useState(false);
+            const timer = useRef(null);
+
+            useEffect(() => {
+                if (!uid) return;
+                setLoading(true);
+                db.collection("companies").doc(uid).get()
+                    .then(snap => { if (snap.exists) setState({ ...INIT, ...snap.data() }); else setState(INIT); })
+                    .catch(console.error).finally(() => setLoading(false));
+            }, [uid]);
+
+            useEffect(() => {
+                if (!uid || loading) return;
+                setSaving(true);
+                clearTimeout(timer.current);
+                timer.current = setTimeout(() => {
+                    db.collection("companies").doc(uid).set(state, { merge: true })
+                        .catch(console.error).finally(() => setSaving(false));
+                }, 1000);
+                return () => clearTimeout(timer.current);
+            }, [state, uid, loading]);
+
+            return { state, setState, loading, saving };
+        }
+
+        // ─── Main App ─────────────────────────────────────────
+        function App() {
+            const [user, setUser] = useState(null);
+            const [authLoading, setAuthLoading] = useState(true);
+            useEffect(() => { const unsub = auth.onAuthStateChanged(u => { setUser(u); setAuthLoading(false); }); return unsub; }, []);
+            if (authLoading) return <div style={{ minHeight: "100vh", background: "#0f172a", display: "flex", alignItems: "center", justifyContent: "center", color: "#a855f7", fontSize: 16, fontWeight: 700 }}>💧 Loading…</div>;
+            if (!user) return <AuthScreen />;
+            return <AccountingApp user={user} />;
+        }
+
+        // ─── Accounting App ───────────────────────────────────
+        function AccountingApp({ user }) {
+            const { state, setState, loading, saving } = useFirestore(user.uid);
+            const [tab, setTab] = useState("Dashboard");
+            const [modal, setModal] = useState(null);
+            const [form, setForm] = useState({});
+            const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All" });
+
+            const si = state.stockIn || [], so = state.stockOut || [], creds = state.creditors || [], debs = state.debtors || [];
+            const cash = state.cashEntries || [], ple = state.plEntries || [], te = state.tradingEntries || [], da = state.depreciationAssets || [];
+            const fifo = useMemo(() => computeFIFO(si, so), [si, so]);
+
+            const totalPurchases = si.reduce((a, b) => a + Number(b.totalAmount), 0);
+            const totalSales = so.reduce((a, b) => a + Number(b.totalAmount), 0);
+            const fifoCOGS = Object.values(fifo).reduce((a, b) => a + b.cogs, 0);
+            const fifoClosing = Object.values(fifo).reduce((a, b) => a + b.closingValue, 0);
+            const openingStockAmt = Number(state.openingStock?.amount || 0);
+            const tradingDr = totalPurchases + openingStockAmt + te.filter(e => e.side === "dr").reduce((a, b) => a + Number(b.amount), 0);
+            const tradingCr = totalSales + fifoClosing + te.filter(e => e.side === "cr").reduce((a, b) => a + Number(b.amount), 0);
+            const grossProfit = tradingCr - tradingDr;
+            const cashIn = cash.filter(e => e.dir === "in").reduce((a, b) => a + Number(b.amount), 0);
+            const cashOut = cash.filter(e => e.dir === "out").reduce((a, b) => a + Number(b.amount), 0);
+            const cashBal = cashIn - cashOut;
+            const manualExpense = ple.filter(e => e.side === "expense").reduce((a, b) => a + Number(b.amount), 0);
+            const manualIncome = ple.filter(e => e.side === "income").reduce((a, b) => a + Number(b.amount), 0);
+            const cashOtherIncome = cash.filter(e => e.dir === "in" && e.payType !== "Debtor Payment" && e.payType !== "Sales Receipt").reduce((a, b) => a + Number(b.amount), 0);
+            const cashExpenses = cash.filter(e => e.dir === "out" && e.payType === "Expense Payment").reduce((a, b) => a + Number(b.amount), 0);
+            const totalDepreciation = da.reduce((a, b) => a + calcDepreciation(b).totalDepr, 0);
+            const deprWDVTotal = da.reduce((a, b) => a + calcDepreciation(b).wdv, 0);
+            const deprCostTotal = da.reduce((a, b) => a + Number(b.cost), 0);
+            const plIncome = (grossProfit > 0 ? grossProfit : 0) + manualIncome + cashOtherIncome;
+            const plExpense = manualExpense + cashExpenses + totalDepreciation + (grossProfit < 0 ? Math.abs(grossProfit) : 0);
+            const netPL = plIncome - plExpense;
+
+            const creditorFromStock = id => si.filter(x => x.settleMode === "creditor" && x.linkedPartyId === id).reduce((a, b) => a + Number(b.totalAmount), 0);
+            const creditorFromOther = id => [...te, ...ple].filter(x => x.settleMode === "creditor" && x.linkedPartyId === id).reduce((a, b) => a + Number(b.amount || 0), 0);
+            const creditorCashPaid = id => cash.filter(e => e.dir === "out" && e.linkedId === id).reduce((a, b) => a + Number(b.amount), 0);
+            const creditorBal = c => Math.max(0, Number(c.amount) + creditorFromStock(c.id) + creditorFromOther(c.id) - creditorCashPaid(c.id));
+            const debtorFromStock = id => so.filter(x => x.settleMode === "debtor" && x.linkedPartyId === id).reduce((a, b) => a + Number(b.totalAmount), 0);
+            const debtorFromOther = id => [...te, ...ple].filter(x => x.settleMode === "debtor" && x.linkedPartyId === id).reduce((a, b) => a + Number(b.amount || 0), 0);
+            const debtorCashRcvd = id => cash.filter(e => e.dir === "in" && e.linkedId === id).reduce((a, b) => a + Number(b.amount), 0);
+            const debtorBal = d => Math.max(0, Number(d.amount) + debtorFromStock(d.id) + debtorFromOther(d.id) - debtorCashRcvd(d.id));
+            const totalCreditors = creds.reduce((a, b) => a + creditorBal(b), 0);
+            const totalDebtors = debs.reduce((a, b) => a + debtorBal(b), 0);
+            const bsManualAssets = Object.values(state.balanceSheet?.assets || {}).reduce((a, b) => a + Number(b.amount), 0);
+            const bsManualLiab = Object.values(state.balanceSheet?.liabilities || {}).reduce((a, b) => a + Number(b.amount), 0);
+            const bsAutoAssets = cashBal + (fifoClosing > 0 ? fifoClosing : 0) + (totalDebtors > 0 ? totalDebtors : 0) - totalDepreciation;
+            const bsAutoLiab = (totalCreditors > 0 ? totalCreditors : 0) + netPL;
+            const bsTotalAssets = bsManualAssets + bsAutoAssets, bsTotalLiab = bsManualLiab + bsAutoLiab, bsDiff = bsTotalAssets - bsTotalLiab;
+
+            const upd = fn => setState(p => fn(p));
+            const toggleChk = (key, id) => upd(p => ({ ...p, [key]: p[key].map(e => e.id === id ? { ...e, checked: !e.checked } : e) }));
+            const openM = (t, preset) => { setModal(t); setForm({ date: today(), ...(preset || {}) }); };
+            const closeM = () => { setModal(null); setForm({}); };
+            const buildTSD = (entries, amtField) => { const m = {}; entries.forEach(e => { const d = new Date(e.date), k = d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0"); m[k] = (m[k] || 0) + Number(e[amtField] || 0); }); return Object.entries(m).sort((a, b) => a[0].localeCompare(b[0])).map(([l, v]) => ({ l, v })); };
+
+            const resolveSettle = (frm, amount, date, description, entryId, direction) => {
+                const { settleMode, linkedPartyId, newPartyName, newPartyCredit } = frm;
+                let partyId = null, partyName = "", createdCreditorId = null, createdDebtorId = null;
+                const cashEffects = [];
+                if (settleMode === "cash") { partyName = "Cash"; cashEffects.push({ id: gid(), dir: direction, payType: direction === "in" ? "Other Income Receipt" : "Expense Payment", description, amount, date, sourceId: entryId, linkedId: null }); }
+                else if (settleMode === "creditor") { if (linkedPartyId === "__new__") { createdCreditorId = gid(); partyId = createdCreditorId; partyName = newPartyName || "New Creditor"; } else { partyId = linkedPartyId; partyName = creds.find(c => c.id === linkedPartyId)?.name || ""; } }
+                else if (settleMode === "debtor") { if (linkedPartyId === "__new__") { createdDebtorId = gid(); partyId = createdDebtorId; partyName = newPartyName || "New Debtor"; } else { partyId = linkedPartyId; partyName = debs.find(d => d.id === linkedPartyId)?.name || ""; } }
+                return { partyId, partyName, createdCreditorId, createdDebtorId, cashEffects };
+            };
+
+            const cascadeDelete = (key, id) => {
+                setState(p => {
+                    const entry = (p[key] || []).find(e => e.id === id); if (!entry) return p;
+                    let np = { ...p, [key]: (p[key] || []).filter(e => e.id !== id) };
+                    np.cashEntries = (np.cashEntries || []).filter(e => e.sourceId !== id);
+                    if (entry.createdCreditorId) np.creditors = (np.creditors || []).filter(c => c.id !== entry.createdCreditorId);
+                    if (entry.createdDebtorId) np.debtors = (np.debtors || []).filter(d => d.id !== entry.createdDebtorId);
+                    if (key === "creditors") np.cashEntries = (np.cashEntries || []).filter(e => !(e.dir === "out" && e.linkedId === id));
+                    if (key === "debtors") np.cashEntries = (np.cashEntries || []).filter(e => !(e.dir === "in" && e.linkedId === id));
+                    if (key === "depreciationAssets" && entry.bsAssetId) { const na = { ...np.balanceSheet.assets }; delete na[entry.bsAssetId]; np.balanceSheet = { ...np.balanceSheet, assets: na }; }
+                    return np;
+                });
+            };
+
+            const delBS = (side, id) => { setState(p => { const n = { ...p.balanceSheet[side] }; const entry = n[id]; delete n[id]; let np = { ...p, balanceSheet: { ...p.balanceSheet, [side]: n } }; if (entry) { np.cashEntries = (np.cashEntries || []).filter(e => e.sourceId !== id); if (entry.createdCreditorId) np.creditors = (np.creditors || []).filter(c => c.id !== entry.createdCreditorId); if (entry.createdDebtorId) np.debtors = (np.debtors || []).filter(d => d.id !== entry.createdDebtorId); } return np; }); };
+
+            const applyStockIn = () => {
+                const { date, godown, bottleType, category, batchNo, qty, ratePerUnit } = form;
+                if (!date || !godown || !bottleType || !category || !batchNo || !qty || !ratePerUnit || !form.settleMode) { alert("Fill all fields & select payment mode"); return; }
+                const total = Number(qty) * Number(ratePerUnit), id = gid(), res = resolveSettle(form, total, date, "Stock In: " + bottleType + " Batch " + batchNo, id, "out");
+                upd(p => {
+                    let np = { ...p, stockIn: [...p.stockIn, { id, date, godown, bottleType, category, batchNo, qty: Number(qty), ratePerUnit: Number(ratePerUnit), totalAmount: total, settleMode: form.settleMode, linkedPartyId: res.partyId, linkedPartyName: res.partyName, createdCreditorId: res.createdCreditorId }] };
+                    if (res.createdCreditorId) np.creditors = [...np.creditors, { id: res.createdCreditorId, name: form.newPartyName, date, amount: 0, creditPeriod: form.newPartyCredit || 30, notified: false, checked: false }];
+                    res.cashEffects.forEach(e => { np.cashEntries = [...np.cashEntries, { ...e, payType: "Stock Purchase Payment" }]; }); return np;
+                }); closeM();
+            };
+            const applyStockOut = () => {
+                const { date, godown, bottleType, category, qty, ratePerUnit } = form;
+                if (!date || !godown || !bottleType || !category || !qty || !ratePerUnit || !form.settleMode) { alert("Fill all fields & select receipt mode"); return; }
+                const total = Number(qty) * Number(ratePerUnit), id = gid(), res = resolveSettle(form, total, date, "Stock Out: " + bottleType + " " + date, id, "in");
+                upd(p => {
+                    let np = { ...p, stockOut: [...p.stockOut, { id, date, godown, bottleType, category, qty: Number(qty), ratePerUnit: Number(ratePerUnit), totalAmount: total, settleMode: form.settleMode, linkedPartyId: res.partyId, linkedPartyName: res.partyName, createdDebtorId: res.createdDebtorId }] };
+                    if (res.createdDebtorId) np.debtors = [...np.debtors, { id: res.createdDebtorId, name: form.newPartyName, date, amount: 0, creditPeriod: form.newPartyCredit || 30, notified: false, checked: false }];
+                    res.cashEffects.forEach(e => { np.cashEntries = [...np.cashEntries, { ...e, payType: "Sales Receipt" }]; }); return np;
+                }); closeM();
+            };
+            const applyTrading = () => {
+                if (!form.description || !form.amount || !form.side || !form.date || !form.settleMode) { alert("Fill all fields"); return; }
+                const amt = Number(form.amount), id = gid(), direction = form.side === "dr" ? "out" : "in", res = resolveSettle(form, amt, form.date, "Trading: " + form.description, id, direction);
+                upd(p => {
+                    let np = { ...p, tradingEntries: [...p.tradingEntries, { id, date: form.date, side: form.side, description: form.description, amount: amt, settleMode: form.settleMode, linkedPartyId: res.partyId, linkedPartyName: res.partyName }] };
+                    if (res.createdCreditorId) np.creditors = [...np.creditors, { id: res.createdCreditorId, name: form.newPartyName, date: form.date, amount: 0, creditPeriod: form.newPartyCredit || 30, notified: false, checked: false }];
+                    if (res.createdDebtorId) np.debtors = [...np.debtors, { id: res.createdDebtorId, name: form.newPartyName, date: form.date, amount: 0, creditPeriod: form.newPartyCredit || 30, notified: false, checked: false }];
+                    res.cashEffects.forEach(e => { np.cashEntries = [...np.cashEntries, e]; }); return np;
+                }); closeM();
+            };
+            const applyPL = () => {
+                if (!form.category || !form.description || !form.amount || !form.date || !form.side || !form.settleMode) { alert("Fill all fields"); return; }
+                const amt = Number(form.amount), id = gid(), isExpense = form.side === "expense", direction = isExpense ? "out" : "in", res = resolveSettle(form, amt, form.date, form.description, id, direction);
+                upd(p => {
+                    let np = { ...p, plEntries: [...p.plEntries, { id, date: form.date, side: form.side, category: form.category, description: form.description, amount: amt, settleMode: form.settleMode, linkedPartyId: res.partyId, linkedPartyName: res.partyName }] };
+                    if (res.createdCreditorId) np.creditors = [...np.creditors, { id: res.createdCreditorId, name: form.newPartyName, date: form.date, amount: 0, creditPeriod: form.newPartyCredit || 30, notified: false, checked: false }];
+                    if (res.createdDebtorId) np.debtors = [...np.debtors, { id: res.createdDebtorId, name: form.newPartyName, date: form.date, amount: 0, creditPeriod: form.newPartyCredit || 30, notified: false, checked: false }];
+                    res.cashEffects.forEach(e => { np.cashEntries = [...np.cashEntries, { ...e, payType: isExpense ? "Expense Payment" : "Other Income Receipt" }]; }); return np;
+                }); closeM();
+            };
+            const applyBS = () => {
+                if (!form.side || !form.category || !form.subCategory || !form.description || !form.amount || !form.settleMode) { alert("Fill all fields"); return; }
+                const amt = Number(form.amount), id = gid(), isAsset = form.side === "assets", direction = isAsset ? "out" : "in", res = resolveSettle(form, amt, form.date || today(), form.description, id, direction);
+                const entry = { id, side: form.side, category: form.category, subCategory: form.subCategory, description: form.description, date: form.date || today(), amount: amt, settleMode: form.settleMode, linkedPartyId: res.partyId, linkedPartyName: res.partyName };
+                upd(p => {
+                    let np = { ...p, balanceSheet: { ...p.balanceSheet, [form.side]: { ...p.balanceSheet[form.side], [id]: entry } } };
+                    if (res.createdCreditorId) np.creditors = [...np.creditors, { id: res.createdCreditorId, name: form.newPartyName, date: form.date || today(), amount: 0, creditPeriod: form.newPartyCredit || 30, notified: false, checked: false }];
+                    if (res.createdDebtorId) np.debtors = [...np.debtors, { id: res.createdDebtorId, name: form.newPartyName, date: form.date || today(), amount: 0, creditPeriod: form.newPartyCredit || 30, notified: false, checked: false }];
+                    res.cashEffects.forEach(e => { np.cashEntries = [...np.cashEntries, { ...e, payType: isAsset ? "Other Payment" : "Capital Introduced" }]; }); return np;
+                }); closeM();
+            };
+            const applyCredDeb = side => {
+                if (!form.name || !form.date || !form.creditPeriod) { alert("Fill all required fields"); return; }
+                const key = side === "creditor" ? "creditors" : "debtors";
+                upd(p => ({ ...p, [key]: [...p[key], { id: gid(), name: form.name, date: form.date, amount: Number(form.amount || 0), creditPeriod: form.creditPeriod, notified: false, checked: false }] })); closeM();
+            };
+            const applyCash = () => {
+                if (!form.date || !form.payType || !form.amount || !form.description) { alert("Fill all fields"); return; }
+                upd(p => ({ ...p, cashEntries: [...p.cashEntries, { id: gid(), date: form.date, dir: form.dir, payType: form.payType, description: form.description, amount: Number(form.amount), linkedId: form.linkedId || null, sourceId: null }] })); closeM();
+            };
+            const applyDepr = () => {
+                if (!form.bsAssetId || !form.depRate || !form.method || !form.period) { alert("Select a Balance Sheet asset and fill all fields"); return; }
+                const bsAsset = Object.values(state.balanceSheet?.assets || {}).find(a => a.id === form.bsAssetId);
+                if (!bsAsset) { alert("Asset not found"); return; }
+                const id = gid();
+                upd(p => ({ ...p, depreciationAssets: [...p.depreciationAssets, { id, bsAssetId: form.bsAssetId, name: bsAsset.description, cost: Number(bsAsset.amount), startDate: bsAsset.date, method: form.method, period: form.period, depRate: Number(form.depRate) }], balanceSheet: { ...p.balanceSheet, assets: { ...p.balanceSheet.assets, [bsAsset.id]: { ...bsAsset, linkedDeprId: id, autoFromDepr: true } } } })); closeM();
+            };
+            const applyOpeningStock = () => { upd(p => ({ ...p, openingStock: { amount: Number(form.amount || 0), date: form.date || today() } })); closeM(); };
+
+            const sp = { form, setForm, creds, debs };
+
+            if (loading) return <div style={{ minHeight: "100vh", background: "#0f172a", display: "flex", alignItems: "center", justifyContent: "center", color: "#a855f7", fontSize: 16, fontWeight: 700 }}>💧 Loading your data…</div>;
+
+            return (<div style={{ minHeight: "100vh", background: "linear-gradient(135deg,#0f172a 60%,#1e1b4b)", color: C.text }}>
+                {/* Header */}
+                <div style={{ background: "linear-gradient(90deg,#4f46e5,#7c3aed,#9333ea)", position: "sticky", top: 0, zIndex: 50 }}>
+                    <div style={{ maxWidth: 1400, margin: "0 auto", padding: "10px 20px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                        <div><div style={{ fontSize: 18, fontWeight: 900, color: "#fff" }}>💧 YORS WATER</div><div style={{ fontSize: 10, color: "#c4b5fd" }}>Accounting Suite</div></div>
+                        <div style={{ textAlign: "right", fontSize: 11 }}>
+                            <div style={{ color: "#c4b5fd" }}>{user.email} {saving ? "⟳" : "✓"}</div>
+                            <div style={{ color: netPL >= 0 ? "#86efac" : "#fca5a5", fontWeight: 800 }}>Net P&L: {fabs(netPL)} {netPL >= 0 ? "▲" : "▼"}</div>
+                            <button onClick={() => auth.signOut()} style={{ background: "transparent", border: "1px solid #7c3aed", color: "#c4b5fd", borderRadius: 5, padding: "2px 8px", cursor: "pointer", fontSize: 10, marginTop: 2 }}>Sign Out</button>
+                        </div>
+                    </div>
+                    <div style={{ maxWidth: 1400, margin: "0 auto", display: "flex", padding: "0 20px", overflowX: "auto", gap: 2 }}>
+                        {TABS.map(t => <button key={t} onClick={() => setTab(t)} style={{ padding: "8px 11px", border: "none", cursor: "pointer", fontWeight: 600, fontSize: 11, borderRadius: "6px 6px 0 0", background: tab === t ? C.dark : "transparent", color: tab === t ? C.purple : "#e2e8f0", borderBottom: tab === t ? "3px solid #a855f7" : "3px solid transparent", whiteSpace: "nowrap" }}>{t}</button>)}
+                    </div>
+                </div>
+
+                <div style={{ maxWidth: 1400, margin: "0 auto", padding: "20px" }}>
+
+                    {tab === "Dashboard" && <div>
+                        <div style={{ fontSize: 16, fontWeight: 800, marginBottom: 14, color: C.purple }}>📊 Dashboard</div>
+                        <div style={{ display: "flex", gap: 9, flexWrap: "wrap", marginBottom: 18 }}>
+                            {[["Purchases", fc(totalPurchases), "#6366f1,#8b5cf6"], ["Sales", fc(totalSales), "#0ea5e9,#0284c7"], ["Gross P&L", fabs(grossProfit) + (grossProfit >= 0 ? "▲" : "▼"), grossProfit >= 0 ? "#22c55e,#16a34a" : "#ef4444,#dc2626"], ["COGS", fc(fifoCOGS), "#f59e0b,#d97706"], ["Closing Stock", fc(fifoClosing), "#8b5cf6,#7c3aed"], ["Cash", fc(cashBal), cashBal >= 0 ? "#0891b2,#0ea5e9" : "#b45309,#d97706"], ["Creditors", fc(totalCreditors), "#f59e0b,#d97706"], ["Debtors", fc(totalDebtors), "#8b5cf6,#7c3aed"], ["Depreciation", fc(totalDepreciation), "#64748b,#475569"], ["Net P&L", fabs(netPL) + (netPL >= 0 ? "▲" : "▼"), netPL >= 0 ? "#16a34a,#15803d" : "#dc2626,#b91c1c"]].map(([l, v, g]) => (
+                                <div key={l} style={CARD(g)}><div style={{ fontSize: 9, opacity: .85 }}>{l}</div><div style={{ fontSize: 13, fontWeight: 900 }}>{v}</div></div>
+                            ))}
+                        </div>
+                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 14 }}>
+                            <div style={{ background: C.mid, borderRadius: 12, padding: 14 }}><div style={{ fontSize: 12, fontWeight: 800, color: C.teal, marginBottom: 8 }}>📈 Sales Trend</div><MiniChart data={buildTSD(so, "totalAmount")} color={C.teal} height={70} /></div>
+                            <div style={{ background: C.mid, borderRadius: 12, padding: 14 }}><div style={{ fontSize: 12, fontWeight: 800, color: C.violet, marginBottom: 8 }}>📦 Purchases Trend</div><MiniChart data={buildTSD(si, "totalAmount")} color={C.violet} height={70} /></div>
+                        </div>
+                        <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 10 }}>
+                            {GODOWNS.map(g => {
+                                const inQ = si.filter(x => x.godown === g).reduce((a, b) => a + Number(b.qty), 0), outQ = so.filter(x => x.godown === g).reduce((a, b) => a + Number(b.qty), 0); return (
+                                    <div key={g} style={{ background: C.mid, borderRadius: 11, padding: 12, borderTop: "3px solid #7c3aed" }}>
+                                        <div style={{ fontWeight: 800, color: "#c4b5fd", marginBottom: 6, fontSize: 12 }}>🏭 {g}</div>
+                                        {[["In", inQ, C.green], ["Out", outQ, C.red], ["Bal", inQ - outQ, C.text]].map(([l, v, c]) => (
+                                            <div key={l} style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 3 }}><span style={{ color: C.muted }}>{l}</span><span style={{ color: c, fontWeight: 600 }}>{v} units</span></div>
+                                        ))}
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    </div>}
+
+                    {tab === "Trading A/C" && <div>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+                            <div style={{ fontSize: 16, fontWeight: 800, color: C.teal }}>🔄 Trading Account</div>
+                            <div style={{ display: "flex", gap: 8 }}>
+                                <button style={BTNP("linear-gradient(90deg,#0891b2,#0ea5e9)")} onClick={() => openM("openingStock")}>Set Opening Stock</button>
+                                <button style={BTNP()} onClick={() => openM("trading")}>+ Manual Entry</button>
+                            </div>
+                        </div>
+                        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
+                            {[["Opening Stock", fc(openingStockAmt), "#64748b,#475569"], ["Purchases", fc(totalPurchases), "#6366f1,#8b5cf6"], ["Sales", fc(totalSales), "#22c55e,#16a34a"], ["Closing Stock", fc(fifoClosing), "#8b5cf6,#7c3aed"], ["Gross P&L", fabs(grossProfit) + (grossProfit >= 0 ? "▲" : "▼"), grossProfit >= 0 ? "#0891b2,#0ea5e9" : "#ef4444,#dc2626"]].map(([l, v, g]) => (
+                                <div key={l} style={CARD(g)}><div style={{ fontSize: 9 }}>{l}</div><div style={{ fontSize: 14, fontWeight: 900 }}>{v}</div></div>
+                            ))}
+                        </div>
+                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                            <div style={{ background: C.mid, borderRadius: 12, padding: 16 }}>
+                                <div style={{ fontWeight: 800, color: C.red, fontSize: 12, marginBottom: 6, borderBottom: "1px solid #334155", paddingBottom: 4 }}>Dr — Costs</div>
+                                {[["Opening Stock", openingStockAmt], ["Purchases", totalPurchases]].map(([l, v]) => <div key={l} style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 3 }}><span style={{ color: C.muted }}>{l}</span><span style={{ color: C.red, fontWeight: 600 }}>{fc(v)}</span></div>)}
+                                {te.filter(e => e.side === "dr").map(e => <div key={e.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 11, marginBottom: 3, alignItems: "center" }}><span style={{ color: C.muted }}>{e.description}</span><span style={{ display: "flex", gap: 5 }}>{fc(e.amount)}<button style={BTND} onClick={() => cascadeDelete("tradingEntries", e.id)}>✕</button></span></div>)}
+                                <div style={{ borderTop: "1px solid #334155", paddingTop: 6, fontWeight: 800, color: C.red, textAlign: "right" }}>Total Dr: {fc(tradingDr)}</div>
+                                {grossProfit >= 0 && <div style={{ color: C.green, fontWeight: 800, textAlign: "right", fontSize: 11, marginTop: 4 }}>Gross Profit c/d: {fc(grossProfit)}</div>}
+                            </div>
+                            <div style={{ background: C.mid, borderRadius: 12, padding: 16 }}>
+                                <div style={{ fontWeight: 800, color: C.green, fontSize: 12, marginBottom: 6, borderBottom: "1px solid #334155", paddingBottom: 4 }}>Cr — Revenue</div>
+                                {[["Sales", totalSales], ["Closing Stock (FIFO)", fifoClosing]].map(([l, v]) => <div key={l} style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 3 }}><span style={{ color: C.muted }}>{l}</span><span style={{ color: C.green, fontWeight: 600 }}>{fc(v)}</span></div>)}
+                                {te.filter(e => e.side === "cr").map(e => <div key={e.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 11, marginBottom: 3, alignItems: "center" }}><span style={{ color: C.muted }}>{e.description}</span><span style={{ display: "flex", gap: 5 }}>{fc(e.amount)}<button style={BTND} onClick={() => cascadeDelete("tradingEntries", e.id)}>✕</button></span></div>)}
+                                <div style={{ borderTop: "1px solid #334155", paddingTop: 6, fontWeight: 800, color: C.green, textAlign: "right" }}>Total Cr: {fc(tradingCr)}</div>
+                                {grossProfit < 0 && <div style={{ color: C.red, fontWeight: 800, textAlign: "right", fontSize: 11, marginTop: 4 }}>Gross Loss c/d: {fabs(grossProfit)}</div>}
+                            </div>
+                        </div>
+                    </div>}
+
+                    {tab === "Inventory" && <div>
+                        <div style={{ fontSize: 16, fontWeight: 800, marginBottom: 14, color: C.blue }}>📦 Inventory (FIFO)</div>
+                        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
+                            {[["Purchased", fc(totalPurchases), "#6366f1,#8b5cf6"], ["Sold", fc(totalSales), "#0ea5e9,#0284c7"], ["COGS", fc(fifoCOGS), "#f59e0b,#d97706"], ["Closing Value", fc(fifoClosing), "#8b5cf6,#7c3aed"]].map(([l, v, g]) => (
+                                <div key={l} style={CARD(g)}><div style={{ fontSize: 9 }}>{l}</div><div style={{ fontSize: 13, fontWeight: 900 }}>{v}</div></div>
+                            ))}
+                        </div>
+                        <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
+                            {[["bt", ["All", ...BOTTLE_TYPES]], ["cat", ["All", "normal", "customized"]], ["godown", ["All", ...GODOWNS]]].map(([k, opts]) => (
+                                <select key={k} style={{ ...INP, width: "auto", marginBottom: 0 }} value={invFilter[k]} onChange={e => setInvFilter(f => ({ ...f, [k]: e.target.value }))}>{opts.map(o => <option key={o}>{o}</option>)}</select>
+                            ))}
+                        </div>
+                        {Object.keys(fifo).filter(k => { const [bt, cat] = k.split("_"); if (!fifo[k].inQty) return false; if (invFilter.bt !== "All" && bt !== invFilter.bt) return false; if (invFilter.cat !== "All" && cat !== invFilter.cat) return false; return true; }).map(k => {
+                            const [bt, cat] = k.split("_"), f = fifo[k];
+                            return (<div key={k} style={{ background: C.mid, borderRadius: 14, padding: 16, marginBottom: 14, borderLeft: "4px solid #818cf8" }}>
+                                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, flexWrap: "wrap", gap: 6 }}>
+                                    <div style={{ display: "flex", gap: 8 }}><span style={{ fontSize: 13, fontWeight: 900, color: "#818cf8" }}>💧 {bt}</span><Badge label={cat.toUpperCase()} color={cat === "normal" ? "#0ea5e9" : C.amber} /></div>
+                                    <div style={{ display: "flex", gap: 8 }}>
+                                        {[["Bal", f.balQty + " units", C.text], ["Value", fc(f.closingValue), C.violet], ["COGS", fc(f.cogs), C.amber]].map(([l, v, c]) => (
+                                            <div key={l} style={{ background: C.dark, borderRadius: 7, padding: "4px 9px", fontSize: 11 }}><span style={{ color: C.muted }}>{l}: </span><span style={{ fontWeight: 800, color: c }}>{v}</span></div>
+                                        ))}
+                                    </div>
+                                </div>
+                                <table style={TBL}><thead><tr>{["Batch", "Date", "Godown", "Orig", "Rate", "Issued", "Rem", "Rem Val", "Status"].map(h => <th key={h} style={THS}>{h}</th>)}</tr></thead>
+                                    <tbody>{f.batches.map(b => {
+                                        const issued = b.origQty - b.remQty, pct = b.origQty > 0 ? Math.round((issued / b.origQty) * 100) : 0, st = b.remQty === 0 ? "Exhausted" : b.remQty === b.origQty ? "Untouched" : "Partial " + pct + "%", sc = b.remQty === 0 ? C.red : b.remQty === b.origQty ? C.green : C.amber;
+                                        return (<tr key={b.batchNo}><td style={TDS}><span style={{ fontFamily: "monospace", color: "#818cf8", fontSize: 10 }}>{b.batchNo}</span></td><td style={TDS}>{b.date}</td><td style={TDS}><Badge label={b.godown} color="#7c3aed" /></td><td style={TDS}>{b.origQty}</td><td style={TDS}>{fc(b.rate)}</td><td style={{ ...TDS, color: C.red }}>{issued}</td><td style={{ ...TDS, fontWeight: 700, color: b.remQty > 0 ? C.green : C.muted }}>{b.remQty}</td><td style={{ ...TDS, color: C.violet }}>{fc(b.remQty * b.rate)}</td><td style={TDS}><Badge label={st} color={sc} /></td></tr>);
+                                    })}</tbody>
+                                </table>
+                            </div>);
+                        })}
+                    </div>}
+
+                    {tab === "Stock In" && <div>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+                            <div style={{ fontSize: 16, fontWeight: 800, color: C.green }}>📥 Stock In</div>
+                            <button style={BTNP()} onClick={() => openM("stockIn")}>+ Add Stock In</button>
+                        </div>
+                        <div style={{ background: C.mid, borderRadius: 12, overflowX: "auto" }}>
+                            <table style={TBL}><thead><tr>{["Batch", "Date", "Godown", "Bottle", "Cat", "Qty", "Rate", "Total", "Mode", "Party", "Del"].map(h => <th key={h} style={THS}>{h}</th>)}</tr></thead>
+                                <tbody>{!si.length && <tr><td colSpan={11} style={{ ...TDS, textAlign: "center", color: C.muted }}>No entries</td></tr>}
+                                    {si.map(e => <tr key={e.id}><td style={TDS}><span style={{ fontFamily: "monospace", color: "#818cf8", fontSize: 10 }}>{e.batchNo}</span></td><td style={TDS}>{e.date}</td><td style={TDS}><Badge label={e.godown} color="#7c3aed" /></td><td style={TDS}><Badge label={e.bottleType} color="#6366f1" /></td><td style={TDS}><Badge label={e.category} color={e.category === "normal" ? "#0ea5e9" : C.amber} /></td><td style={{ ...TDS, fontWeight: 700 }}>{e.qty}</td><td style={TDS}>{fc(e.ratePerUnit)}</td><td style={{ ...TDS, fontWeight: 800, color: C.green }}>{fc(e.totalAmount)}</td><td style={TDS}><Badge label={e.settleMode === "cash" ? "Cash" : e.settleMode === "creditor" ? "Creditor" : "Journal"} color={e.settleMode === "cash" ? C.green : C.amber} /></td><td style={TDS}>{e.linkedPartyName || "—"}</td><td style={TDS}><button style={BTND} onClick={() => cascadeDelete("stockIn", e.id)}>Del</button></td></tr>)}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>}
+
+                    {tab === "Stock Out" && <div>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+                            <div style={{ fontSize: 16, fontWeight: 800, color: C.red }}>📤 Stock Out</div>
+                            <button style={BTNP()} onClick={() => openM("stockOut")}>+ Add Stock Out</button>
+                        </div>
+                        <div style={{ background: C.mid, borderRadius: 12, overflowX: "auto" }}>
+                            <table style={TBL}><thead><tr>{["Date", "Godown", "Bottle", "Cat", "Qty", "Rate", "Total", "Mode", "Party", "Del"].map(h => <th key={h} style={THS}>{h}</th>)}</tr></thead>
+                                <tbody>{!so.length && <tr><td colSpan={10} style={{ ...TDS, textAlign: "center", color: C.muted }}>No entries</td></tr>}
+                                    {so.map(e => <tr key={e.id}><td style={TDS}>{e.date}</td><td style={TDS}><Badge label={e.godown} color="#7c3aed" /></td><td style={TDS}><Badge label={e.bottleType} color="#6366f1" /></td><td style={TDS}><Badge label={e.category} color={e.category === "normal" ? "#0ea5e9" : C.amber} /></td><td style={{ ...TDS, fontWeight: 700 }}>{e.qty}</td><td style={TDS}>{fc(e.ratePerUnit)}</td><td style={{ ...TDS, fontWeight: 800, color: C.red }}>{fc(e.totalAmount)}</td><td style={TDS}><Badge label={e.settleMode === "cash" ? "Cash" : e.settleMode === "debtor" ? "Debtor" : "Journal"} color={e.settleMode === "cash" ? C.green : C.violet} /></td><td style={TDS}>{e.linkedPartyName || "—"}</td><td style={TDS}><button style={BTND} onClick={() => cascadeDelete("stockOut", e.id)}>Del</button></td></tr>)}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>}
+
+                    {tab === "P&L Account" && <div>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+                            <div style={{ fontSize: 16, fontWeight: 800, color: "#10b981" }}>📈 Profit & Loss Account</div>
+                            <button style={BTNP()} onClick={() => openM("pl")}>+ Add Entry</button>
+                        </div>
+                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
+                            <div style={{ background: C.mid, borderRadius: 12, padding: 16 }}>
+                                <div style={{ fontWeight: 800, color: C.red, fontSize: 12, marginBottom: 6, borderBottom: "1px solid #334155", paddingBottom: 4 }}>Dr — Expenses</div>
+                                {grossProfit < 0 && <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: C.red, marginBottom: 4 }}><span>Gross Loss b/d</span><span style={{ fontWeight: 700 }}>{fabs(grossProfit)}</span></div>}
+                                {totalDepreciation > 0 && <div style={{ marginBottom: 6 }}><div style={{ color: "#94a3b8", fontSize: 10, fontWeight: 700, marginBottom: 2 }}>Depreciation (auto)</div>{da.map(a => { const d = calcDepreciation(a); return d.totalDepr > 0 ? <div key={a.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 11, paddingLeft: 8, color: C.amber, marginBottom: 2 }}><span>{a.name}</span><span>{fc(d.totalDepr)}</span></div> : null; })}</div>}
+                                {PL_CATS.expenses.map(cat => { const ents = ple.filter(e => e.side === "expense" && e.category === cat); return ents.length ? <div key={cat} style={{ marginBottom: 6 }}><div style={{ color: "#94a3b8", fontSize: 10, fontWeight: 700, marginBottom: 2 }}>{cat}</div>{ents.map(e => <div key={e.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 11, paddingLeft: 8, alignItems: "center", marginBottom: 2 }}><span>{e.description}</span><span style={{ display: "flex", gap: 5 }}>{fc(e.amount)}<button style={BTND} onClick={() => cascadeDelete("plEntries", e.id)}>✕</button></span></div>)}</div> : null; })}
+                                <div style={{ borderTop: "2px solid #334155", paddingTop: 6, fontWeight: 900, color: C.red, textAlign: "right" }}>Total Dr: {fc(plExpense)}</div>
+                                {netPL >= 0 && <div style={{ color: C.green, fontWeight: 800, textAlign: "right", marginTop: 4, fontSize: 11 }}>Net Profit c/d: {fc(netPL)}</div>}
+                            </div>
+                            <div style={{ background: C.mid, borderRadius: 12, padding: 16 }}>
+                                <div style={{ fontWeight: 800, color: C.green, fontSize: 12, marginBottom: 6, borderBottom: "1px solid #334155", paddingBottom: 4 }}>Cr — Income</div>
+                                {grossProfit >= 0 && <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: C.green, marginBottom: 4 }}><span>Gross Profit b/d</span><span style={{ fontWeight: 700 }}>{fc(grossProfit)}</span></div>}
+                                {PL_CATS.income.map(cat => { const ents = ple.filter(e => e.side === "income" && e.category === cat); return ents.length ? <div key={cat} style={{ marginBottom: 6 }}><div style={{ color: "#94a3b8", fontSize: 10, fontWeight: 700, marginBottom: 2 }}>{cat}</div>{ents.map(e => <div key={e.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 11, paddingLeft: 8, alignItems: "center", marginBottom: 2 }}><span>{e.description}</span><span style={{ display: "flex", gap: 5 }}>{fc(e.amount)}<button style={BTND} onClick={() => cascadeDelete("plEntries", e.id)}>✕</button></span></div>)}</div> : null; })}
+                                <div style={{ borderTop: "2px solid #334155", paddingTop: 6, fontWeight: 900, color: C.green, textAlign: "right" }}>Total Cr: {fc(plIncome)}</div>
+                                {netPL < 0 && <div style={{ color: C.red, fontWeight: 800, textAlign: "right", marginTop: 4, fontSize: 11 }}>Net Loss c/d: {fabs(netPL)}</div>}
+                            </div>
+                        </div>
+                        <div style={{ background: netPL >= 0 ? "#052e16" : "#450a0a", borderRadius: 12, padding: 14, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                            <div style={{ fontWeight: 900, fontSize: 14, color: netPL >= 0 ? C.green : C.red }}>NET {netPL >= 0 ? "PROFIT" : "LOSS"}</div>
+                            <div style={{ fontWeight: 900, fontSize: 22, color: netPL >= 0 ? C.green : C.red }}>{fabs(netPL)}</div>
+                        </div>
+                    </div>}
+
+                    {tab === "Cash Book" && <div>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+                            <div style={{ fontSize: 16, fontWeight: 800, color: "#10b981" }}>💵 Cash Book</div>
+                            <div style={{ display: "flex", gap: 8 }}>
+                                <button style={BTNP("linear-gradient(90deg,#22c55e,#16a34a)")} onClick={() => openM("cash", { dir: "in" })}>+ Cash In</button>
+                                <button style={BTNP("linear-gradient(90deg,#ef4444,#dc2626)")} onClick={() => openM("cash", { dir: "out" })}>+ Cash Out</button>
+                            </div>
+                        </div>
+                        <div style={{ display: "flex", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
+                            {[["Cash In", fc(cashIn), "#22c55e,#16a34a"], ["Cash Out", fc(cashOut), "#ef4444,#dc2626"], ["Balance", fc(cashBal), cashBal >= 0 ? "#0891b2,#0ea5e9" : "#b45309,#d97706"]].map(([l, v, g]) => (
+                                <div key={l} style={CARD(g)}><div style={{ fontSize: 9 }}>{l}</div><div style={{ fontSize: 16, fontWeight: 900 }}>{v}</div></div>
+                            ))}
+                        </div>
+                        <div style={{ background: C.mid, borderRadius: 12, overflowX: "auto" }}>
+                            <table style={TBL}><thead><tr>{["Date", "Type", "Description", "In", "Out", "Running Bal", "Del"].map(h => <th key={h} style={THS}>{h}</th>)}</tr></thead>
+                                <tbody>{!cash.length && <tr><td colSpan={7} style={{ ...TDS, textAlign: "center", color: C.muted }}>No entries</td></tr>}
+                                    {cash.reduce((acc, e) => { const prev = acc.length ? acc[acc.length - 1].bal : 0; acc.push({ ...e, bal: e.dir === "in" ? prev + Number(e.amount) : prev - Number(e.amount) }); return acc; }, []).map(e => (
+                                        <tr key={e.id}><td style={TDS}>{e.date}</td><td style={TDS}><Badge label={e.payType} color={e.dir === "in" ? C.green : C.red} /></td><td style={TDS}>{e.description}</td><td style={TDS}>{e.dir === "in" ? <span style={{ color: C.green, fontWeight: 700 }}>{fc(e.amount)}</span> : "—"}</td><td style={TDS}>{e.dir === "out" ? <span style={{ color: C.red, fontWeight: 700 }}>{fc(e.amount)}</span> : "—"}</td><td style={{ ...TDS, fontWeight: 700, color: e.bal >= 0 ? C.green : C.red }}>{fc(e.bal)}</td><td style={TDS}><button style={BTND} onClick={() => cascadeDelete("cashEntries", e.id)}>Del</button></td></tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>}
+
+                    {(tab === "Creditors" || tab === "Debtors") && <div>
+                        {tab === "Creditors"
+                            ? <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}><div style={{ fontSize: 16, fontWeight: 800, color: C.amber }}>🏦 Creditors</div><button style={BTNP()} onClick={() => openM("creditor")}>+ Add Creditor</button></div>
+                            : <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}><div style={{ fontSize: 16, fontWeight: 800, color: C.violet }}>📋 Debtors</div><button style={BTNP()} onClick={() => openM("debtor")}>+ Add Debtor</button></div>}
+                        {(() => {
+                            const isC = tab === "Creditors", items = isC ? creds : debs, ac = isC ? C.amber : C.violet;
+                            const getFromStock = id => isC ? creditorFromStock(id) : debtorFromStock(id);
+                            const getFromOther = id => isC ? creditorFromOther(id) : debtorFromOther(id);
+                            const getCash = id => isC ? creditorCashPaid(id) : debtorCashRcvd(id);
+                            const getBal = e => isC ? creditorBal(e) : debtorBal(e);
+                            const total = items.reduce((a, b) => a + getBal(b), 0);
+                            return (<div>
+                                <div style={{ background: C.mid, borderRadius: 12, overflowX: "auto" }}>
+                                    <table style={TBL}><thead><tr>{["✓", "Name", "Date", "Opening", "From Entries", "Total Due", isC ? "Cash Paid" : "Cash Rcvd", "Balance", "Period", "Due Date", "Status", "Del"].map(h => <th key={h} style={THS}>{h}</th>)}</tr></thead>
+                                        <tbody>{!items.length && <tr><td colSpan={12} style={{ ...TDS, textAlign: "center", color: C.muted }}>No entries</td></tr>}
+                                            {items.map(e => {
+                                                const fromS = getFromStock(e.id), fromO = getFromOther(e.id), cp = getCash(e.id), totalDue = Number(e.amount) + fromS + fromO, bal = Math.max(0, totalDue - cp);
+                                                const due = new Date(e.date); due.setDate(due.getDate() + Number(e.creditPeriod));
+                                                const days = Math.ceil((due - new Date()) / 86400000), sl = days > 5 ? days + "d left" : days > 0 ? days + "d left" : "OVERDUE", sc = days > 5 ? C.green : days > 0 ? C.amber : C.red;
+                                                return (<tr key={e.id} style={{ opacity: e.checked ? 0.45 : 1 }}>
+                                                    <td style={TDS}><input type="checkbox" checked={!!e.checked} onChange={() => toggleChk(isC ? "creditors" : "debtors", e.id)} style={{ accentColor: ac, width: 14, height: 14 }} /></td>
+                                                    <td style={{ ...TDS, fontWeight: 700, textDecoration: e.checked ? "line-through" : "none" }}>{e.name}</td>
+                                                    <td style={TDS}>{e.date}</td><td style={TDS}>{fc(e.amount)}</td>
+                                                    <td style={{ ...TDS, color: C.violet }}>{(fromS + fromO) > 0 ? fc(fromS + fromO) : "—"}</td>
+                                                    <td style={{ ...TDS, fontWeight: 700 }}>{fc(totalDue)}</td>
+                                                    <td style={{ ...TDS, color: C.green }}>{fc(cp)}</td>
+                                                    <td style={{ ...TDS, fontWeight: 800, color: bal > 0 ? ac : C.green }}>{fc(bal)}</td>
+                                                    <td style={TDS}>{e.creditPeriod}d</td>
+                                                    <td style={TDS}>{due.toLocaleDateString("en-IN")}</td>
+                                                    <td style={TDS}><Badge label={sl} color={sc} /></td>
+                                                    <td style={TDS}><button style={BTND} onClick={() => cascadeDelete(isC ? "creditors" : "debtors", e.id)}>Del</button></td>
+                                                </tr>);
+                                            })}
+                                        </tbody>
+                                    </table>
+                                </div>
+                                <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8 }}>
+                                    <span style={{ fontSize: 11, color: C.green }}>✓ {items.filter(e => e.checked).length}/{items.length} settled</span>
+                                    <span style={{ fontWeight: 700, color: ac }}>Outstanding: {fc(total)}</span>
+                                </div>
+                            </div>);
+                        })()}
+                    </div>}
+
+                    {tab === "Balance Sheet" && <div>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+                            <div style={{ fontSize: 16, fontWeight: 800, color: C.blue }}>🏛️ Balance Sheet</div>
+                            <button style={BTNP()} onClick={() => openM("bs")}>+ Manual Entry</button>
+                        </div>
+                        {Math.abs(bsDiff) > 0.01
+                            ? <div style={{ background: "#450a0a", borderRadius: 10, padding: 12, marginBottom: 12, border: "1.5px solid #ef4444" }}><div style={{ fontWeight: 800, color: C.red, fontSize: 12 }}>⚠️ Mismatch — {fabs(bsDiff)}</div><div style={{ fontSize: 10, color: "#fca5a5", marginTop: 4 }}>Add Share Capital under Liabilities → Equity and Reserves to balance.</div></div>
+                            : <div style={{ background: "#052e16", borderRadius: 8, padding: "8px 14px", marginBottom: 10, color: "#86efac", fontWeight: 700, textAlign: "center", fontSize: 12 }}>✅ Balance Sheet BALANCED</div>}
+                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                            {["liabilities", "assets"].map(side => {
+                                const color = side === "assets" ? C.blue : C.amber;
+                                const entries = Object.values(state.balanceSheet?.[side] || {});
+                                const autoItems = [];
+                                if (side === "assets") {
+                                    if (cashBal !== 0) autoItems.push({ sub: "Cash and Cash Equivalents", label: "Cash Balance", val: cashBal, c: C.green });
+                                    if (fifoClosing > 0) autoItems.push({ sub: "Inventories", label: "Closing Stock (FIFO)", val: fifoClosing, c: C.violet });
+                                    if (totalDebtors > 0) autoItems.push({ sub: "Trade Receivables", label: "Trade Debtors", val: totalDebtors, c: C.violet });
+                                    if (totalDepreciation > 0) autoItems.push({ sub: "Fixed Assets", label: "Less: Accum. Depr", val: -totalDepreciation, c: C.red });
+                                } else {
+                                    if (totalCreditors > 0) autoItems.push({ sub: "Trade Payables", label: "Trade Creditors", val: totalCreditors, c: C.amber });
+                                    autoItems.push({ sub: "Retained Earnings / Net Profit", label: netPL >= 0 ? "Net Profit (auto)" : "Net Loss (auto)", val: netPL, c: netPL >= 0 ? C.green : C.red });
+                                }
+                                const groupTotals = {};
+                                Object.entries(SCHEDULE3[side]).forEach(([grp, subs]) => {
+                                    let t = entries.filter(e => e.category === grp).reduce((a, b) => a + Number(b.amount), 0);
+                                    autoItems.forEach(ai => { if (subs.includes(ai.sub)) t += ai.val; });
+                                    groupTotals[grp] = t;
+                                });
+                                const grand = Object.values(groupTotals).reduce((a, b) => a + b, 0);
+                                return (<div key={side} style={{ background: C.mid, borderRadius: 12, padding: 16 }}>
+                                    <div style={{ fontWeight: 800, color, marginBottom: 12, fontSize: 13 }}>{side === "assets" ? "ASSETS" : "LIABILITIES & EQUITY"}</div>
+                                    {Object.entries(SCHEDULE3[side]).map(([grp, subs]) => (
+                                        <div key={grp} style={{ marginBottom: 12 }}>
+                                            <div style={{ fontWeight: 800, color, fontSize: 12, marginBottom: 6, borderBottom: "1px solid #334155", paddingBottom: 4 }}>{grp}</div>
+                                            {subs.map(sub => {
+                                                const subE = entries.filter(e => e.category === grp && e.subCategory === sub);
+                                                const autoSub = autoItems.filter(a => a.sub === sub);
+                                                const subTotal = subE.reduce((a, b) => a + Number(b.amount), 0) + autoSub.reduce((a, b) => a + b.val, 0);
+                                                if (!subE.length && !autoSub.length) return null;
+                                                return (<div key={sub} style={{ marginBottom: 5 }}>
+                                                    <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 700, marginBottom: 2, paddingLeft: 4 }}>{sub}</div>
+                                                    {subE.map(e => <div key={e.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: C.text, alignItems: "center", paddingLeft: 12, marginBottom: 2 }}><span>{e.description}</span><span style={{ display: "flex", gap: 5 }}>{fc(e.amount)}{!e.autoFromDepr && <button style={BTND} onClick={() => delBS(side, e.id)}>✕</button>}</span></div>)}
+                                                    {autoSub.map((a, i) => <div key={i} style={{ display: "flex", justifyContent: "space-between", fontSize: 11, paddingLeft: 12, color: a.c }}><span>{a.label} <span style={{ color: C.muted, fontSize: 9 }}>(auto)</span></span><span style={{ fontWeight: 700 }}>{fc(a.val)}</span></div>)}
+                                                    {subTotal !== 0 && <div style={{ textAlign: "right", fontSize: 11, color, fontWeight: 700, paddingRight: 4, marginTop: 3 }}>Sub-total: {fc(subTotal)}</div>}
+                                                </div>);
+                                            })}
+                                            {groupTotals[grp] !== 0 && <div style={{ textAlign: "right", fontWeight: 800, color, fontSize: 11, marginTop: 4, borderTop: "1px dashed #334155", paddingTop: 4 }}>Group Total: {fc(groupTotals[grp])}</div>}
+                                        </div>
+                                    ))}
+                                    <div style={{ borderTop: "2px solid #334155", paddingTop: 8, fontWeight: 900, color, textAlign: "right", fontSize: 14 }}>TOTAL: {fc(grand)}</div>
+                                </div>);
+                            })}
+                        </div>
+                        <div style={{ display: "flex", gap: 10, marginTop: 12 }}>
+                            {[["Total Assets", fc(bsTotalAssets), "#6366f1,#8b5cf6"], ["Total Liab + Equity", fc(bsTotalLiab), "#f59e0b,#d97706"], ["Difference", fabs(bsDiff), Math.abs(bsDiff) < 0.01 ? "#16a34a,#15803d" : "#dc2626,#b91c1c"]].map(([l, v, g]) => (
+                                <div key={l} style={CARD(g)}><div style={{ fontSize: 9 }}>{l}</div><div style={{ fontSize: 14, fontWeight: 900 }}>{v}</div></div>
+                            ))}
+                        </div>
+                    </div>}
+
+                    {tab === "Depreciation" && <div>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+                            <div style={{ fontSize: 16, fontWeight: 800, color: C.amber }}>📉 Depreciation Register</div>
+                            <button style={BTNP()} onClick={() => openM("depr")}>+ Add Depreciation</button>
+                        </div>
+                        <div style={{ display: "flex", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
+                            {[["Gross Cost", fc(deprCostTotal), "#f59e0b,#d97706"], ["Accum. Depr", fc(totalDepreciation), "#ef4444,#dc2626"], ["Net WDV", fc(deprWDVTotal), "#22c55e,#16a34a"]].map(([l, v, g]) => (
+                                <div key={l} style={CARD(g)}><div style={{ fontSize: 9 }}>{l}</div><div style={{ fontSize: 15, fontWeight: 900 }}>{v}</div></div>
+                            ))}
+                        </div>
+                        {da.length === 0 ? <div style={{ background: C.mid, borderRadius: 12, padding: 24, textAlign: "center", color: C.muted }}>Add a Fixed Asset in Balance Sheet first, then add depreciation here.</div> : (
+                            <div style={{ background: C.mid, borderRadius: 12, overflowX: "auto" }}><table style={TBL}><thead><tr>{["Asset", "Cost", "Start", "Method", "Rate", "Accum.Depr", "WDV", "Del"].map(h => <th key={h} style={THS}>{h}</th>)}</tr></thead>
+                                <tbody>{da.map(a => { const d = calcDepreciation(a); return (<tr key={a.id}><td style={{ ...TDS, fontWeight: 700 }}>{a.name}</td><td style={TDS}>{fc(a.cost)}</td><td style={TDS}>{a.startDate}</td><td style={TDS}><Badge label={a.method === "Straight Line (SLM)" ? "SLM" : "WDV"} color={C.blue} /></td><td style={TDS}>{a.depRate}%</td><td style={{ ...TDS, color: C.red, fontWeight: 700 }}>{fc(d.totalDepr)}</td><td style={{ ...TDS, color: C.green, fontWeight: 700 }}>{fc(d.wdv)}</td><td style={TDS}><button style={BTND} onClick={() => cascadeDelete("depreciationAssets", a.id)}>Del</button></td></tr>); })}</tbody>
+                            </table></div>
+                        )}
+                    </div>}
+
+                    {tab === "Charts" && <div>
+                        <div style={{ fontSize: 16, fontWeight: 800, marginBottom: 16, color: C.purple }}>📊 Charts</div>
+                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+                            {[{ title: "📥 Purchases", data: buildTSD(si, "totalAmount"), color: C.violet }, { title: "📤 Sales", data: buildTSD(so, "totalAmount"), color: C.teal }, { title: "💵 Cash In", data: buildTSD(cash.filter(e => e.dir === "in"), "amount"), color: C.green }, { title: "💸 Cash Out", data: buildTSD(cash.filter(e => e.dir === "out"), "amount"), color: C.red }].map(({ title, data, color }) => (
+                                <div key={title} style={{ background: C.mid, borderRadius: 14, padding: 16, border: "1px solid #334155" }}>
+                                    <div style={{ fontSize: 12, fontWeight: 800, color, marginBottom: 10 }}>{title}</div>
+                                    <MiniChart data={data} color={color} height={90} />
+                                    {data.length === 0 && <div style={{ textAlign: "center", color: C.muted, fontSize: 11, padding: 20 }}>Add entries to see trend</div>}
+                                </div>
+                            ))}
+                        </div>
+                    </div>}
+
+                </div>
+
+                {/* Modals */}
+                {modal && <div onClick={closeM} style={{ position: "fixed", inset: 0, background: "#000000c0", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 200 }}>
+                    <div onClick={e => e.stopPropagation()} style={{ background: C.dark, border: "1.5px solid #334155", borderRadius: 16, padding: 22, minWidth: 360, maxWidth: 490, width: "92vw", maxHeight: "90vh", overflowY: "auto" }}>
+
+                        {modal === "openingStock" && <div><div style={{ fontWeight: 800, fontSize: 15, color: C.teal, marginBottom: 12 }}>📦 Set Opening Stock</div><DateInput value={form.date} onChange={v => setForm(f => ({ ...f, date: v }))} /><input type="number" style={INP} placeholder="Amount (₹)" value={form.amount || ""} onChange={e => setForm(f => ({ ...f, amount: e.target.value }))} /><button style={{ ...BTNP(), width: "100%" }} onClick={applyOpeningStock}>Save</button></div>}
+
+                        {modal === "trading" && <div>
+                            <div style={{ fontWeight: 800, fontSize: 15, color: C.teal, marginBottom: 12 }}>🔄 Trading Entry</div>
+                            <DateInput value={form.date} onChange={v => setForm(f => ({ ...f, date: v }))} />
+                            <select style={INP} value={form.side || ""} onChange={e => setForm(f => ({ ...f, side: e.target.value, settleMode: "", linkedPartyId: "" }))}>
+                                <option value="">Dr / Cr *</option><option value="dr">Dr — Cost</option><option value="cr">Cr — Revenue</option>
+                            </select>
+                            <input style={INP} placeholder="Description *" value={form.description || ""} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} />
+                            <input type="number" style={INP} placeholder="Amount (₹) *" value={form.amount || ""} onChange={e => setForm(f => ({ ...f, amount: e.target.value }))} />
+                            {form.side && <SettlePanel {...sp} form={{ ...form, _settleContext: form.side === "dr" ? "trading_dr" : "trading_cr" }} setForm={setForm} />}
+                            <button style={{ ...BTNP(), width: "100%" }} onClick={applyTrading}>Save</button>
+                        </div>}
+
+                        {modal === "stockIn" && <div>
+                            <div style={{ fontWeight: 800, fontSize: 15, color: C.green, marginBottom: 12 }}>📥 Stock In</div>
+                            <DateInput value={form.date} onChange={v => setForm(f => ({ ...f, date: v }))} />
+                            <select style={INP} value={form.godown || ""} onChange={e => setForm(f => ({ ...f, godown: e.target.value }))}><option value="">Godown *</option>{GODOWNS.map(g => <option key={g}>{g}</option>)}</select>
+                            <select style={INP} value={form.bottleType || ""} onChange={e => setForm(f => ({ ...f, bottleType: e.target.value }))}><option value="">Bottle Type *</option>{BOTTLE_TYPES.map(b => <option key={b}>{b}</option>)}</select>
+                            <select style={INP} value={form.category || ""} onChange={e => setForm(f => ({ ...f, category: e.target.value }))}><option value="">Category *</option><option>normal</option><option>customized</option></select>
+                            <input style={INP} placeholder="Batch No *" value={form.batchNo || ""} onChange={e => setForm(f => ({ ...f, batchNo: e.target.value }))} />
+                            <input type="number" style={INP} placeholder="Qty *" value={form.qty || ""} onChange={e => setForm(f => ({ ...f, qty: e.target.value }))} />
+                            <input type="number" style={INP} placeholder="Rate/Unit (₹) *" value={form.ratePerUnit || ""} onChange={e => setForm(f => ({ ...f, ratePerUnit: e.target.value }))} />
+                            {form.qty && form.ratePerUnit && <div style={{ background: C.mid, border: "1.5px solid #6366f1", borderRadius: 7, padding: "7px 11px", marginBottom: 9, display: "flex", justifyContent: "space-between" }}><span style={{ color: C.muted, fontSize: 12 }}>Total</span><span style={{ color: C.purple, fontWeight: 800, fontSize: 15 }}>{fc(Number(form.qty) * Number(form.ratePerUnit))}</span></div>}
+                            <SettlePanel {...sp} form={{ ...form, _settleContext: "purchase" }} setForm={setForm} />
+                            <button style={{ ...BTNP(), width: "100%" }} onClick={applyStockIn}>Save</button>
+                        </div>}
+
+                        {modal === "stockOut" && <div>
+                            <div style={{ fontWeight: 800, fontSize: 15, color: C.red, marginBottom: 12 }}>📤 Stock Out</div>
+                            <DateInput value={form.date} onChange={v => setForm(f => ({ ...f, date: v }))} />
+                            <select style={INP} value={form.godown || ""} onChange={e => setForm(f => ({ ...f, godown: e.target.value }))}><option value="">Godown *</option>{GODOWNS.map(g => <option key={g}>{g}</option>)}</select>
+                            <select style={INP} value={form.bottleType || ""} onChange={e => setForm(f => ({ ...f, bottleType: e.target.value }))}><option value="">Bottle Type *</option>{BOTTLE_TYPES.map(b => <option key={b}>{b}</option>)}</select>
+                            <select style={INP} value={form.category || ""} onChange={e => setForm(f => ({ ...f, category: e.target.value }))}><option value="">Category *</option><option>normal</option><option>customized</option></select>
+                            <input type="number" style={INP} placeholder="Qty *" value={form.qty || ""} onChange={e => setForm(f => ({ ...f, qty: e.target.value }))} />
+                            <input type="number" style={INP} placeholder="Sale Rate/Unit (₹) *" value={form.ratePerUnit || ""} onChange={e => setForm(f => ({ ...f, ratePerUnit: e.target.value }))} />
+                            {form.qty && form.ratePerUnit && <div style={{ background: C.mid, border: "1.5px solid #6366f1", borderRadius: 7, padding: "7px 11px", marginBottom: 9, display: "flex", justifyContent: "space-between" }}><span style={{ color: C.muted, fontSize: 12 }}>Total</span><span style={{ color: C.purple, fontWeight: 800, fontSize: 15 }}>{fc(Number(form.qty) * Number(form.ratePerUnit))}</span></div>}
+                            <SettlePanel {...sp} form={{ ...form, _settleContext: "sale" }} setForm={setForm} />
+                            <button style={{ ...BTNP("linear-gradient(90deg,#ef4444,#dc2626)"), width: "100%" }} onClick={applyStockOut}>Save</button>
+                        </div>}
+
+                        {modal === "pl" && <div>
+                            <div style={{ fontWeight: 800, fontSize: 15, color: "#10b981", marginBottom: 12 }}>📈 P&L Entry</div>
+                            <select style={INP} value={form.side || ""} onChange={e => setForm(f => ({ ...f, side: e.target.value, category: "", settleMode: "" }))}>
+                                <option value="">Dr / Cr *</option><option value="income">Cr — Income</option><option value="expense">Dr — Expense</option>
+                            </select>
+                            <select style={INP} value={form.category || ""} onChange={e => setForm(f => ({ ...f, category: e.target.value }))}>
+                                <option value="">Category *</option>
+                                {form.side && (form.side === "income" ? PL_CATS.income : PL_CATS.expenses).map(c => <option key={c}>{c}</option>)}
+                            </select>
+                            <input style={INP} placeholder="Description *" value={form.description || ""} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} />
+                            <DateInput value={form.date} onChange={v => setForm(f => ({ ...f, date: v }))} />
+                            <input type="number" style={INP} placeholder="Amount (₹) *" value={form.amount || ""} onChange={e => setForm(f => ({ ...f, amount: e.target.value }))} />
+                            {form.side && <SettlePanel {...sp} form={{ ...form, _settleContext: form.side === "expense" ? "pl_expense" : "pl_income" }} setForm={setForm} />}
+                            <button style={{ ...BTNP(), width: "100%" }} onClick={applyPL}>Save</button>
+                        </div>}
+
+                        {modal === "bs" && <div>
+                            <div style={{ fontWeight: 800, fontSize: 15, color: C.blue, marginBottom: 12 }}>🏛️ Balance Sheet Entry</div>
+                            <select style={INP} value={form.side || ""} onChange={e => setForm(f => ({ ...f, side: e.target.value, category: "", subCategory: "", settleMode: "" }))}>
+                                <option value="">Assets / Liabilities *</option><option value="assets">Assets</option><option value="liabilities">Liabilities & Equity</option>
+                            </select>
+                            {form.side && <select style={INP} value={form.category || ""} onChange={e => setForm(f => ({ ...f, category: e.target.value, subCategory: "" }))}>
+                                <option value="">Group *</option>{Object.keys(SCHEDULE3[form.side]).map(g => <option key={g}>{g}</option>)}
+                            </select>}
+                            {form.category && <select style={INP} value={form.subCategory || ""} onChange={e => setForm(f => ({ ...f, subCategory: e.target.value }))}>
+                                <option value="">Sub-Category *</option>{(SCHEDULE3[form.side]?.[form.category] || []).map(s => <option key={s}>{s}</option>)}
+                            </select>}
+                            <input style={INP} placeholder="Description *" value={form.description || ""} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} />
+                            <DateInput value={form.date} onChange={v => setForm(f => ({ ...f, date: v }))} />
+                            <input type="number" style={INP} placeholder="Amount (₹) *" value={form.amount || ""} onChange={e => setForm(f => ({ ...f, amount: e.target.value }))} />
+                            {form.side && <SettlePanel {...sp} form={{ ...form, _settleContext: form.side === "assets" ? "bs_asset_increase" : "bs_liability_reduce" }} setForm={setForm} />}
+                            <button style={{ ...BTNP(), width: "100%" }} onClick={applyBS}>Save</button>
+                        </div>}
+
+                        {modal === "creditor" && <div>
+                            <div style={{ fontWeight: 800, fontSize: 15, color: C.amber, marginBottom: 12 }}>🏦 Add Creditor</div>
+                            <input style={INP} placeholder="Name *" value={form.name || ""} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} />
+                            <DateInput value={form.date} onChange={v => setForm(f => ({ ...f, date: v }))} />
+                            <input type="number" style={INP} placeholder="Opening Balance (₹)" value={form.amount || "0"} onChange={e => setForm(f => ({ ...f, amount: e.target.value }))} />
+                            <input type="number" style={INP} placeholder="Credit Period (days) *" value={form.creditPeriod || ""} onChange={e => setForm(f => ({ ...f, creditPeriod: e.target.value }))} />
+                            <button style={{ ...BTNP(), width: "100%" }} onClick={() => applyCredDeb("creditor")}>Save</button>
+                        </div>}
+
+                        {modal === "debtor" && <div>
+                            <div style={{ fontWeight: 800, fontSize: 15, color: C.violet, marginBottom: 12 }}>📋 Add Debtor</div>
+                            <input style={INP} placeholder="Name *" value={form.name || ""} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} />
+                            <DateInput value={form.date} onChange={v => setForm(f => ({ ...f, date: v }))} />
+                            <input type="number" style={INP} placeholder="Opening Balance (₹)" value={form.amount || "0"} onChange={e => setForm(f => ({ ...f, amount: e.target.value }))} />
+                            <input type="number" style={INP} placeholder="Credit Period (days) *" value={form.creditPeriod || ""} onChange={e => setForm(f => ({ ...f, creditPeriod: e.target.value }))} />
+                            <button style={{ ...BTNP(), width: "100%" }} onClick={() => applyCredDeb("debtor")}>Save</button>
+                        </div>}
+
+                        {modal === "cash" && <div>
+                            <div style={{ fontWeight: 800, fontSize: 15, color: form.dir === "in" ? C.green : C.red, marginBottom: 12 }}>{form.dir === "in" ? "💵 Cash In" : "💸 Cash Out"}</div>
+                            <DateInput value={form.date} onChange={v => setForm(f => ({ ...f, date: v }))} />
+                            <select style={INP} value={form.payType || ""} onChange={e => setForm(f => ({ ...f, payType: e.target.value, description: e.target.value, linkedId: "" }))}>
+                                <option value="">{form.dir === "in" ? "Receipt Type" : "Payment Type"} *</option>
+                                {(form.dir === "in" ? CASH_IN_TYPES : CASH_OUT_TYPES).map(t => <option key={t}>{t}</option>)}
+                            </select>
+                            {form.dir === "in" && form.payType === "Debtor Payment" && <select style={INP} value={form.linkedId || ""} onChange={e => { const d = debs.find(x => x.id === e.target.value); setForm(f => ({ ...f, linkedId: e.target.value, description: "Receipt from " + (d ? d.name : ""), amount: d ? String(debtorBal(d)) : f.amount })); }}>
+                                <option value="">Select Debtor</option>{debs.filter(d => !d.checked).map(d => <option key={d.id} value={d.id}>{d.name} — {fc(debtorBal(d))}</option>)}
+                            </select>}
+                            {form.dir === "out" && form.payType === "Creditor Payment" && <select style={INP} value={form.linkedId || ""} onChange={e => { const c = creds.find(x => x.id === e.target.value); setForm(f => ({ ...f, linkedId: e.target.value, description: "Payment to " + (c ? c.name : ""), amount: c ? String(creditorBal(c)) : f.amount })); }}>
+                                <option value="">Select Creditor</option>{creds.filter(c => !c.checked).map(c => <option key={c.id} value={c.id}>{c.name} — {fc(creditorBal(c))}</option>)}
+                            </select>}
+                            <input style={INP} placeholder="Description *" value={form.description || ""} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} />
+                            <input type="number" style={INP} placeholder="Amount (₹) *" value={form.amount || ""} onChange={e => setForm(f => ({ ...f, amount: e.target.value }))} />
+                            <button style={{ ...BTNP(form.dir === "in" ? "linear-gradient(90deg,#22c55e,#16a34a)" : "linear-gradient(90deg,#ef4444,#dc2626)"), width: "100%" }} onClick={applyCash}>Save</button>
+                        </div>}
+
+                        {modal === "depr" && <div>
+                            <div style={{ fontWeight: 800, fontSize: 15, color: C.amber, marginBottom: 4 }}>📉 Add Depreciation</div>
+                            {Object.values(state.balanceSheet?.assets || {}).filter(a => a.subCategory === "Fixed Assets" && !a.linkedDeprId).length === 0
+                                ? <div style={{ background: "#1e293b", borderRadius: 8, padding: 14, marginBottom: 12, color: C.amber, fontSize: 12, textAlign: "center" }}>No Fixed Assets found. Add one in Balance Sheet first.</div>
+                                : <div>
+                                    <select style={INP} value={form.bsAssetId || ""} onChange={e => setForm(f => ({ ...f, bsAssetId: e.target.value }))}>
+                                        <option value="">Select Fixed Asset *</option>
+                                        {Object.values(state.balanceSheet?.assets || {}).filter(a => a.subCategory === "Fixed Assets" && !a.linkedDeprId).map(a => <option key={a.id} value={a.id}>{a.description} — {fc(a.amount)}</option>)}
+                                    </select>
+                                    <select style={INP} value={form.method || ""} onChange={e => setForm(f => ({ ...f, method: e.target.value }))}><option value="">Method *</option>{DEPR_METHODS.map(m => <option key={m}>{m}</option>)}</select>
+                                    <select style={INP} value={form.period || ""} onChange={e => setForm(f => ({ ...f, period: e.target.value }))}><option value="">Period *</option>{DEPR_PERIODS.map(p => <option key={p}>{p}</option>)}</select>
+                                    <input type="number" style={INP} placeholder="Annual Depreciation Rate (%) *" value={form.depRate || ""} onChange={e => setForm(f => ({ ...f, depRate: e.target.value }))} />
+                                    <button style={{ ...BTNP("linear-gradient(90deg,#f59e0b,#d97706)"), width: "100%" }} onClick={applyDepr}>Save Depreciation</button>
+                                </div>}
+                        </div>}
+
+                        <button onClick={closeM} style={{ width: "100%", marginTop: 8, background: C.mid, color: "#94a3b8", border: "none", borderRadius: 7, padding: "7px 0", cursor: "pointer", fontSize: 12 }}>Cancel</button>
+                    </div>
+                </div>}
+            </div>);
+        }
+
+        ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+    </script>
+</body>
+
+</html>
