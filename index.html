@@ -328,13 +328,13 @@
             const cashBal = cashIn - cashOut;
             const manualExpense = ple.filter(e => e.side === "expense").reduce((a, b) => a + Number(b.amount), 0);
             const manualIncome = ple.filter(e => e.side === "income").reduce((a, b) => a + Number(b.amount), 0);
-            const cashOtherIncome = cash.filter(e => e.dir === "in" && e.payType !== "Debtor Payment" && e.payType !== "Sales Receipt").reduce((a, b) => a + Number(b.amount), 0);
-            const cashExpenses = cash.filter(e => e.dir === "out" && e.payType === "Expense Payment").reduce((a, b) => a + Number(b.amount), 0);
             const totalDepreciation = da.reduce((a, b) => a + calcDepreciation(b).totalDepr, 0);
             const deprWDVTotal = da.reduce((a, b) => a + calcDepreciation(b).wdv, 0);
             const deprCostTotal = da.reduce((a, b) => a + Number(b.cost), 0);
-            const plIncome = (grossProfit > 0 ? grossProfit : 0) + manualIncome + cashOtherIncome;
-            const plExpense = manualExpense + cashExpenses + totalDepreciation + (grossProfit < 0 ? Math.abs(grossProfit) : 0);
+            // P&L is derived ONLY from Trading Account (gross profit) + manual P&L entries + depreciation.
+            // Cash Book is a receipts/payments register — it does NOT feed P&L to avoid double entry.
+            const plIncome = (grossProfit > 0 ? grossProfit : 0) + manualIncome;
+            const plExpense = manualExpense + totalDepreciation + (grossProfit < 0 ? Math.abs(grossProfit) : 0);
             const netPL = plIncome - plExpense;
 
             const creditorFromStock = id => si.filter(x => x.settleMode === "creditor" && x.linkedPartyId === id).reduce((a, b) => a + Number(b.totalAmount), 0);
@@ -347,16 +347,50 @@
             const debtorBal = d => Math.max(0, Number(d.amount) + debtorFromStock(d.id) + debtorFromOther(d.id) - debtorCashRcvd(d.id));
             const totalCreditors = creds.reduce((a, b) => a + creditorBal(b), 0);
             const totalDebtors = debs.reduce((a, b) => a + debtorBal(b), 0);
-            const bsManualAssets = Object.values(state.balanceSheet?.assets || {}).reduce((a, b) => a + Number(b.amount), 0);
-            const bsManualLiab = Object.values(state.balanceSheet?.liabilities || {}).reduce((a, b) => a + Number(b.amount), 0);
+            // Balance Sheet manual entries: exclude Fixed Assets that have depreciation linked
+            // (their WDV is shown via the auto depreciation line to avoid double-counting).
+            const bsManualAssetsRaw = Object.values(state.balanceSheet?.assets || {});
+            const bsManualLiabRaw = Object.values(state.balanceSheet?.liabilities || {});
+            // IDs of BS entries that sourced cash (to exclude from P&L cash flows)
+            const bsEntryIds = new Set([...bsManualAssetsRaw, ...bsManualLiabRaw].map(e => e.id));
+            const bsManualAssets = bsManualAssetsRaw.reduce((a, b) => a + Number(b.amount), 0);
+            const bsManualLiab = bsManualLiabRaw.reduce((a, b) => a + Number(b.amount), 0);
+            // Auto assets: cash balance + closing stock + debtors - accumulated depreciation
+            // Cash balance is from cash book (receipts & payments), kept separate from BS manual entries.
             const bsAutoAssets = cashBal + (fifoClosing > 0 ? fifoClosing : 0) + (totalDebtors > 0 ? totalDebtors : 0) - totalDepreciation;
+            // Auto liabilities: creditors + net P&L (net profit is carried to retained earnings / equity)
             const bsAutoLiab = (totalCreditors > 0 ? totalCreditors : 0) + netPL;
             const bsTotalAssets = bsManualAssets + bsAutoAssets, bsTotalLiab = bsManualLiab + bsAutoLiab, bsDiff = bsTotalAssets - bsTotalLiab;
 
             const upd = fn => setState(p => fn(p));
-            const toggleChk = (key, id) => upd(p => ({ ...p, [key]: p[key].map(e => e.id === id ? { ...e, checked: !e.checked } : e) }));
+            const toggleChk = (key, id) => upd(p => ({ ...p, [key]: p[key].map(e => e.id === id ? { ...e, checked: !e.checked, manualCheck: true } : e) }));
             const openM = (t, preset) => { setModal(t); setForm({ date: today(), ...(preset || {}) }); };
             const closeM = () => { setModal(null); setForm({}); };
+
+            // ── Auto-settle: tick checkbox when balance reaches zero, untick when it rises again ──
+            useEffect(() => {
+                let changed = false;
+                const nextCreds = (state.creditors || []).map(c => {
+                    const bal = creditorBal(c);
+                    const totalDue = Number(c.amount) + creditorFromStock(c.id) + creditorFromOther(c.id);
+                    const shouldSettle = bal === 0 && totalDue > 0;
+                    // Only auto-manage if not manually toggled
+                    if (!c.manualCheck) {
+                        if (shouldSettle !== !!c.checked) { changed = true; return { ...c, checked: shouldSettle, autoSettled: shouldSettle }; }
+                    }
+                    return { ...c, autoSettled: shouldSettle && !!c.checked };
+                });
+                const nextDebs = (state.debtors || []).map(d => {
+                    const bal = debtorBal(d);
+                    const totalDue = Number(d.amount) + debtorFromStock(d.id) + debtorFromOther(d.id);
+                    const shouldSettle = bal === 0 && totalDue > 0;
+                    if (!d.manualCheck) {
+                        if (shouldSettle !== !!d.checked) { changed = true; return { ...d, checked: shouldSettle, autoSettled: shouldSettle }; }
+                    }
+                    return { ...d, autoSettled: shouldSettle && !!d.checked };
+                });
+                if (changed) upd(p => ({ ...p, creditors: nextCreds, debtors: nextDebs }));
+            }, [cashBal, totalCreditors, totalDebtors, si.length, so.length, cash.length, ple.length, te.length]);
             const buildTSD = (entries, amtField) => { const m = {}; entries.forEach(e => { const d = new Date(e.date), k = d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0"); m[k] = (m[k] || 0) + Number(e[amtField] || 0); }); return Object.entries(m).sort((a, b) => a[0].localeCompare(b[0])).map(([l, v]) => ({ l, v })); };
 
             const resolveSettle = (frm, amount, date, description, entryId, direction) => {
@@ -684,12 +718,16 @@
                             <div style={{ fontSize: 16, fontWeight: 800, color: "#10b981" }}>📈 Profit & Loss Account</div>
                             <button style={BTNP()} onClick={() => openM("pl")}>+ Add Entry</button>
                         </div>
+                        <div style={{ background: "#0a1628", borderRadius: 10, padding: "8px 14px", marginBottom: 12, border: "1px solid #334155", fontSize: 10, color: "#64748b" }}>
+                            ℹ️ <strong style={{ color: "#94a3b8" }}>Accounting Note:</strong> P&amp;L is derived from Trading Account (Gross Profit/Loss) + manual P&amp;L entries + Depreciation only. Cash Book entries do <em>not</em> feed into P&amp;L to prevent double-entry.
+                        </div>
                         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
                             <div style={{ background: C.mid, borderRadius: 12, padding: 16 }}>
                                 <div style={{ fontWeight: 800, color: C.red, fontSize: 12, marginBottom: 6, borderBottom: "1px solid #334155", paddingBottom: 4 }}>Dr — Expenses</div>
                                 {grossProfit < 0 && <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: C.red, marginBottom: 4 }}><span>Gross Loss b/d</span><span style={{ fontWeight: 700 }}>{fabs(grossProfit)}</span></div>}
                                 {totalDepreciation > 0 && <div style={{ marginBottom: 6 }}><div style={{ color: "#94a3b8", fontSize: 10, fontWeight: 700, marginBottom: 2 }}>Depreciation (auto)</div>{da.map(a => { const d = calcDepreciation(a); return d.totalDepr > 0 ? <div key={a.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 11, paddingLeft: 8, color: C.amber, marginBottom: 2 }}><span>{a.name}</span><span>{fc(d.totalDepr)}</span></div> : null; })}</div>}
                                 {PL_CATS.expenses.map(cat => { const ents = ple.filter(e => e.side === "expense" && e.category === cat); return ents.length ? <div key={cat} style={{ marginBottom: 6 }}><div style={{ color: "#94a3b8", fontSize: 10, fontWeight: 700, marginBottom: 2 }}>{cat}</div>{ents.map(e => <div key={e.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 11, paddingLeft: 8, alignItems: "center", marginBottom: 2 }}><span>{e.description}</span><span style={{ display: "flex", gap: 5 }}>{fc(e.amount)}<button style={BTND} onClick={() => cascadeDelete("plEntries", e.id)}>✕</button></span></div>)}</div> : null; })}
+                                {plExpense === 0 && <div style={{ color: C.muted, fontSize: 11, textAlign: "center", padding: "8px 0" }}>No expenses recorded</div>}
                                 <div style={{ borderTop: "2px solid #334155", paddingTop: 6, fontWeight: 900, color: C.red, textAlign: "right" }}>Total Dr: {fc(plExpense)}</div>
                                 {netPL >= 0 && <div style={{ color: C.green, fontWeight: 800, textAlign: "right", marginTop: 4, fontSize: 11 }}>Net Profit c/d: {fc(netPL)}</div>}
                             </div>
@@ -697,6 +735,7 @@
                                 <div style={{ fontWeight: 800, color: C.green, fontSize: 12, marginBottom: 6, borderBottom: "1px solid #334155", paddingBottom: 4 }}>Cr — Income</div>
                                 {grossProfit >= 0 && <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: C.green, marginBottom: 4 }}><span>Gross Profit b/d</span><span style={{ fontWeight: 700 }}>{fc(grossProfit)}</span></div>}
                                 {PL_CATS.income.map(cat => { const ents = ple.filter(e => e.side === "income" && e.category === cat); return ents.length ? <div key={cat} style={{ marginBottom: 6 }}><div style={{ color: "#94a3b8", fontSize: 10, fontWeight: 700, marginBottom: 2 }}>{cat}</div>{ents.map(e => <div key={e.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 11, paddingLeft: 8, alignItems: "center", marginBottom: 2 }}><span>{e.description}</span><span style={{ display: "flex", gap: 5 }}>{fc(e.amount)}<button style={BTND} onClick={() => cascadeDelete("plEntries", e.id)}>✕</button></span></div>)}</div> : null; })}
+                                {plIncome === 0 && <div style={{ color: C.muted, fontSize: 11, textAlign: "center", padding: "8px 0" }}>No income recorded</div>}
                                 <div style={{ borderTop: "2px solid #334155", paddingTop: 6, fontWeight: 900, color: C.green, textAlign: "right" }}>Total Cr: {fc(plIncome)}</div>
                                 {netPL < 0 && <div style={{ color: C.red, fontWeight: 800, textAlign: "right", marginTop: 4, fontSize: 11 }}>Net Loss c/d: {fabs(netPL)}</div>}
                             </div>
@@ -762,28 +801,49 @@
                                         <tbody>{!filteredItems.length && <tr><td colSpan={12} style={{ ...TDS, textAlign: "center", color: C.muted }}>No entries</td></tr>}
                                             {filteredItems.map(e => {
                                                 const fromS = getFromStock(e.id), fromO = getFromOther(e.id), cp = getCash(e.id), totalDue = Number(e.amount) + fromS + fromO, bal = Math.max(0, totalDue - cp);
+                                                const isAutoSettled = bal === 0 && totalDue > 0;
+                                                const isChecked = isAutoSettled || !!e.checked;
                                                 const hasTerm = e.creditPeriod !== "" && e.creditPeriod !== undefined && e.creditPeriod !== null;
                                                 const due = new Date(e.date); if (hasTerm) due.setDate(due.getDate() + Number(e.creditPeriod));
                                                 const days = hasTerm ? Math.ceil((due - new Date()) / 86400000) : null, sl = !hasTerm ? "No term" : days > 5 ? days + "d left" : days > 0 ? days + "d left" : "OVERDUE", sc = !hasTerm ? C.muted : days > 5 ? C.green : days > 0 ? C.amber : C.red;
-                                                return (<tr key={e.id} style={{ opacity: e.checked ? 0.45 : 1 }}>
-                                                    <td style={TDS}><input type="checkbox" checked={!!e.checked} onChange={() => toggleChk(isC ? "creditors" : "debtors", e.id)} style={{ accentColor: ac, width: 14, height: 14 }} /></td>
-                                                    <td style={{ ...TDS, fontWeight: 700, textDecoration: e.checked ? "line-through" : "none" }}>{e.name}</td>
+                                                return (<tr key={e.id} style={{ opacity: isChecked ? 0.55 : 1, background: isAutoSettled ? "rgba(34,197,94,0.04)" : "transparent", transition: "background 0.3s, opacity 0.3s" }}>
+                                                    <td style={TDS}>
+                                                        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
+                                                            <input
+                                                                type="checkbox"
+                                                                checked={isChecked}
+                                                                onChange={() => isAutoSettled ? null : toggleChk(isC ? "creditors" : "debtors", e.id)}
+                                                                style={{ accentColor: isAutoSettled ? C.green : ac, width: 15, height: 15, cursor: isAutoSettled ? "default" : "pointer" }}
+                                                                title={isAutoSettled ? "Auto-settled: balance is ₹0" : isChecked ? "Manually settled" : "Mark as settled"}
+                                                            />
+                                                            {isAutoSettled && <span style={{ fontSize: 7, color: C.green, fontWeight: 800, letterSpacing: 0.3, whiteSpace: "nowrap" }}>AUTO</span>}
+                                                        </div>
+                                                    </td>
+                                                    <td style={{ ...TDS, fontWeight: 700, textDecoration: isChecked ? "line-through" : "none", color: isAutoSettled ? C.green : C.text }}>
+                                                        {e.name}
+                                                        {isAutoSettled && <span style={{ marginLeft: 6, fontSize: 9, background: "#052e16", color: C.green, borderRadius: 4, padding: "1px 5px", fontWeight: 800, verticalAlign: "middle" }}>✓ Settled</span>}
+                                                    </td>
                                                     <td style={TDS}>{e.date}</td><td style={TDS}>{fc(e.amount)}</td>
                                                     <td style={{ ...TDS, color: C.violet }}>{(fromS + fromO) > 0 ? fc(fromS + fromO) : "—"}</td>
                                                     <td style={{ ...TDS, fontWeight: 700 }}>{fc(totalDue)}</td>
                                                     <td style={{ ...TDS, color: C.green }}>{fc(cp)}</td>
-                                                    <td style={{ ...TDS, fontWeight: 800, color: bal > 0 ? ac : C.green }}>{fc(bal)}</td>
+                                                    <td style={{ ...TDS, fontWeight: 800, color: bal > 0 ? ac : C.green }}>
+                                                        {fc(bal)}
+                                                        {isAutoSettled && <span style={{ marginLeft: 4, fontSize: 9 }}>✓</span>}
+                                                    </td>
                                                     <td style={TDS}>{hasTerm ? e.creditPeriod + "d" : "—"}</td>
                                                     <td style={TDS}>{hasTerm ? due.toLocaleDateString("en-IN") : "—"}</td>
-                                                    <td style={TDS}><Badge label={sl} color={sc} /></td>
+                                                    <td style={TDS}><Badge label={isAutoSettled ? "Settled" : sl} color={isAutoSettled ? C.green : sc} /></td>
                                                     <td style={TDS}><button style={BTND} onClick={() => cascadeDelete(isC ? "creditors" : "debtors", e.id)}>Del</button></td>
                                                 </tr>);
                                             })}
                                         </tbody>
                                     </table>
                                 </div>
-                                <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8 }}>
-                                    <span style={{ fontSize: 11, color: C.green }}>✓ {items.filter(e => e.checked).length}/{items.length} settled</span>
+                                <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8, flexWrap: "wrap", gap: 6 }}>
+                                    <span style={{ fontSize: 11, color: C.green }}>✓ {items.filter(e => e.checked || (getBal(e) === 0 && (Number(e.amount) + getFromStock(e.id) + getFromOther(e.id)) > 0)).length}/{items.length} settled
+                                        <span style={{ color: C.muted, marginLeft: 6 }}>({items.filter(e => getBal(e) === 0 && (Number(e.amount) + getFromStock(e.id) + getFromOther(e.id)) > 0).length} auto)</span>
+                                    </span>
                                     <span style={{ fontWeight: 700, color: ac }}>Outstanding: {fc(total)}</span>
                                 </div>
                             </div>);
@@ -1034,9 +1094,12 @@
                             <div style={{ fontSize: 16, fontWeight: 800, color: C.blue }}>🏛️ Balance Sheet</div>
                             <button style={BTNP()} onClick={() => openM("bs")}>+ Manual Entry</button>
                         </div>
+                        <div style={{ background: "#0a1628", borderRadius: 10, padding: "10px 14px", marginBottom: 12, border: "1px solid #334155", fontSize: 10, color: "#64748b" }}>
+                            <strong style={{ color: "#94a3b8" }}>ℹ️ Auto-populated items (read-only):</strong> Cash Balance, Closing Stock (FIFO), Trade Debtors, Accum. Depreciation, Trade Creditors, Net Profit/Loss — these are derived from other modules and <em>cannot be entered here</em>. Use <strong style={{ color: "#94a3b8" }}>+ Manual Entry</strong> for items like Fixed Assets, Share Capital, Long-term Loans, etc. Balance Sheet entries do <em>not</em> affect P&amp;L.
+                        </div>
                         {Math.abs(bsDiff) > 0.01
-                            ? <div style={{ background: "#450a0a", borderRadius: 10, padding: 12, marginBottom: 12, border: "1.5px solid #ef4444" }}><div style={{ fontWeight: 800, color: C.red, fontSize: 12 }}>⚠️ Mismatch — {fabs(bsDiff)}</div><div style={{ fontSize: 10, color: "#fca5a5", marginTop: 4 }}>Add Share Capital under Liabilities → Equity and Reserves to balance.</div></div>
-                            : <div style={{ background: "#052e16", borderRadius: 8, padding: "8px 14px", marginBottom: 10, color: "#86efac", fontWeight: 700, textAlign: "center", fontSize: 12 }}>✅ Balance Sheet BALANCED</div>}
+                            ? <div style={{ background: "#450a0a", borderRadius: 10, padding: 12, marginBottom: 12, border: "1.5px solid #ef4444" }}><div style={{ fontWeight: 800, color: C.red, fontSize: 12 }}>⚠️ Balance Sheet Mismatch — Difference: {fabs(bsDiff)}</div><div style={{ fontSize: 10, color: "#fca5a5", marginTop: 4 }}>Assets do not equal Liabilities + Equity. Common fix: Add Share Capital or Proprietor's Capital under Liabilities → Equity and Reserves. The difference usually represents capital not yet recorded.</div></div>
+                            : <div style={{ background: "#052e16", borderRadius: 8, padding: "8px 14px", marginBottom: 10, color: "#86efac", fontWeight: 700, textAlign: "center", fontSize: 12 }}>✅ Balance Sheet BALANCED — Assets = Liabilities + Equity</div>}
                         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                             {["liabilities", "assets"].map(side => {
                                 const color = side === "assets" ? C.blue : C.amber;
