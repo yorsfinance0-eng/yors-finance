@@ -117,7 +117,7 @@
                     const batches = stockIn.filter(x => x.bottleType === bt && x.category === cat).sort((a, b) => new Date(a.date) - new Date(b.date)).map(x => ({ ...x, origQty: Number(x.qty), remQty: Number(x.qty), rate: Number(x.ratePerUnit) }));
                     const outs = stockOut.filter(x => x.bottleType === bt && x.category === cat).sort((a, b) => new Date(a.date) - new Date(b.date));
                     let cogs = 0;
-                    outs.forEach(out => { let needed = Number(out.qty); for (let i = 0; i < batches.length && needed > 0; i++) { const take = Math.min(batches[i].remQty, needed); if (take > 0) { cogs += take * batches[i].rate; batches[i].remQty -= take; needed -= take; } } });
+                    outs.forEach(out => { let needed = Number(out.qty); for (let i = 0; i < batches.length && needed > 0; i++) { if (batches[i].godown !== out.godown) continue; const take = Math.min(batches[i].remQty, needed); if (take > 0) { cogs += take * batches[i].rate; batches[i].remQty -= take; needed -= take; } } });
                     const inQty = batches.reduce((a, b) => a + b.origQty, 0), outQty = outs.reduce((a, b) => a + Number(b.qty), 0);
                     let closingValue = 0; batches.forEach(b => { closingValue += b.remQty * b.rate; });
                     results[key] = { batches, cogs, closingValue, inQty, outQty, balQty: inQty - outQty };
