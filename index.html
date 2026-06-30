@@ -412,12 +412,45 @@
                     if (entry.createdDebtorId) np.debtors = (np.debtors || []).filter(d => d.id !== entry.createdDebtorId);
                     if (key === "creditors") np.cashEntries = (np.cashEntries || []).filter(e => !(e.dir === "out" && e.linkedId === id));
                     if (key === "debtors") np.cashEntries = (np.cashEntries || []).filter(e => !(e.dir === "in" && e.linkedId === id));
-                    if (key === "depreciationAssets" && entry.bsAssetId) { const na = { ...np.balanceSheet.assets }; delete na[entry.bsAssetId]; np.balanceSheet = { ...np.balanceSheet, assets: na }; }
+                    if (key === "depreciationAssets" && entry.bsAssetId) {
+                        const na = { ...np.balanceSheet.assets };
+                        if (na[entry.bsAssetId]) {
+                            na[entry.bsAssetId] = {
+                                ...na[entry.bsAssetId],
+                                linkedDeprId: null,
+                                autoFromDepr: false
+                            };
+                        }
+                        np.balanceSheet = { ...np.balanceSheet, assets: na };
+                    }
                     return np;
                 });
             };
 
-            const delBS = (side, id) => { setState(p => { const n = { ...p.balanceSheet[side] }; const entry = n[id]; delete n[id]; let np = { ...p, balanceSheet: { ...p.balanceSheet, [side]: n } }; if (entry) { np.cashEntries = (np.cashEntries || []).filter(e => e.sourceId !== id); if (entry.createdCreditorId) np.creditors = (np.creditors || []).filter(c => c.id !== entry.createdCreditorId); if (entry.createdDebtorId) np.debtors = (np.debtors || []).filter(d => d.id !== entry.createdDebtorId); } return np; }); };
+            const delBS = (side, id) => {
+                setState(p => {
+                    const n = { ...p.balanceSheet[side] };
+                    const entry = n[id];
+                    delete n[id];
+                    let np = { ...p, balanceSheet: { ...p.balanceSheet, [side]: n } };
+                    if (entry) {
+                        np.cashEntries = (np.cashEntries || []).filter(e => e.sourceId !== id);
+                        if (entry.createdCreditorId) {
+                            np.creditors = (np.creditors || []).filter(c => c.id !== entry.createdCreditorId);
+                            np.cashEntries = (np.cashEntries || []).filter(e => !(e.dir === "out" && e.linkedId === entry.createdCreditorId));
+                        }
+                        if (entry.createdDebtorId) {
+                            np.debtors = (np.debtors || []).filter(d => d.id !== entry.createdDebtorId);
+                            np.cashEntries = (np.cashEntries || []).filter(e => !(e.dir === "in" && e.linkedId === entry.createdDebtorId));
+                        }
+                        if (entry.linkedDeprId) {
+                            np.depreciationAssets = (np.depreciationAssets || []).filter(a => a.id !== entry.linkedDeprId);
+                        }
+                        np.depreciationAssets = (np.depreciationAssets || []).filter(a => a.bsAssetId !== id);
+                    }
+                    return np;
+                });
+            };
 
             const applyStockIn = () => {
                 const { date, godown, bottleType, category, batchNo, qty, ratePerUnit } = form;
@@ -449,7 +482,7 @@
                 if (!form.description || !form.amount || !form.side || !form.date || !form.settleMode) { alert("Fill all fields"); return; }
                 const amt = Number(form.amount), id = gid(), direction = form.side === "dr" ? "out" : "in", res = resolveSettle(form, amt, form.date, "Trading: " + form.description, id, direction);
                 upd(p => {
-                    let np = { ...p, tradingEntries: [...p.tradingEntries, { id, date: form.date, side: form.side, description: form.description, amount: amt, settleMode: form.settleMode, linkedPartyId: res.partyId, linkedPartyName: res.partyName }] };
+                    let np = { ...p, tradingEntries: [...p.tradingEntries, { id, date: form.date, side: form.side, description: form.description, amount: amt, settleMode: form.settleMode, linkedPartyId: res.partyId, linkedPartyName: res.partyName, createdCreditorId: res.createdCreditorId, createdDebtorId: res.createdDebtorId }] };
                     if (res.createdCreditorId) np.creditors = [...np.creditors, { id: res.createdCreditorId, name: form.newPartyName, date: form.date, amount: 0, creditPeriod: form.newPartyCredit || "", notified: false, checked: false }];
                     if (res.createdDebtorId) np.debtors = [...np.debtors, { id: res.createdDebtorId, name: form.newPartyName, date: form.date, amount: 0, creditPeriod: form.newPartyCredit || "", notified: false, checked: false }];
                     res.cashEffects.forEach(e => { np.cashEntries = [...np.cashEntries, e]; }); return np;
@@ -459,7 +492,7 @@
                 if (!form.category || !form.description || !form.amount || !form.date || !form.side || !form.settleMode) { alert("Fill all fields"); return; }
                 const amt = Number(form.amount), id = gid(), isExpense = form.side === "expense", direction = isExpense ? "out" : "in", res = resolveSettle(form, amt, form.date, form.description, id, direction);
                 upd(p => {
-                    let np = { ...p, plEntries: [...p.plEntries, { id, date: form.date, side: form.side, category: form.category, description: form.description, amount: amt, settleMode: form.settleMode, linkedPartyId: res.partyId, linkedPartyName: res.partyName }] };
+                    let np = { ...p, plEntries: [...p.plEntries, { id, date: form.date, side: form.side, category: form.category, description: form.description, amount: amt, settleMode: form.settleMode, linkedPartyId: res.partyId, linkedPartyName: res.partyName, createdCreditorId: res.createdCreditorId, createdDebtorId: res.createdDebtorId }] };
                     if (res.createdCreditorId) np.creditors = [...np.creditors, { id: res.createdCreditorId, name: form.newPartyName, date: form.date, amount: 0, creditPeriod: form.newPartyCredit || "", notified: false, checked: false }];
                     if (res.createdDebtorId) np.debtors = [...np.debtors, { id: res.createdDebtorId, name: form.newPartyName, date: form.date, amount: 0, creditPeriod: form.newPartyCredit || "", notified: false, checked: false }];
                     res.cashEffects.forEach(e => { np.cashEntries = [...np.cashEntries, { ...e, payType: isExpense ? "Expense Payment" : "Other Income Receipt" }]; }); return np;
@@ -468,7 +501,7 @@
             const applyBS = () => {
                 if (!form.side || !form.category || !form.subCategory || !form.description || !form.amount || !form.settleMode) { alert("Fill all fields"); return; }
                 const amt = Number(form.amount), id = gid(), isAsset = form.side === "assets", direction = isAsset ? "out" : "in", res = resolveSettle(form, amt, form.date || today(), form.description, id, direction);
-                const entry = { id, side: form.side, category: form.category, subCategory: form.subCategory, description: form.description, date: form.date || today(), amount: amt, settleMode: form.settleMode, linkedPartyId: res.partyId, linkedPartyName: res.partyName };
+                const entry = { id, side: form.side, category: form.category, subCategory: form.subCategory, description: form.description, date: form.date || today(), amount: amt, settleMode: form.settleMode, linkedPartyId: res.partyId, linkedPartyName: res.partyName, createdCreditorId: res.createdCreditorId, createdDebtorId: res.createdDebtorId };
                 upd(p => {
                     let np = { ...p, balanceSheet: { ...p.balanceSheet, [form.side]: { ...p.balanceSheet[form.side], [id]: entry } } };
                     if (res.createdCreditorId) np.creditors = [...np.creditors, { id: res.createdCreditorId, name: form.newPartyName, date: form.date || today(), amount: 0, creditPeriod: form.newPartyCredit || "", notified: false, checked: false }];
