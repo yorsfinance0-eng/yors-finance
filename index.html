@@ -302,6 +302,7 @@
             const [selectedClient, setSelectedClient] = useState(null);
             const [clSearch, setClSearch] = useState("");
             const [partyGodownF, setPartyGodownF] = useState("All");
+            const [clGodownF, setClGodownF] = useState("All");
             const [clTypeF, setClTypeF] = useState("All");
             const [clSort, setClSort] = useState("name");
             const [clSortDir, setClSortDir] = useState(1);
@@ -890,7 +891,7 @@
                         if (selectedClient) {
                             const cl = clients.find(c => c.id === selectedClient);
                             if (!cl) { setSelectedClient(null); return null; }
-                            const allOrders = so.filter(e => e.clientId === cl.id).sort((a,b) => new Date(b.date) - new Date(a.date));
+                            const allOrders = so.filter(e => e.clientId === cl.id && (clGodownF === "All" || e.godown === clGodownF)).sort((a,b) => new Date(b.date) - new Date(a.date));
                             const clOrders = clDetailCat === "all" ? allOrders : allOrders.filter(e => e.category === clDetailCat);
 
                             const totalQty = clOrders.reduce((a,b) => a + Number(b.qty), 0);
@@ -922,6 +923,7 @@
                                             <div style={{ fontSize: 20, fontWeight: 900, color: "#fff", marginBottom: 4 }}>👤 {cl.name}</div>
                                             <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                                                 <Badge label={cl.type} color={cl.type === "Retailer" ? C.teal : C.amber} />
+                                                {clGodownF !== "All" && <Badge label={"🏭 " + clGodownF} color={C.purple} />}
                                                 <span style={{ fontSize: 10, color: C.muted }}>Since {cl.date}</span>
                                             </div>
                                             {cl.phone && <div style={{ fontSize: 11, color: "#a5b4fc", marginTop: 6 }}>📞 {cl.phone}</div>}
@@ -999,7 +1001,7 @@
                         /* ── List View ── */
                         /* Per-category enrichment */
                         const enrichedClients = clients.map(cl => {
-                            const allO = so.filter(e => e.clientId === cl.id);
+                            const allO = so.filter(e => e.clientId === cl.id && (clGodownF === "All" || e.godown === clGodownF));
                             const catO = clCatView === "all" ? allO : allO.filter(e => e.category === clCatView);
                             const tQty = catO.reduce((a,b) => a + Number(b.qty), 0);
                             const tAmt = catO.reduce((a,b) => a + Number(b.totalAmount), 0);
@@ -1023,6 +1025,7 @@
                             
                             if (clCatView === "customized" && !hasCustomized) return false;
                             if (clCatView === "normal" && !hasNormal && cl.allO.length > 0) return false;
+                            if (clGodownF !== "All" && cl.allO.length === 0) return false;
                             
                             return true;
                         }).sort((a, b) => {
@@ -1032,7 +1035,7 @@
                             return String(av).localeCompare(String(bv)) * clSortDir;
                         });
 
-                        const hasFilter = clTypeF !== "All" || clSearch;
+                        const hasFilter = clTypeF !== "All" || clSearch || clGodownF !== "All";
                         const viewColor = clCatView === "normal" ? C.teal : clCatView === "customized" ? C.amber : C.purple;
 
                         return <div>
@@ -1062,7 +1065,7 @@
                             <div style={{ background: C.mid, borderRadius: 12, padding: 14, marginBottom: 14, border: "1px solid " + C.border }}>
                                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
                                     <div style={{ fontSize: 11, fontWeight: 700, color: C.muted }}>🔍 FILTERS</div>
-                                    {hasFilter && <button onClick={() => { setClSearch(""); setClTypeF("All"); }} style={{ ...BTNP("#ef4444"), padding: "4px 12px", fontSize: 10 }}>✕ Clear</button>}
+                                    {hasFilter && <button onClick={() => { setClSearch(""); setClTypeF("All"); setClGodownF("All"); }} style={{ ...BTNP("#ef4444"), padding: "4px 12px", fontSize: 10 }}>✕ Clear</button>}
                                 </div>
                                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-end" }}>
                                     <div style={{ display: "flex", flexDirection: "column", gap: 3, flex: 1, minWidth: 160 }}>
@@ -1073,6 +1076,13 @@
                                         <label style={{ fontSize: 9, color: C.muted, fontWeight: 600, textTransform: "uppercase" }}>Type</label>
                                         <select style={{ ...INP, width: "auto", marginBottom: 0, minWidth: 120, border: clTypeF !== "All" ? "1.5px solid " + viewColor : "1.5px solid " + C.border }} value={clTypeF} onChange={e => setClTypeF(e.target.value)}>
                                             {["All","Retailer","Distributor"].map(o => <option key={o}>{o}</option>)}
+                                        </select>
+                                    </div>
+                                    <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                                        <label style={{ fontSize: 9, color: C.muted, fontWeight: 600, textTransform: "uppercase" }}>Godown</label>
+                                        <select style={{ ...INP, width: "auto", marginBottom: 0, minWidth: 120, border: clGodownF !== "All" ? "1.5px solid " + viewColor : "1.5px solid " + C.border }} value={clGodownF} onChange={e => setClGodownF(e.target.value)}>
+                                            <option value="All">All Godowns</option>
+                                            {GODOWNS.map(g => <option key={g} value={g}>{g}</option>)}
                                         </select>
                                     </div>
                                     <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
@@ -1093,7 +1103,7 @@
                             </div> : filtered.length === 0 ? <div style={{ background: C.mid, borderRadius: 12, padding: 32, textAlign: "center", color: C.muted }}>
                                 <div style={{ fontSize: 24, marginBottom: 8 }}>🔍</div>
                                 <div style={{ fontSize: 13, fontWeight: 600 }}>No clients match your filters</div>
-                                <div style={{ fontSize: 11, marginTop: 4, cursor: "pointer", color: viewColor }} onClick={() => { setClSearch(""); setClTypeF("All"); }}>Clear filters</div>
+                                <div style={{ fontSize: 11, marginTop: 4, cursor: "pointer", color: viewColor }} onClick={() => { setClSearch(""); setClTypeF("All"); setClGodownF("All"); }}>Clear filters</div>
                             </div> : (
                                 <div style={{ background: C.mid, borderRadius: 12, overflowX: "auto", border: "1px solid " + C.border }}>
                                     <table style={TBL}><thead><tr>
