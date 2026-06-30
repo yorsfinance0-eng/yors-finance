@@ -81,7 +81,7 @@
 
         // ─── Constants ────────────────────────────────────────
         const BOTTLE_TYPES = ["200ml", "500ml", "1L"];
-        const GODOWNS = ["Hazra", "Dunlop", "Bhawanipur", "Alipore", "Howrah"];
+        const GODOWNS = ["Hazra", "Dunlop", "Bhawanipur", "Alipore", "Gariahat"];
         const TABS = ["Dashboard", "Trading A/C", "Inventory", "Stock In", "Stock Out", "P&L Account", "Cash Book", "Creditors", "Debtors", "Clients", "Balance Sheet", "Depreciation", "Charts"];
         const CLIENT_TYPES = ["Retailer", "Distributor"];
         const CASH_IN_TYPES = ["Sales Receipt", "Debtor Payment", "Capital Introduced", "Loan Received", "Other Income Receipt"];
@@ -301,6 +301,7 @@
             const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All", dateFrom: "", dateTo: "", status: "All", search: "" });
             const [selectedClient, setSelectedClient] = useState(null);
             const [clSearch, setClSearch] = useState("");
+            const [partyGodownF, setPartyGodownF] = useState("All");
             const [clTypeF, setClTypeF] = useState("All");
             const [clSort, setClSort] = useState("name");
             const [clSortDir, setClSortDir] = useState(1);
@@ -672,7 +673,7 @@
                         <div style={{ background: C.mid, borderRadius: 12, overflowX: "auto" }}>
                             <table style={TBL}><thead><tr>{["Date", "Godown", "Bottle", "Cat", "Qty", "Rate", "Total", "Mode", "Party", "Client", "Del"].map(h => <th key={h} style={THS}>{h}</th>)}</tr></thead>
                                 <tbody>{!so.length && <tr><td colSpan={11} style={{ ...TDS, textAlign: "center", color: C.muted }}>No entries</td></tr>}
-                                    {so.map(e => <tr key={e.id}><td style={TDS}>{e.date}</td><td style={TDS}><Badge label={e.godown} color="#7c3aed" /></td><td style={TDS}><Badge label={e.bottleType} color="#6366f1" /></td><td style={TDS}><Badge label={e.category} color={e.category === "normal" ? "#0ea5e9" : C.amber} /></td><td style={{ ...TDS, fontWeight: 700 }}>{e.qty}</td><td style={TDS}>{fc(e.ratePerUnit)}</td><td style={{ ...TDS, fontWeight: 800, color: C.red }}>{fc(e.totalAmount)}</td><td style={TDS}><Badge label={e.settleMode === "cash" ? "Cash" : e.settleMode === "debtor" ? "Debtor" : "Journal"} color={e.settleMode === "cash" ? C.green : C.violet} /></td><td style={TDS}>{e.linkedPartyName || "—"}</td><td style={TDS}>{e.clientName ? <span style={{ color: C.teal, cursor: "pointer", fontWeight: 600 }} onClick={() => { setSelectedClient(e.clientId); setTab("Clients"); }}>{e.clientName}</span> : "—"}</td><td style={TDS}><button style={BTND} onClick={() => cascadeDelete("stockOut", e.id)}>Del</button></td></tr>)}
+                                    {so.map(e => { const cName = e.clientName || (e.clientId ? (clients.find(c => c.id === e.clientId) || {}).name : ""); return <tr key={e.id}><td style={TDS}>{e.date}</td><td style={TDS}><Badge label={e.godown} color="#7c3aed" /></td><td style={TDS}><Badge label={e.bottleType} color="#6366f1" /></td><td style={TDS}><Badge label={e.category} color={e.category === "normal" ? "#0ea5e9" : C.amber} /></td><td style={{ ...TDS, fontWeight: 700 }}>{e.qty}</td><td style={TDS}>{fc(e.ratePerUnit)}</td><td style={{ ...TDS, fontWeight: 800, color: C.red }}>{fc(e.totalAmount)}</td><td style={TDS}><Badge label={e.settleMode === "cash" ? "Cash" : e.settleMode === "debtor" ? "Debtor" : "Journal"} color={e.settleMode === "cash" ? C.green : C.violet} /></td><td style={TDS}>{e.linkedPartyName || "—"}</td><td style={TDS}>{cName ? <span style={{ color: C.teal, cursor: "pointer", fontWeight: 600 }} onClick={() => { setSelectedClient(e.clientId); setTab("Clients"); }}>{cName}</span> : "—"}</td><td style={TDS}><button style={BTND} onClick={() => cascadeDelete("stockOut", e.id)}>Del</button></td></tr>; })}
                                 </tbody>
                             </table>
                         </div>
@@ -740,12 +741,26 @@
                             const getFromOther = id => isC ? creditorFromOther(id) : debtorFromOther(id);
                             const getCash = id => isC ? creditorCashPaid(id) : debtorCashRcvd(id);
                             const getBal = e => isC ? creditorBal(e) : debtorBal(e);
-                            const total = items.reduce((a, b) => a + getBal(b), 0);
+                            
+                            const filteredItems = items.filter(e => {
+                                if (partyGodownF === "All") return true;
+                                const rGodowns = isC ? si.filter(x => x.linkedPartyId === e.id).map(x => x.godown) : so.filter(x => x.linkedPartyId === e.id).map(x => x.godown);
+                                return rGodowns.includes(partyGodownF);
+                            });
+                            
+                            const total = filteredItems.reduce((a, b) => a + getBal(b), 0);
                             return (<div>
+                                <div style={{ display: "flex", gap: 10, marginBottom: 14, alignItems: "center" }}>
+                                    <div style={{ fontSize: 13, color: C.muted, fontWeight: 700 }}>Filter by Godown:</div>
+                                    <select style={{ ...INP, width: "auto", padding: "6px 10px", marginBottom: 0 }} value={partyGodownF} onChange={e => setPartyGodownF(e.target.value)}>
+                                        <option value="All">All Godowns</option>
+                                        {GODOWNS.map(g => <option key={g} value={g}>{g}</option>)}
+                                    </select>
+                                </div>
                                 <div style={{ background: C.mid, borderRadius: 12, overflowX: "auto" }}>
                                     <table style={TBL}><thead><tr>{["✓", "Name", "Date", "Opening", "From Entries", "Total Due", isC ? "Cash Paid" : "Cash Rcvd", "Balance", "Period", "Due Date", "Status", "Del"].map(h => <th key={h} style={THS}>{h}</th>)}</tr></thead>
-                                        <tbody>{!items.length && <tr><td colSpan={12} style={{ ...TDS, textAlign: "center", color: C.muted }}>No entries</td></tr>}
-                                            {items.map(e => {
+                                        <tbody>{!filteredItems.length && <tr><td colSpan={12} style={{ ...TDS, textAlign: "center", color: C.muted }}>No entries</td></tr>}
+                                            {filteredItems.map(e => {
                                                 const fromS = getFromStock(e.id), fromO = getFromOther(e.id), cp = getCash(e.id), totalDue = Number(e.amount) + fromS + fromO, bal = Math.max(0, totalDue - cp);
                                                 const hasTerm = e.creditPeriod !== "" && e.creditPeriod !== undefined && e.creditPeriod !== null;
                                                 const due = new Date(e.date); if (hasTerm) due.setDate(due.getDate() + Number(e.creditPeriod));
@@ -909,6 +924,13 @@
                         const filtered = enrichedClients.filter(cl => {
                             if (clTypeF !== "All" && cl.type !== clTypeF) return false;
                             if (clSearch && !cl.name.toLowerCase().includes(clSearch.toLowerCase()) && !(cl.phone || "").includes(clSearch)) return false;
+                            
+                            const hasCustomized = cl.allO.some(o => o.category === "customized");
+                            const hasNormal = cl.allO.some(o => o.category === "normal");
+                            
+                            if (clCatView === "customized" && !hasCustomized) return false;
+                            if (clCatView === "normal" && !hasNormal && cl.allO.length > 0) return false;
+                            
                             return true;
                         }).sort((a, b) => {
                             let av = a[clSort], bv = b[clSort];
