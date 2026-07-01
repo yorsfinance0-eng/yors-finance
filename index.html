@@ -114,10 +114,17 @@
             BOTTLE_TYPES.forEach(bt => {
                 ["normal", "customized"].forEach(cat => {
                     const key = bt + "_" + cat;
-                    const batches = stockIn.filter(x => x.bottleType === bt && x.category === cat).sort((a, b) => new Date(a.date) - new Date(b.date)).map(x => ({ ...x, origQty: Number(x.qty), remQty: Number(x.qty), rate: Number(x.ratePerUnit) }));
-                    const outs = stockOut.filter(x => x.bottleType === bt && x.category === cat).sort((a, b) => new Date(a.date) - new Date(b.date));
+                    const batches = stockIn.filter(x => x.bottleType === bt && x.category === cat && !x.isReturn).sort((a, b) => new Date(a.date) - new Date(b.date)).map(x => ({ ...x, origQty: Number(x.qty), remQty: Number(x.qty), rate: Number(x.ratePerUnit), batchNo: x.batchNo, godown: x.godown }));
+                    const returns = stockIn.filter(x => x.bottleType === bt && x.category === cat && x.isReturn);
+                    returns.forEach(r => {
+                        const b = batches.find(x => x.batchNo === r.batchNo && x.godown === r.godown);
+                        if (b) { b.origQty -= r.qty; b.remQty -= r.qty; }
+                    });
+                    const outs = stockOut.filter(x => x.bottleType === bt && x.category === cat && !x.isReturn).sort((a, b) => new Date(a.date) - new Date(b.date));
+                    const salesReturns = stockOut.filter(x => x.bottleType === bt && x.category === cat && x.isReturn);
                     let cogs = 0;
                     outs.forEach(out => { let needed = Number(out.qty); for (let i = 0; i < batches.length && needed > 0; i++) { if (batches[i].godown !== out.godown) continue; const take = Math.min(batches[i].remQty, needed); if (take > 0) { cogs += take * batches[i].rate; batches[i].remQty -= take; needed -= take; } } });
+                    salesReturns.forEach(sr => { batches.push({ origQty: Number(sr.qty), remQty: Number(sr.qty), rate: Number(sr.ratePerUnit), godown: sr.godown, batchNo: "SR" }); });
                     const inQty = batches.reduce((a, b) => a + b.origQty, 0), outQty = outs.reduce((a, b) => a + Number(b.qty), 0);
                     let closingValue = 0; batches.forEach(b => { closingValue += b.remQty * b.rate; });
                     results[key] = { batches, cogs, closingValue, inQty, outQty, balQty: inQty - outQty };
@@ -316,8 +323,8 @@
             const clients = state.clients || [];
             const fifo = useMemo(() => computeFIFO(si, so), [si, so]);
 
-            const totalPurchases = si.reduce((a, b) => a + Number(b.totalAmount), 0);
-            const totalSales = so.reduce((a, b) => a + Number(b.totalAmount), 0);
+            const totalPurchases = si.reduce((a, b) => a + Number(b.totalAmount) * (b.isReturn ? -1 : 1), 0);
+            const totalSales = so.reduce((a, b) => a + Number(b.totalAmount) * (b.isReturn ? -1 : 1), 0);
             const fifoCOGS = Object.values(fifo).reduce((a, b) => a + b.cogs, 0);
             const fifoClosing = Object.values(fifo).reduce((a, b) => a + b.closingValue, 0);
             const openingStockAmt = Number(state.openingStock?.amount || 0);
@@ -338,11 +345,11 @@
             const plExpense = manualExpense + totalDepreciation + (grossProfit < 0 ? Math.abs(grossProfit) : 0);
             const netPL = plIncome - plExpense;
 
-            const creditorFromStock = id => si.filter(x => x.settleMode === "creditor" && x.linkedPartyId === id).reduce((a, b) => a + Number(b.totalAmount), 0);
+            const creditorFromStock = id => si.filter(x => x.settleMode === "creditor" && x.linkedPartyId === id).reduce((a, b) => a + Number(b.totalAmount) * (b.isReturn ? -1 : 1), 0);
             const creditorFromOther = id => [...te, ...ple].filter(x => x.settleMode === "creditor" && x.linkedPartyId === id).reduce((a, b) => a + Number(b.amount || 0), 0);
             const creditorCashPaid = id => cash.filter(e => e.dir === "out" && e.linkedId === id).reduce((a, b) => a + Number(b.amount), 0);
             const creditorBal = c => Math.max(0, Number(c.amount) + creditorFromStock(c.id) + creditorFromOther(c.id) - creditorCashPaid(c.id));
-            const debtorFromStock = id => so.filter(x => x.settleMode === "debtor" && x.linkedPartyId === id).reduce((a, b) => a + Number(b.totalAmount), 0);
+            const debtorFromStock = id => so.filter(x => x.settleMode === "debtor" && x.linkedPartyId === id).reduce((a, b) => a + Number(b.totalAmount) * (b.isReturn ? -1 : 1), 0);
             const debtorFromOther = id => [...te, ...ple].filter(x => x.settleMode === "debtor" && x.linkedPartyId === id).reduce((a, b) => a + Number(b.amount || 0), 0);
             const debtorCashRcvd = id => cash.filter(e => e.dir === "in" && e.linkedId === id).reduce((a, b) => a + Number(b.amount), 0);
             const debtorBal = d => Math.max(0, Number(d.amount) + debtorFromStock(d.id) + debtorFromOther(d.id) - debtorCashRcvd(d.id));
@@ -454,29 +461,33 @@
             };
 
             const applyStockIn = () => {
-                const { date, godown, bottleType, category, batchNo, qty, ratePerUnit } = form;
+                const { date, godown, bottleType, category, batchNo, qty, ratePerUnit, isReturn } = form;
                 if (!date || !godown || !bottleType || !category || !batchNo || !qty || !ratePerUnit || !form.settleMode) { alert("Fill all fields & select payment mode"); return; }
-                const total = Number(qty) * Number(ratePerUnit), id = gid(), res = resolveSettle(form, total, date, "Stock In: " + bottleType + " Batch " + batchNo, id, "out");
+                const total = Number(qty) * Number(ratePerUnit), id = gid();
+                const direction = isReturn === "true" ? "in" : "out";
+                const res = resolveSettle(form, total, date, (isReturn === "true" ? "Purchase Return: " : "Stock In: ") + bottleType + " Batch " + batchNo, id, direction);
                 upd(p => {
-                    let np = { ...p, stockIn: [...p.stockIn, { id, date, godown, bottleType, category, batchNo, qty: Number(qty), ratePerUnit: Number(ratePerUnit), totalAmount: total, settleMode: form.settleMode, linkedPartyId: res.partyId, linkedPartyName: res.partyName, createdCreditorId: res.createdCreditorId }] };
+                    let np = { ...p, stockIn: [...p.stockIn, { id, date, godown, bottleType, category, batchNo, qty: Number(qty), ratePerUnit: Number(ratePerUnit), totalAmount: total, settleMode: form.settleMode, linkedPartyId: res.partyId, linkedPartyName: res.partyName, createdCreditorId: res.createdCreditorId, isReturn: isReturn === "true" }] };
                     if (res.createdCreditorId) np.creditors = [...np.creditors, { id: res.createdCreditorId, name: form.newPartyName, date, amount: 0, creditPeriod: form.newPartyCredit || "", notified: false, checked: false }];
-                    res.cashEffects.forEach(e => { np.cashEntries = [...np.cashEntries, { ...e, payType: "Stock Purchase Payment" }]; }); return np;
+                    res.cashEffects.forEach(e => { np.cashEntries = [...np.cashEntries, { ...e, payType: isReturn === "true" ? "Other Income Receipt" : "Stock Purchase Payment" }]; }); return np;
                 }); closeM();
             };
             const applyStockOut = () => {
-                const { date, godown, bottleType, category, qty, ratePerUnit } = form;
+                const { date, godown, bottleType, category, qty, ratePerUnit, isReturn } = form;
                 if (!date || !godown || !bottleType || !category || !qty || !ratePerUnit || !form.settleMode) { alert("Fill all fields & select receipt mode"); return; }
                 if (form.linkClient === "yes" && !form.clientId) { alert("Please select or create a client"); return; }
                 if (form.linkClient === "yes" && form.clientId === "__new__" && !form.newClientName) { alert("Enter client name"); return; }
-                const total = Number(qty) * Number(ratePerUnit), id = gid(), res = resolveSettle(form, total, date, "Stock Out: " + bottleType + " " + date, id, "in");
+                const total = Number(qty) * Number(ratePerUnit), id = gid();
+                const direction = isReturn === "true" ? "out" : "in";
+                const res = resolveSettle(form, total, date, (isReturn === "true" ? "Sales Return: " : "Stock Out: ") + bottleType + " " + date, id, direction);
                 let clientId = null, clientName = "";
                 if (form.linkClient === "yes" && form.clientId === "__new__") { clientId = gid(); clientName = form.newClientName; }
                 else if (form.linkClient === "yes" && form.clientId) { clientId = form.clientId; const cl = (state.clients || []).find(c => c.id === form.clientId); clientName = cl ? cl.name : ""; }
                 upd(p => {
-                    let np = { ...p, stockOut: [...p.stockOut, { id, date, godown, bottleType, category, qty: Number(qty), ratePerUnit: Number(ratePerUnit), totalAmount: total, settleMode: form.settleMode, linkedPartyId: res.partyId, linkedPartyName: res.partyName, createdDebtorId: res.createdDebtorId, clientId, clientName }] };
+                    let np = { ...p, stockOut: [...p.stockOut, { id, date, godown, bottleType, category, qty: Number(qty), ratePerUnit: Number(ratePerUnit), totalAmount: total, settleMode: form.settleMode, linkedPartyId: res.partyId, linkedPartyName: res.partyName, createdDebtorId: res.createdDebtorId, clientId, clientName, billNo: form.billNo, isReturn: isReturn === "true" }] };
                     if (res.createdDebtorId) { const debtorEntry = { id: res.createdDebtorId, name: form.newPartyName, date, amount: 0, creditPeriod: form.newPartyCredit || "", notified: false, checked: false }; if (clientId) debtorEntry.clientId = clientId; np.debtors = [...np.debtors, debtorEntry]; }
                     if (clientId && form.clientId === "__new__") np.clients = [...(np.clients || []), { id: clientId, name: form.newClientName, type: form.newClientType || "Retailer", date, phone: form.newClientPhone || "", address: form.newClientAddress || "" }];
-                    res.cashEffects.forEach(e => { np.cashEntries = [...np.cashEntries, { ...e, payType: "Sales Receipt" }]; }); return np;
+                    res.cashEffects.forEach(e => { np.cashEntries = [...np.cashEntries, { ...e, payType: isReturn === "true" ? "Other Payment" : "Sales Receipt" }]; }); return np;
                 }); closeM();
             };
             const applyTrading = () => {
@@ -517,7 +528,7 @@
             };
             const applyCash = () => {
                 if (!form.date || !form.payType || !form.amount || !form.description) { alert("Fill all fields"); return; }
-                upd(p => ({ ...p, cashEntries: [...p.cashEntries, { id: gid(), date: form.date, dir: form.dir, payType: form.payType, description: form.description, amount: Number(form.amount), linkedId: form.linkedId || null, sourceId: null }] })); closeM();
+                upd(p => ({ ...p, cashEntries: [...p.cashEntries, { id: gid(), date: form.date, dir: form.dir, payType: form.payType, description: form.description, amount: Number(form.amount), linkedId: form.linkedId || null, sourceId: null, billNo: form.billNo }] })); closeM();
             };
             const applyDepr = () => {
                 if (!form.bsAssetId || !form.depRate || !form.method || !form.period) { alert("Select a Balance Sheet asset and fill all fields"); return; }
@@ -725,9 +736,9 @@
                             <button style={BTNP()} onClick={() => openM("stockIn")}>+ Add Stock In</button>
                         </div>
                         <div style={{ background: C.mid, borderRadius: 12, overflowX: "auto" }}>
-                            <table style={TBL}><thead><tr>{["Batch", "Date", "Godown", "Bottle", "Cat", "Qty", "Rate", "Total", "Mode", "Party", "Del"].map(h => <th key={h} style={THS}>{h}</th>)}</tr></thead>
-                                <tbody>{!si.length && <tr><td colSpan={11} style={{ ...TDS, textAlign: "center", color: C.muted }}>No entries</td></tr>}
-                                    {si.map(e => <tr key={e.id}><td style={TDS}><span style={{ fontFamily: "monospace", color: "#818cf8", fontSize: 10 }}>{e.batchNo}</span></td><td style={TDS}>{e.date}</td><td style={TDS}><Badge label={e.godown} color="#7c3aed" /></td><td style={TDS}><Badge label={e.bottleType} color="#6366f1" /></td><td style={TDS}><Badge label={e.category} color={e.category === "normal" ? "#0ea5e9" : C.amber} /></td><td style={{ ...TDS, fontWeight: 700 }}>{e.qty}</td><td style={TDS}>{fc(e.ratePerUnit)}</td><td style={{ ...TDS, fontWeight: 800, color: C.green }}>{fc(e.totalAmount)}</td><td style={TDS}><Badge label={e.settleMode === "cash" ? "Cash" : e.settleMode === "creditor" ? "Creditor" : "Journal"} color={e.settleMode === "cash" ? C.green : C.amber} /></td><td style={TDS}>{e.linkedPartyName || "—"}</td><td style={TDS}><button style={BTND} onClick={() => cascadeDelete("stockIn", e.id)}>Del</button></td></tr>)}
+                            <table style={TBL}><thead><tr>{["Batch", "Type", "Date", "Godown", "Bottle", "Cat", "Qty", "Rate", "Total", "Mode", "Party", "Del"].map(h => <th key={h} style={THS}>{h}</th>)}</tr></thead>
+                                <tbody>{!si.length && <tr><td colSpan={12} style={{ ...TDS, textAlign: "center", color: C.muted }}>No entries</td></tr>}
+                                    {si.map(e => <tr key={e.id}><td style={TDS}><span style={{ fontFamily: "monospace", color: "#818cf8", fontSize: 10 }}>{e.batchNo}</span></td><td style={TDS}><Badge label={e.isReturn ? "Return" : "Normal"} color={e.isReturn ? C.amber : C.teal} /></td><td style={TDS}>{e.date}</td><td style={TDS}><Badge label={e.godown} color="#7c3aed" /></td><td style={TDS}><Badge label={e.bottleType} color="#6366f1" /></td><td style={TDS}><Badge label={e.category} color={e.category === "normal" ? "#0ea5e9" : C.amber} /></td><td style={{ ...TDS, fontWeight: 700 }}>{e.qty}</td><td style={TDS}>{fc(e.ratePerUnit)}</td><td style={{ ...TDS, fontWeight: 800, color: C.green }}>{fc(e.totalAmount)}</td><td style={TDS}><Badge label={e.settleMode === "cash" ? "Cash" : e.settleMode === "creditor" ? "Creditor" : "Journal"} color={e.settleMode === "cash" ? C.green : C.amber} /></td><td style={TDS}>{e.linkedPartyName || "—"}</td><td style={TDS}><button style={BTND} onClick={() => cascadeDelete("stockIn", e.id)}>Del</button></td></tr>)}
                                 </tbody>
                             </table>
                         </div>
@@ -739,9 +750,9 @@
                             <button style={BTNP()} onClick={() => openM("stockOut")}>+ Add Stock Out</button>
                         </div>
                         <div style={{ background: C.mid, borderRadius: 12, overflowX: "auto" }}>
-                            <table style={TBL}><thead><tr>{["Date", "Godown", "Bottle", "Cat", "Qty", "Rate", "Total", "Mode", "Party", "Client", "Del"].map(h => <th key={h} style={THS}>{h}</th>)}</tr></thead>
-                                <tbody>{!so.length && <tr><td colSpan={11} style={{ ...TDS, textAlign: "center", color: C.muted }}>No entries</td></tr>}
-                                    {so.map(e => { const cName = e.clientName || (e.clientId ? (clients.find(c => c.id === e.clientId) || {}).name : ""); return <tr key={e.id}><td style={TDS}>{e.date}</td><td style={TDS}><Badge label={e.godown} color="#7c3aed" /></td><td style={TDS}><Badge label={e.bottleType} color="#6366f1" /></td><td style={TDS}><Badge label={e.category} color={e.category === "normal" ? "#0ea5e9" : C.amber} /></td><td style={{ ...TDS, fontWeight: 700 }}>{e.qty}</td><td style={TDS}>{fc(e.ratePerUnit)}</td><td style={{ ...TDS, fontWeight: 800, color: C.red }}>{fc(e.totalAmount)}</td><td style={TDS}><Badge label={e.settleMode === "cash" ? "Cash" : e.settleMode === "debtor" ? "Debtor" : "Journal"} color={e.settleMode === "cash" ? C.green : C.violet} /></td><td style={TDS}>{e.linkedPartyName || "—"}</td><td style={TDS}>{cName ? <span style={{ color: C.teal, cursor: "pointer", fontWeight: 600 }} onClick={() => { setSelectedClient(e.clientId); setTab("Clients"); }}>{cName}</span> : "—"}</td><td style={TDS}><button style={BTND} onClick={() => cascadeDelete("stockOut", e.id)}>Del</button></td></tr>; })}
+                            <table style={TBL}><thead><tr>{["Date", "Type", "Godown", "Bottle", "Cat", "Qty", "Rate", "Total", "Mode", "Party", "Client", "Del"].map(h => <th key={h} style={THS}>{h}</th>)}</tr></thead>
+                                <tbody>{!so.length && <tr><td colSpan={12} style={{ ...TDS, textAlign: "center", color: C.muted }}>No entries</td></tr>}
+                                    {so.map(e => { const cName = e.clientName || (e.clientId ? (clients.find(c => c.id === e.clientId) || {}).name : ""); return <tr key={e.id}><td style={TDS}>{e.date}</td><td style={TDS}><Badge label={e.isReturn ? "Return" : "Normal"} color={e.isReturn ? C.amber : C.teal} /></td><td style={TDS}><Badge label={e.godown} color="#7c3aed" /></td><td style={TDS}><Badge label={e.bottleType} color="#6366f1" /></td><td style={TDS}><Badge label={e.category} color={e.category === "normal" ? "#0ea5e9" : C.amber} /></td><td style={{ ...TDS, fontWeight: 700 }}>{e.qty}</td><td style={TDS}>{fc(e.ratePerUnit)}</td><td style={{ ...TDS, fontWeight: 800, color: C.red }}>{fc(e.totalAmount)}</td><td style={TDS}><Badge label={e.settleMode === "cash" ? "Cash" : e.settleMode === "debtor" ? "Debtor" : "Journal"} color={e.settleMode === "cash" ? C.green : C.violet} /></td><td style={TDS}>{e.linkedPartyName || "—"}</td><td style={TDS}>{cName ? <span style={{ color: C.teal, cursor: "pointer", fontWeight: 600 }} onClick={() => { setSelectedClient(e.clientId); setTab("Clients"); }}>{cName}</span> : "—"}</td><td style={TDS}><button style={BTND} onClick={() => cascadeDelete("stockOut", e.id)}>Del</button></td></tr>; })}
                                 </tbody>
                             </table>
                         </div>
@@ -983,16 +994,23 @@
                                 <div style={{ background: C.mid, borderRadius: 14, padding: 16, marginBottom: 16, border: "1px solid " + C.border }}>
                                     <div style={{ fontSize: 12, fontWeight: 800, color: C.red, marginBottom: 10 }}>📦 Stock History — {catLabel[clDetailCat]} ({clOrders.length})</div>
                                     {clOrders.length === 0 ? <div style={{ color: C.muted, fontSize: 11, textAlign: "center", padding: 16 }}>No entries in this view</div> : (
-                                        <div style={{ overflowX: "auto" }}><table style={TBL}><thead><tr>{["Date","Godown","Bottle","Cat","Qty","Rate","Total","Mode"].map(h => <th key={h} style={THS}>{h}</th>)}</tr></thead>
-                                            <tbody>{clOrders.map(e => <tr key={e.id}><td style={TDS}>{e.date}</td><td style={TDS}><Badge label={e.godown} color="#7c3aed" /></td><td style={TDS}><Badge label={e.bottleType} color="#6366f1" /></td><td style={TDS}><Badge label={e.category} color={e.category === "normal" ? C.teal : C.amber} /></td><td style={{ ...TDS, fontWeight: 700 }}>{e.qty}</td><td style={TDS}>{fc(e.ratePerUnit)}</td><td style={{ ...TDS, fontWeight: 700, color: C.red }}>{fc(e.totalAmount)}</td><td style={TDS}><Badge label={e.settleMode === "cash" ? "Cash" : e.settleMode === "debtor" ? "Debtor" : "Journal"} color={e.settleMode === "cash" ? C.green : C.violet} /></td></tr>)}</tbody>
+                                        <div style={{ overflowX: "auto" }}><table style={TBL}><thead><tr>{["Date","Type","Bill No","Godown","Bottle","Cat","Qty","Rate","Total","Mode","Status"].map(h => <th key={h} style={THS}>{h}</th>)}</tr></thead>
+                                            <tbody>{clOrders.map(e => {
+                                                const billCash = e.billNo ? relatedCash.filter(c => c.billNo === e.billNo).reduce((a,b) => a + Number(b.amount), 0) : 0;
+                                                const billReturns = e.billNo ? clOrders.filter(o => o.billNo === e.billNo && o.isReturn).reduce((a,b) => a + Number(b.totalAmount), 0) : 0;
+                                                const billTotal = e.billNo ? clOrders.filter(o => o.billNo === e.billNo && !o.isReturn).reduce((a,b) => a + Number(b.totalAmount), 0) : Number(e.totalAmount);
+                                                const billPending = billTotal - billReturns - billCash;
+                                                const isPaid = e.settleMode === "cash" || (e.settleMode === "debtor" && e.billNo && billPending <= 0);
+                                                return <tr key={e.id}><td style={TDS}>{e.date}</td><td style={TDS}><Badge label={e.isReturn ? "Return" : "Normal"} color={e.isReturn ? C.amber : C.teal} /></td><td style={{ ...TDS, fontWeight: 700, color: C.teal }}>{e.billNo || "—"}</td><td style={TDS}><Badge label={e.godown} color="#7c3aed" /></td><td style={TDS}><Badge label={e.bottleType} color="#6366f1" /></td><td style={TDS}><Badge label={e.category} color={e.category === "normal" ? C.teal : C.amber} /></td><td style={{ ...TDS, fontWeight: 700 }}>{e.qty}</td><td style={TDS}>{fc(e.ratePerUnit)}</td><td style={{ ...TDS, fontWeight: 700, color: C.red }}>{fc(e.totalAmount)}</td><td style={TDS}><Badge label={e.settleMode === "cash" ? "Cash" : e.settleMode === "debtor" ? "Debtor" : "Journal"} color={e.settleMode === "cash" ? C.green : C.violet} /></td><td style={TDS}>{e.isReturn ? "—" : isPaid ? <Badge label="Paid" color={C.green} /> : <span style={{ color: C.amber, fontSize: 10, fontWeight: 700 }}>{e.billNo ? "Due: " + fc(billPending) : "Pending"}</span>}</td></tr>;
+                                            })}</tbody>
                                         </table></div>
                                     )}
                                 </div>
 
                                 {relatedCash.length > 0 && <div style={{ background: C.mid, borderRadius: 14, padding: 16, border: "1px solid " + C.border }}>
                                     <div style={{ fontSize: 12, fontWeight: 800, color: C.green, marginBottom: 10 }}>💵 Payments Received ({relatedCash.length})</div>
-                                    <table style={TBL}><thead><tr>{["Date","Description","Amount"].map(h => <th key={h} style={THS}>{h}</th>)}</tr></thead>
-                                        <tbody>{relatedCash.map(e => <tr key={e.id}><td style={TDS}>{e.date}</td><td style={TDS}>{e.description}</td><td style={{ ...TDS, fontWeight: 700, color: C.green }}>{fc(e.amount)}</td></tr>)}</tbody>
+                                    <table style={TBL}><thead><tr>{["Date","Bill No","Description","Amount"].map(h => <th key={h} style={THS}>{h}</th>)}</tr></thead>
+                                        <tbody>{relatedCash.map(e => <tr key={e.id}><td style={TDS}>{e.date}</td><td style={{ ...TDS, fontWeight: 700, color: C.teal }}>{e.billNo || "—"}</td><td style={TDS}>{e.description}</td><td style={{ ...TDS, fontWeight: 700, color: C.green }}>{fc(e.amount)}</td></tr>)}</tbody>
                                     </table>
                                 </div>}
                             </div>;
@@ -1003,8 +1021,8 @@
                         const enrichedClients = clients.map(cl => {
                             const allO = so.filter(e => e.clientId === cl.id && (clGodownF === "All" || e.godown === clGodownF));
                             const catO = clCatView === "all" ? allO : allO.filter(e => e.category === clCatView);
-                            const tQty = catO.reduce((a,b) => a + Number(b.qty), 0);
-                            const tAmt = catO.reduce((a,b) => a + Number(b.totalAmount), 0);
+                            const tQty = catO.reduce((a,b) => a + Number(b.qty) * (b.isReturn ? -1 : 1), 0);
+                            const tAmt = catO.reduce((a,b) => a + Number(b.totalAmount) * (b.isReturn ? -1 : 1), 0);
                             const avgO = catO.length > 0 ? tAmt / catO.length : 0;
                             const lastDate = catO.length > 0 ? catO.sort((a,b) => new Date(b.date) - new Date(a.date))[0].date : "";
                             return { ...cl, allO, catO, tQty, tAmt, avgO, lastDate };
@@ -1013,8 +1031,8 @@
                         const totalClientRevenue = enrichedClients.reduce((a,c) => a + c.tAmt, 0);
                         const retailerCount = clients.filter(c => c.type === "Retailer").length;
                         const distributorCount = clients.filter(c => c.type === "Distributor").length;
-                        const normalRevenue = so.filter(e => e.clientId && e.category === "normal").reduce((a,b) => a + Number(b.totalAmount), 0);
-                        const customRevenue = so.filter(e => e.clientId && e.category === "customized").reduce((a,b) => a + Number(b.totalAmount), 0);
+                        const normalRevenue = so.filter(e => e.clientId && e.category === "normal").reduce((a,b) => a + Number(b.totalAmount) * (b.isReturn ? -1 : 1), 0);
+                        const customRevenue = so.filter(e => e.clientId && e.category === "customized").reduce((a,b) => a + Number(b.totalAmount) * (b.isReturn ? -1 : 1), 0);
 
                         const filtered = enrichedClients.filter(cl => {
                             if (clTypeF !== "All" && cl.type !== clTypeF) return false;
@@ -1248,6 +1266,7 @@
                         {modal === "stockIn" && <div>
                             <div style={{ fontWeight: 800, fontSize: 15, color: C.green, marginBottom: 12 }}>📥 Stock In</div>
                             <DateInput value={form.date} onChange={v => setForm(f => ({ ...f, date: v }))} />
+                            <select style={INP} value={form.isReturn || "false"} onChange={e => setForm(f => ({ ...f, isReturn: e.target.value }))}><option value="false">Entry Type: Normal</option><option value="true">Entry Type: Purchase Return</option></select>
                             <select style={INP} value={form.godown || ""} onChange={e => setForm(f => ({ ...f, godown: e.target.value }))}><option value="">Godown *</option>{GODOWNS.map(g => <option key={g}>{g}</option>)}</select>
                             <select style={INP} value={form.bottleType || ""} onChange={e => setForm(f => ({ ...f, bottleType: e.target.value }))}><option value="">Bottle Type *</option>{BOTTLE_TYPES.map(b => <option key={b}>{b}</option>)}</select>
                             <select style={INP} value={form.category || ""} onChange={e => setForm(f => ({ ...f, category: e.target.value }))}><option value="">Category *</option><option>normal</option><option>customized</option></select>
@@ -1262,9 +1281,11 @@
                         {modal === "stockOut" && <div>
                             <div style={{ fontWeight: 800, fontSize: 15, color: C.red, marginBottom: 12 }}>📤 Stock Out</div>
                             <DateInput value={form.date} onChange={v => setForm(f => ({ ...f, date: v }))} />
+                            <select style={INP} value={form.isReturn || "false"} onChange={e => setForm(f => ({ ...f, isReturn: e.target.value }))}><option value="false">Entry Type: Normal</option><option value="true">Entry Type: Sales Return</option></select>
                             <select style={INP} value={form.godown || ""} onChange={e => setForm(f => ({ ...f, godown: e.target.value }))}><option value="">Godown *</option>{GODOWNS.map(g => <option key={g}>{g}</option>)}</select>
                             <select style={INP} value={form.bottleType || ""} onChange={e => setForm(f => ({ ...f, bottleType: e.target.value }))}><option value="">Bottle Type *</option>{BOTTLE_TYPES.map(b => <option key={b}>{b}</option>)}</select>
                             <select style={INP} value={form.category || ""} onChange={e => setForm(f => ({ ...f, category: e.target.value }))}><option value="">Category *</option><option>normal</option><option>customized</option></select>
+                            <input style={INP} placeholder="Bill No. (Optional)" value={form.billNo || ""} onChange={e => setForm(f => ({ ...f, billNo: e.target.value }))} />
                             <input type="number" style={INP} placeholder="Qty *" value={form.qty || ""} onChange={e => setForm(f => ({ ...f, qty: e.target.value }))} />
                             <input type="number" style={INP} placeholder="Sale Rate/Unit (₹) *" value={form.ratePerUnit || ""} onChange={e => setForm(f => ({ ...f, ratePerUnit: e.target.value }))} />
                             {form.qty && form.ratePerUnit && <div style={{ background: C.mid, border: "1.5px solid #6366f1", borderRadius: 7, padding: "7px 11px", marginBottom: 9, display: "flex", justifyContent: "space-between" }}><span style={{ color: C.muted, fontSize: 12 }}>Total</span><span style={{ color: C.purple, fontWeight: 800, fontSize: 15 }}>{fc(Number(form.qty) * Number(form.ratePerUnit))}</span></div>}
@@ -1356,6 +1377,7 @@
                             {form.dir === "in" && form.payType === "Debtor Payment" && <select style={INP} value={form.linkedId || ""} onChange={e => { const d = debs.find(x => x.id === e.target.value); setForm(f => ({ ...f, linkedId: e.target.value, description: "Receipt from " + (d ? d.name : ""), amount: d ? String(debtorBal(d)) : f.amount })); }}>
                                 <option value="">Select Debtor</option>{debs.filter(d => !d.checked).map(d => <option key={d.id} value={d.id}>{d.name} — {fc(debtorBal(d))}</option>)}
                             </select>}
+                            {form.dir === "in" && form.payType === "Debtor Payment" && <input style={INP} placeholder="Bill No. (Optional)" value={form.billNo || ""} onChange={e => setForm(f => ({ ...f, billNo: e.target.value }))} />}
                             {form.dir === "out" && form.payType === "Creditor Payment" && <select style={INP} value={form.linkedId || ""} onChange={e => { const c = creds.find(x => x.id === e.target.value); setForm(f => ({ ...f, linkedId: e.target.value, description: "Payment to " + (c ? c.name : ""), amount: c ? String(creditorBal(c)) : f.amount })); }}>
                                 <option value="">Select Creditor</option>{creds.filter(c => !c.checked).map(c => <option key={c.id} value={c.id}>{c.name} — {fc(creditorBal(c))}</option>)}
                             </select>}
