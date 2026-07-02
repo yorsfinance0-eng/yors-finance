@@ -305,7 +305,10 @@
             const [tab, setTab] = useState("Dashboard");
             const [modal, setModal] = useState(null);
             const [form, setForm] = useState({});
-            const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All", dateFrom: "", dateTo: "", status: "All", search: "" });
+            const [filterGodown, setFilterGodown] = useState("");
+const [filterBottleType, setFilterBottleType] = useState("");
+const [filterReturn, setFilterReturn] = useState(null); // true, false, or null for all
+const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All", dateFrom: "", dateTo: "", status: "All", search: "" });
             const [selectedClient, setSelectedClient] = useState(null);
             const [clSearch, setClSearch] = useState("");
             const [partyGodownF, setPartyGodownF] = useState("All");
@@ -470,7 +473,7 @@
                 upd(p => {
                     let np = { ...p, stockIn: [...p.stockIn, { id, date, godown, bottleType, category, batchNo, qty: Number(qty), ratePerUnit: Number(ratePerUnit), totalAmount: total, settleMode: form.settleMode, linkedPartyId: res.partyId, linkedPartyName: res.partyName, createdCreditorId: res.createdCreditorId, isReturn: isReturn === "true" }] };
                     if (res.createdCreditorId) np.creditors = [...np.creditors, { id: res.createdCreditorId, name: form.newPartyName, date, amount: 0, creditPeriod: form.newPartyCredit || "", notified: false, checked: false }];
-                    res.cashEffects.forEach(e => { np.cashEntries = [...np.cashEntries, { ...e, payType: isReturn === "true" ? "Other Income Receipt" : "Stock Purchase Payment" }]; }); return np;
+                res.cashEffects.forEach(e => { np.cashEntries = [...np.cashEntries, { ...e, payType: isReturn === "true" ? "Other Income Receipt" : "Stock Purchase Payment" }]; }); return np;
                 }); closeM();
             };
             const applyStockOut = () => {
@@ -481,19 +484,26 @@
                     const total = Number(qty) * Number(ratePerUnit), id = gid();
                     const cl = (state.clients || []).find(c => c.id === form.returnClientId);
                     const clientId = form.returnClientId, clientName = cl ? cl.name : "";
-                    // Find debtor: first by clientId link, then by name match
                     const linkedDeb = (state.debtors || []).find(d => d.clientId === clientId)
                         || (clientName ? (state.debtors || []).find(d => d.name.trim().toLowerCase() === clientName.trim().toLowerCase()) : null);
                     const linkedPartyId = linkedDeb ? linkedDeb.id : null;
                     const linkedPartyName = linkedDeb ? linkedDeb.name : clientName;
                     upd(p => {
                         let np = { ...p, stockOut: [...p.stockOut, { id, date, godown, bottleType, category, qty: Number(qty), ratePerUnit: Number(ratePerUnit), totalAmount: total, settleMode: linkedDeb ? "debtor" : "journal", linkedPartyId, linkedPartyName, clientId, clientName, billNo: form.billNo, isReturn: true }] };
-                        // If debtor was matched by name but has no clientId yet, stamp it so future returns auto-link
                         if (linkedDeb && !linkedDeb.clientId) {
                             np.debtors = np.debtors.map(d => d.id === linkedDeb.id ? { ...d, clientId } : d);
                         }
                         return np;
-                    }); closeM(); return;
+                    });
+                    closeM();
+                    return;
+                }
+                const fifo = computeFIFO(si, so);
+                const inv = fifo[bottleType + "_" + category] || { batches: [] };
+                const availableStock = inv.batches.filter(b => b.godown === godown).reduce((a, b) => a + b.remQty, 0);
+                if (availableStock <= 0) {
+                    alert("No stock available in selected godown – operation not allowed.");
+                    return;
                 }
                 if (!date || !godown || !bottleType || !category || !qty || !ratePerUnit || !form.settleMode) { alert("Fill all fields & select receipt mode"); return; }
                 if (form.linkClient === "yes" && !form.clientId) { alert("Please select or create a client"); return; }
@@ -595,7 +605,9 @@
                         </div>
                         <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 10 }}>
                             {GODOWNS.map(g => {
-                                const inQ = si.filter(x => x.godown === g).reduce((a, b) => a + Number(b.qty), 0), outQ = so.filter(x => x.godown === g).reduce((a, b) => a + Number(b.qty), 0); return (
+                                const inQ = si.filter(x => x.godown === g && !x.isReturn).reduce((a, b) => a + Number(b.qty), 0) + so.filter(x => x.godown === g && x.isReturn).reduce((a, b) => a + Number(b.qty), 0);
+                                const outQ = so.filter(x => x.godown === g && !x.isReturn).reduce((a, b) => a + Number(b.qty), 0) + si.filter(x => x.godown === g && x.isReturn).reduce((a, b) => a + Number(b.qty), 0);
+                                return (
                                     <div key={g} style={{ background: C.mid, borderRadius: 11, padding: 12, borderTop: "3px solid #7c3aed" }}>
                                         <div style={{ fontWeight: 800, color: "#c4b5fd", marginBottom: 6, fontSize: 12 }}>🏭 {g}</div>
                                         {[["In", inQ, C.green], ["Out", outQ, C.red], ["Bal", inQ - outQ, C.text]].map(([l, v, c]) => (
@@ -756,10 +768,35 @@
                             <div style={{ fontSize: 16, fontWeight: 800, color: C.green }}>📥 Stock In</div>
                             <button style={BTNP()} onClick={() => openM("stockIn")}>+ Add Stock In</button>
                         </div>
+                        {/* Filter Bar */}
+                        <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+                            <select style={INP} value={filterGodown} onChange={e => setFilterGodown(e.target.value)}>
+                                <option value="">All Godowns</option>
+                                {GODOWNS.map(g => <option key={g} value={g}>{g}</option>)}
+                            </select>
+                            <select style={INP} value={filterBottleType} onChange={e => setFilterBottleType(e.target.value)}>
+                                <option value="">All Bottle Types</option>
+                                {BOTTLE_TYPES.map(bt => <option key={bt} value={bt}>{bt}</option>)}
+                            </select>
+                            <select style={INP} value={filterReturn===null?"":filterReturn?"true":"false"} onChange={e => {
+                                const v = e.target.value;
+                                setFilterReturn(v === '' ? null : v === 'true');
+                            }}>
+                                <option value="">All</option>
+                                <option value="true">Return</option>
+                                <option value="false">Normal</option>
+                            </select>
+                        </div>
                         <div style={{ background: C.mid, borderRadius: 12, overflowX: "auto" }}>
                             <table style={TBL}><thead><tr>{["Batch", "Type", "Date", "Godown", "Bottle", "Cat", "Qty", "Rate", "Total", "Mode", "Party", "Del"].map(h => <th key={h} style={THS}>{h}</th>)}</tr></thead>
                                 <tbody>{!si.length && <tr><td colSpan={12} style={{ ...TDS, textAlign: "center", color: C.muted }}>No entries</td></tr>}
-                                    {si.map(e => <tr key={e.id}><td style={TDS}><span style={{ fontFamily: "monospace", color: "#818cf8", fontSize: 10 }}>{e.batchNo}</span></td><td style={TDS}><Badge label={e.isReturn ? "Return" : "Normal"} color={e.isReturn ? C.amber : C.teal} /></td><td style={TDS}>{e.date}</td><td style={TDS}><Badge label={e.godown} color="#7c3aed" /></td><td style={TDS}><Badge label={e.bottleType} color="#6366f1" /></td><td style={TDS}><Badge label={e.category} color={e.category === "normal" ? "#0ea5e9" : C.amber} /></td><td style={{ ...TDS, fontWeight: 700 }}>{e.qty}</td><td style={TDS}>{fc(e.ratePerUnit)}</td><td style={{ ...TDS, fontWeight: 800, color: C.green }}>{fc(e.totalAmount)}</td><td style={TDS}><Badge label={e.settleMode === "cash" ? "Cash" : e.settleMode === "creditor" ? "Creditor" : "Journal"} color={e.settleMode === "cash" ? C.green : C.amber} /></td><td style={TDS}>{e.linkedPartyName || "—"}</td><td style={TDS}><button style={BTND} onClick={() => cascadeDelete("stockIn", e.id)}>Del</button></td></tr>)}
+                                    {
+                                        si.filter(i => (
+                                            (filterGodown === '' || i.godown === filterGodown) &&
+                                            (filterBottleType === '' || i.bottleType === filterBottleType) &&
+                                            (filterReturn === null || i.isReturn === filterReturn)
+                                        )).map(e => <tr key={e.id}><td style={TDS}><span style={{ fontFamily: "monospace", color: "#818cf8", fontSize: 10 }}>{e.batchNo}</span></td><td style={TDS}><Badge label={e.isReturn ? "Return" : "Normal"} color={e.isReturn ? C.amber : C.teal} /></td><td style={TDS}>{e.date}</td><td style={TDS}><Badge label={e.godown} color="#7c3aed" /></td><td style={TDS}><Badge label={e.bottleType} color="#6366f1" /></td><td style={TDS}><Badge label={e.category} color={e.category === "normal" ? "#0ea5e9" : C.amber} /></td><td style={{ ...TDS, fontWeight: 700 }}>{e.qty}</td><td style={TDS}>{fc(e.ratePerUnit)}</td><td style={{ ...TDS, fontWeight: 800, color: C.green }}>{fc(e.totalAmount)}</td><td style={TDS}><Badge label={e.settleMode === "cash" ? "Cash" : e.settleMode === "creditor" ? "Creditor" : "Journal"} color={e.settleMode === "cash" ? C.green : C.amber} /></td><td style={TDS}>{e.linkedPartyName || "—"}</td><td style={TDS}><button style={BTND} onClick={() => cascadeDelete("stockIn", e.id)}>Del</button></td></tr>)
+                                    }
                                 </tbody>
                             </table>
                         </div>
@@ -770,10 +807,35 @@
                             <div style={{ fontSize: 16, fontWeight: 800, color: C.red }}>📤 Stock Out</div>
                             <button style={BTNP()} onClick={() => openM("stockOut")}>+ Add Stock Out</button>
                         </div>
+                        {/* Filter Bar */}
+                        <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+                            <select style={INP} value={filterGodown} onChange={e => setFilterGodown(e.target.value)}>
+                                <option value="">All Godowns</option>
+                                {GODOWNS.map(g => <option key={g} value={g}>{g}</option>)}
+                            </select>
+                            <select style={INP} value={filterBottleType} onChange={e => setFilterBottleType(e.target.value)}>
+                                <option value="">All Bottle Types</option>
+                                {BOTTLE_TYPES.map(bt => <option key={bt} value={bt}>{bt}</option>)}
+                            </select>
+                            <select style={INP} value={filterReturn===null?"":filterReturn?"true":"false"} onChange={e => {
+                                const v = e.target.value;
+                                setFilterReturn(v === '' ? null : v === 'true');
+                            }}>
+                                <option value="">All</option>
+                                <option value="true">Return</option>
+                                <option value="false">Normal</option>
+                            </select>
+                        </div>
                         <div style={{ background: C.mid, borderRadius: 12, overflowX: "auto" }}>
                             <table style={TBL}><thead><tr>{["Date", "Type", "Godown", "Bottle", "Cat", "Qty", "Rate", "Total", "Mode", "Party", "Client", "Del"].map(h => <th key={h} style={THS}>{h}</th>)}</tr></thead>
                                 <tbody>{!so.length && <tr><td colSpan={12} style={{ ...TDS, textAlign: "center", color: C.muted }}>No entries</td></tr>}
-                                    {so.map(e => { const cName = e.clientName || (e.clientId ? (clients.find(c => c.id === e.clientId) || {}).name : ""); return <tr key={e.id}><td style={TDS}>{e.date}</td><td style={TDS}><Badge label={e.isReturn ? "Return" : "Normal"} color={e.isReturn ? C.amber : C.teal} /></td><td style={TDS}><Badge label={e.godown} color="#7c3aed" /></td><td style={TDS}><Badge label={e.bottleType} color="#6366f1" /></td><td style={TDS}><Badge label={e.category} color={e.category === "normal" ? "#0ea5e9" : C.amber} /></td><td style={{ ...TDS, fontWeight: 700 }}>{e.qty}</td><td style={TDS}>{fc(e.ratePerUnit)}</td><td style={{ ...TDS, fontWeight: 800, color: C.red }}>{fc(e.totalAmount)}</td><td style={TDS}><Badge label={e.settleMode === "cash" ? "Cash" : e.settleMode === "debtor" ? "Debtor" : "Journal"} color={e.settleMode === "cash" ? C.green : C.violet} /></td><td style={TDS}>{e.linkedPartyName || "—"}</td><td style={TDS}>{cName ? <span style={{ color: C.teal, cursor: "pointer", fontWeight: 600 }} onClick={() => { setSelectedClient(e.clientId); setTab("Clients"); }}>{cName}</span> : "—"}</td><td style={TDS}><button style={BTND} onClick={() => cascadeDelete("stockOut", e.id)}>Del</button></td></tr>; })}
+                                    {
+                                        so.filter(i => (
+                                            (filterGodown === '' || i.godown === filterGodown) &&
+                                            (filterBottleType === '' || i.bottleType === filterBottleType) &&
+                                            (filterReturn === null || i.isReturn === filterReturn)
+                                        )).map(e => { const cName = e.clientName || (e.clientId ? (clients.find(c => c.id === e.clientId) || {}).name : ""); return <tr key={e.id}><td style={TDS}>{e.date}</td><td style={TDS}><Badge label={e.isReturn ? "Return" : "Normal"} color={e.isReturn ? C.amber : C.teal} /></td><td style={TDS}><Badge label={e.godown} color="#7c3aed" /></td><td style={TDS}><Badge label={e.bottleType} color="#6366f1" /></td><td style={TDS}><Badge label={e.category} color={e.category === "normal" ? "#0ea5e9" : C.amber} /></td><td style={{ ...TDS, fontWeight: 700 }}>{e.qty}</td><td style={TDS}>{fc(e.ratePerUnit)}</td><td style={{ ...TDS, fontWeight: 800, color: C.red }}>{fc(e.totalAmount)}</td><td style={TDS}><Badge label={e.settleMode === "cash" ? "Cash" : e.settleMode === "debtor" ? "Debtor" : "Journal"} color={e.settleMode === "cash" ? C.green : C.violet} /></td><td style={TDS}>{e.linkedPartyName || "—"}</td><td style={TDS}>{cName ? <span style={{ color: C.teal, cursor: "pointer", fontWeight: 600 }} onClick={() => { setSelectedClient(e.clientId); setTab("Clients"); }}>{cName}</span> : "—"}</td><td style={TDS}><button style={BTND} onClick={() => cascadeDelete("stockOut", e.id)}>Del</button></td></tr>; })
+                                    }
                                 </tbody>
                             </table>
                         </div>
@@ -959,8 +1021,8 @@
                             const allOrders = so.filter(e => e.clientId === cl.id && (clGodownF === "All" || e.godown === clGodownF)).sort((a,b) => new Date(b.date) - new Date(a.date));
                             const clOrders = clDetailCat === "all" ? allOrders : allOrders.filter(e => e.category === clDetailCat);
 
-                            const totalQty = clOrders.reduce((a,b) => a + Number(b.qty), 0);
-                            const totalAmt = clOrders.reduce((a,b) => a + Number(b.totalAmount), 0);
+                            const totalQty = clOrders.reduce((a,b) => a + Number(b.qty) * (b.isReturn ? -1 : 1), 0);
+                            const totalAmt = clOrders.reduce((a,b) => a + Number(b.totalAmount) * (b.isReturn ? -1 : 1), 0);
                             const avgOrder = clOrders.length > 0 ? totalAmt / clOrders.length : 0;
                             const linkedDebtors = debs.filter(d => d.clientId === cl.id);
                             const outstandingBal = linkedDebtors.reduce((a,d) => a + debtorBal(d), 0);
@@ -969,13 +1031,13 @@
                             const clSalesReturns = clOrders.filter(e => e.isReturn);
 
                             const monthMap = {};
-                            clOrders.forEach(e => { const d = new Date(e.date), k = d.getFullYear() + "-" + String(d.getMonth()+1).padStart(2,"0"); monthMap[k] = (monthMap[k] || { amt: 0, qty: 0 }); monthMap[k].amt += Number(e.totalAmount); monthMap[k].qty += Number(e.qty); });
+                            clOrders.forEach(e => { const d = new Date(e.date), k = d.getFullYear() + "-" + String(d.getMonth()+1).padStart(2,"0"); monthMap[k] = (monthMap[k] || { amt: 0, qty: 0 }); const mult = e.isReturn ? -1 : 1; monthMap[k].amt += Number(e.totalAmount) * mult; monthMap[k].qty += Number(e.qty) * mult; });
                             const monthKeys = Object.keys(monthMap).sort();
                             const monthAmtData = monthKeys.map(k => ({ l: MONTH_NAMES[Number(k.split("-")[1])-1] + " " + k.split("-")[0].slice(2), v: monthMap[k].amt }));
                             const monthQtyData = monthKeys.map(k => ({ l: MONTH_NAMES[Number(k.split("-")[1])-1] + " " + k.split("-")[0].slice(2), v: monthMap[k].qty }));
 
                             const productMap = {};
-                            clOrders.forEach(e => { const k = e.bottleType; if (!productMap[k]) productMap[k] = { qty: 0, amt: 0, count: 0, rates: [] }; productMap[k].qty += Number(e.qty); productMap[k].amt += Number(e.totalAmount); productMap[k].count++; productMap[k].rates.push(Number(e.ratePerUnit)); });
+                            clOrders.forEach(e => { const k = e.bottleType; if (!productMap[k]) productMap[k] = { qty: 0, amt: 0, count: 0, rates: [] }; const mult = e.isReturn ? -1 : 1; productMap[k].qty += Number(e.qty) * mult; productMap[k].amt += Number(e.totalAmount) * mult; if(!e.isReturn) { productMap[k].count++; productMap[k].rates.push(Number(e.ratePerUnit)); } });
 
                             const catColors = { all: C.purple, normal: C.teal, customized: C.amber };
                             const catLabel = { all: "All Orders", normal: "🏷 Normal", customized: "✨ Customized" };
