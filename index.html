@@ -84,8 +84,8 @@
         const GODOWNS = ["Hazra", "Dunlop", "Bhawanipur", "Alipore", "Gariahat"];
         const TABS = ["Dashboard", "Inventory", "Stock In", "Stock Out", "Debtors", "Creditors", "Clients", "Cash Book", "Trading A/C", "P&L Account", "Balance Sheet", "Depreciation", "Charts"];
         const CLIENT_TYPES = ["Retailer", "Distributor"];
-        const CASH_IN_TYPES = ["Sales Receipt", "Debtor Payment", "Capital Introduced", "Loan Received", "Other Income Receipt"];
-        const CASH_OUT_TYPES = ["Expense Payment", "Creditor Payment", "Stock Purchase Payment", "Loan Repayment", "Other Payment"];
+        const CASH_IN_TYPES = ["Sales Receipt", "Debtor Payment", "Capital Introduced", "Loan Received", "Purchase Return Receipt", "Other Income Receipt"];
+        const CASH_OUT_TYPES = ["Expense Payment", "Creditor Payment", "Stock Purchase Payment", "Loan Repayment", "Sales Return Refund", "Other Payment"];
         const PL_CATS = { income: ["Other Income", "Finance Income"], expenses: ["Employee Benefit Expense", "Finance Costs", "Other Expenses", "Admin Expenses"] };
         const SCHEDULE3 = {
             assets: { "Non-Current Assets": ["Fixed Assets", "Capital Work in Progress", "Long Term Investments", "Deferred Tax Assets"], "Current Assets": ["Inventories", "Trade Receivables", "Cash and Cash Equivalents", "Short Term Loans", "Other Current Assets"] },
@@ -319,6 +319,7 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
             const [clCatView, setClCatView] = useState("normal");
             const [clDetailCat, setClDetailCat] = useState("all");
             const [expandedDebtor, setExpandedDebtor] = useState(null);
+            const [expandedCreditor, setExpandedCreditor] = useState(null);
             const toggleSort = (col) => { if (clSort === col) setClSortDir(d => d * -1); else { setClSort(col); setClSortDir(1); } };
             const sortArrow = (col) => clSort === col ? (clSortDir === 1 ? " ▲" : " ▼") : "";
 
@@ -329,6 +330,10 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
 
             const totalPurchases = si.reduce((a, b) => a + Number(b.totalAmount) * (b.isReturn ? -1 : 1), 0);
             const totalSales = so.reduce((a, b) => a + Number(b.totalAmount) * (b.isReturn ? -1 : 1), 0);
+            const grossPurchases = si.filter(x => !x.isReturn).reduce((a, b) => a + Number(b.totalAmount), 0);
+            const purchaseReturnsAmt = si.filter(x => x.isReturn).reduce((a, b) => a + Number(b.totalAmount), 0);
+            const grossSales = so.filter(x => !x.isReturn).reduce((a, b) => a + Number(b.totalAmount), 0);
+            const salesReturnsAmt = so.filter(x => x.isReturn).reduce((a, b) => a + Number(b.totalAmount), 0);
             const fifoCOGS = Object.values(fifo).reduce((a, b) => a + b.cogs, 0);
             const fifoClosing = Object.values(fifo).reduce((a, b) => a + b.closingValue, 0);
             const openingStockAmt = Number(state.openingStock?.amount || 0);
@@ -466,14 +471,33 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
 
             const applyStockIn = () => {
                 const { date, godown, bottleType, category, batchNo, qty, ratePerUnit, isReturn } = form;
+                if (isReturn === "true") {
+                    if (!date || !godown || !bottleType || !category || !batchNo || !qty || !ratePerUnit) { alert("Fill all fields"); return; }
+                    if (!form.returnCreditorId) { alert("Select a creditor for the return"); return; }
+                    if (!form.returnSettleMode) { alert("Select a return settlement mode"); return; }
+                    const total = Number(qty) * Number(ratePerUnit), id = gid();
+                    const cred = (state.creditors || []).find(c => c.id === form.returnCreditorId);
+                    const settleMode = form.returnSettleMode;
+                    const linkedPartyId = settleMode === "creditor" && cred ? cred.id : null;
+                    const linkedPartyName = settleMode === "creditor" && cred ? cred.name : (cred ? cred.name : "");
+                    upd(p => {
+                        let np = { ...p, stockIn: [...p.stockIn, { id, date, godown, bottleType, category, batchNo, qty: Number(qty), ratePerUnit: Number(ratePerUnit), totalAmount: total, settleMode, linkedPartyId, linkedPartyName, isReturn: true }] };
+                        if (settleMode === "cash") {
+                            np.cashEntries = [...np.cashEntries, { id: gid(), dir: "in", payType: "Purchase Return Receipt", description: `Purchase Return Receipt: ${bottleType} (${category}) — Batch ${batchNo}${cred ? " | Creditor: " + cred.name : ""}`, amount: total, date, sourceId: id, linkedId: null }];
+                        }
+                        return np;
+                    });
+                    closeM();
+                    return;
+                }
                 if (!date || !godown || !bottleType || !category || !batchNo || !qty || !ratePerUnit || !form.settleMode) { alert("Fill all fields & select payment mode"); return; }
                 const total = Number(qty) * Number(ratePerUnit), id = gid();
-                const direction = isReturn === "true" ? "in" : "out";
-                const res = resolveSettle(form, total, date, (isReturn === "true" ? "Purchase Return: " : "Stock In: ") + bottleType + " Batch " + batchNo, id, direction);
+                const direction = "out";
+                const res = resolveSettle(form, total, date, "Stock In: " + bottleType + " Batch " + batchNo, id, direction);
                 upd(p => {
-                    let np = { ...p, stockIn: [...p.stockIn, { id, date, godown, bottleType, category, batchNo, qty: Number(qty), ratePerUnit: Number(ratePerUnit), totalAmount: total, settleMode: form.settleMode, linkedPartyId: res.partyId, linkedPartyName: res.partyName, createdCreditorId: res.createdCreditorId, isReturn: isReturn === "true" }] };
+                    let np = { ...p, stockIn: [...p.stockIn, { id, date, godown, bottleType, category, batchNo, qty: Number(qty), ratePerUnit: Number(ratePerUnit), totalAmount: total, settleMode: form.settleMode, linkedPartyId: res.partyId, linkedPartyName: res.partyName, createdCreditorId: res.createdCreditorId, isReturn: false }] };
                     if (res.createdCreditorId) np.creditors = [...np.creditors, { id: res.createdCreditorId, name: form.newPartyName, date, amount: 0, creditPeriod: form.newPartyCredit || "", notified: false, checked: false }];
-                res.cashEffects.forEach(e => { np.cashEntries = [...np.cashEntries, { ...e, payType: isReturn === "true" ? "Other Income Receipt" : "Stock Purchase Payment" }]; }); return np;
+                    res.cashEffects.forEach(e => { np.cashEntries = [...np.cashEntries, { ...e, payType: "Stock Purchase Payment" }]; }); return np;
                 }); closeM();
             };
             const applyStockOut = () => {
@@ -481,17 +505,22 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
                 if (isReturn === "true") {
                     if (!date || !godown || !bottleType || !category || !qty || !ratePerUnit) { alert("Fill all fields"); return; }
                     if (!form.returnClientId) { alert("Select a client for the return"); return; }
+                    if (!form.returnSettleMode) { alert("Select a return settlement mode"); return; }
                     const total = Number(qty) * Number(ratePerUnit), id = gid();
                     const cl = (state.clients || []).find(c => c.id === form.returnClientId);
                     const clientId = form.returnClientId, clientName = cl ? cl.name : "";
                     const linkedDeb = (state.debtors || []).find(d => d.clientId === clientId)
                         || (clientName ? (state.debtors || []).find(d => d.name.trim().toLowerCase() === clientName.trim().toLowerCase()) : null);
-                    const linkedPartyId = linkedDeb ? linkedDeb.id : null;
-                    const linkedPartyName = linkedDeb ? linkedDeb.name : clientName;
+                    const settleMode = form.returnSettleMode;
+                    const linkedPartyId = settleMode === "debtor" && linkedDeb ? linkedDeb.id : null;
+                    const linkedPartyName = settleMode === "debtor" && linkedDeb ? linkedDeb.name : clientName;
                     upd(p => {
-                        let np = { ...p, stockOut: [...p.stockOut, { id, date, godown, bottleType, category, qty: Number(qty), ratePerUnit: Number(ratePerUnit), totalAmount: total, settleMode: linkedDeb ? "debtor" : "journal", linkedPartyId, linkedPartyName, clientId, clientName, billNo: form.billNo, isReturn: true }] };
-                        if (linkedDeb && !linkedDeb.clientId) {
+                        let np = { ...p, stockOut: [...p.stockOut, { id, date, godown, bottleType, category, qty: Number(qty), ratePerUnit: Number(ratePerUnit), totalAmount: total, settleMode, linkedPartyId, linkedPartyName, clientId, clientName, billNo: form.billNo, isReturn: true }] };
+                        if (settleMode === "debtor" && linkedDeb && !linkedDeb.clientId) {
                             np.debtors = np.debtors.map(d => d.id === linkedDeb.id ? { ...d, clientId } : d);
+                        }
+                        if (settleMode === "cash") {
+                            np.cashEntries = [...np.cashEntries, { id: gid(), dir: "out", payType: "Sales Return Refund", description: `Sales Return Refund: ${bottleType} (${category}) — ${clientName}${form.billNo ? " | Bill: " + form.billNo : ""}`, amount: total, date, sourceId: id, linkedId: null }];
                         }
                         return np;
                     });
@@ -595,7 +624,7 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
                     {tab === "Dashboard" && <div>
                         <div style={{ fontSize: 16, fontWeight: 800, marginBottom: 14, color: C.purple }}>📊 Dashboard</div>
                         <div style={{ display: "flex", gap: 9, flexWrap: "wrap", marginBottom: 18 }}>
-                            {[["Purchases", fc(totalPurchases), "#6366f1,#8b5cf6"], ["Sales", fc(totalSales), "#0ea5e9,#0284c7"], ["Gross P&L", fabs(grossProfit) + (grossProfit >= 0 ? "▲" : "▼"), grossProfit >= 0 ? "#22c55e,#16a34a" : "#ef4444,#dc2626"], ["COGS", fc(fifoCOGS), "#f59e0b,#d97706"], ["Closing Stock", fc(fifoClosing), "#8b5cf6,#7c3aed"], ["Cash", fc(cashBal), cashBal >= 0 ? "#0891b2,#0ea5e9" : "#b45309,#d97706"], ["Creditors", fc(totalCreditors), "#f59e0b,#d97706"], ["Debtors", fc(totalDebtors), "#8b5cf6,#7c3aed"], ["Depreciation", fc(totalDepreciation), "#64748b,#475569"], ["Net P&L", fabs(netPL) + (netPL >= 0 ? "▲" : "▼"), netPL >= 0 ? "#16a34a,#15803d" : "#dc2626,#b91c1c"]].map(([l, v, g]) => (
+                            {[["Purchases (Net)", fc(totalPurchases), "#6366f1,#8b5cf6"], ["Purch. Returns", fc(purchaseReturnsAmt), "#f59e0b,#b45309"], ["Sales (Net)", fc(totalSales), "#0ea5e9,#0284c7"], ["Sales Returns", fc(salesReturnsAmt), "#ef4444,#b91c1c"], ["Gross P&L", fabs(grossProfit) + (grossProfit >= 0 ? "▲" : "▼"), grossProfit >= 0 ? "#22c55e,#16a34a" : "#ef4444,#dc2626"], ["COGS", fc(fifoCOGS), "#f59e0b,#d97706"], ["Closing Stock", fc(fifoClosing), "#8b5cf6,#7c3aed"], ["Cash", fc(cashBal), cashBal >= 0 ? "#0891b2,#0ea5e9" : "#b45309,#d97706"], ["Creditors", fc(totalCreditors), "#f59e0b,#d97706"], ["Debtors", fc(totalDebtors), "#8b5cf6,#7c3aed"], ["Depreciation", fc(totalDepreciation), "#64748b,#475569"], ["Net P&L", fabs(netPL) + (netPL >= 0 ? "▲" : "▼"), netPL >= 0 ? "#16a34a,#15803d" : "#dc2626,#b91c1c"]].map(([l, v, g]) => (
                                 <div key={l} style={CARD(g)}><div style={{ fontSize: 9, opacity: .85 }}>{l}</div><div style={{ fontSize: 13, fontWeight: 900 }}>{v}</div></div>
                             ))}
                         </div>
@@ -628,21 +657,23 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
                             </div>
                         </div>
                         <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
-                            {[["Opening Stock", fc(openingStockAmt), "#64748b,#475569"], ["Purchases", fc(totalPurchases), "#6366f1,#8b5cf6"], ["Sales", fc(totalSales), "#22c55e,#16a34a"], ["Closing Stock", fc(fifoClosing), "#8b5cf6,#7c3aed"], ["Gross P&L", fabs(grossProfit) + (grossProfit >= 0 ? "▲" : "▼"), grossProfit >= 0 ? "#0891b2,#0ea5e9" : "#ef4444,#dc2626"]].map(([l, v, g]) => (
+                            {[["Opening Stock", fc(openingStockAmt), "#64748b,#475569"], ["Purchases (Net)", fc(totalPurchases), "#6366f1,#8b5cf6"], ["Purch. Returns", fc(purchaseReturnsAmt), "#f59e0b,#b45309"], ["Sales (Net)", fc(totalSales), "#22c55e,#16a34a"], ["Sales Returns", fc(salesReturnsAmt), "#ef4444,#b91c1c"], ["Closing Stock", fc(fifoClosing), "#8b5cf6,#7c3aed"], ["Gross P&L", fabs(grossProfit) + (grossProfit >= 0 ? "▲" : "▼"), grossProfit >= 0 ? "#0891b2,#0ea5e9" : "#ef4444,#dc2626"]].map(([l, v, g]) => (
                                 <div key={l} style={CARD(g)}><div style={{ fontSize: 9 }}>{l}</div><div style={{ fontSize: 14, fontWeight: 900 }}>{v}</div></div>
                             ))}
                         </div>
                         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                             <div style={{ background: C.mid, borderRadius: 12, padding: 16 }}>
                                 <div style={{ fontWeight: 800, color: C.red, fontSize: 12, marginBottom: 6, borderBottom: "1px solid #334155", paddingBottom: 4 }}>Dr — Costs</div>
-                                {[["Opening Stock", openingStockAmt], ["Purchases", totalPurchases]].map(([l, v]) => <div key={l} style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 3 }}><span style={{ color: C.muted }}>{l}</span><span style={{ color: C.red, fontWeight: 600 }}>{fc(v)}</span></div>)}
+                                {[["Opening Stock", openingStockAmt], ["Purchases (Gross)", grossPurchases]].map(([l, v]) => <div key={l} style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 3 }}><span style={{ color: C.muted }}>{l}</span><span style={{ color: C.red, fontWeight: 600 }}>{fc(v)}</span></div>)}
+                                {purchaseReturnsAmt > 0 && <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 3 }}><span style={{ color: C.amber }}>Less: Purchase Returns</span><span style={{ color: C.green, fontWeight: 600 }}>({fc(purchaseReturnsAmt)})</span></div>}
                                 {te.filter(e => e.side === "dr").map(e => <div key={e.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 11, marginBottom: 3, alignItems: "center" }}><span style={{ color: C.muted }}>{e.description}</span><span style={{ display: "flex", gap: 5 }}>{fc(e.amount)}<button style={BTND} onClick={() => cascadeDelete("tradingEntries", e.id)}>✕</button></span></div>)}
                                 <div style={{ borderTop: "1px solid #334155", paddingTop: 6, fontWeight: 800, color: C.red, textAlign: "right" }}>Total Dr: {fc(tradingDr)}</div>
                                 {grossProfit >= 0 && <div style={{ color: C.green, fontWeight: 800, textAlign: "right", fontSize: 11, marginTop: 4 }}>Gross Profit c/d: {fc(grossProfit)}</div>}
                             </div>
                             <div style={{ background: C.mid, borderRadius: 12, padding: 16 }}>
                                 <div style={{ fontWeight: 800, color: C.green, fontSize: 12, marginBottom: 6, borderBottom: "1px solid #334155", paddingBottom: 4 }}>Cr — Revenue</div>
-                                {[["Sales", totalSales], ["Closing Stock (FIFO)", fifoClosing]].map(([l, v]) => <div key={l} style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 3 }}><span style={{ color: C.muted }}>{l}</span><span style={{ color: C.green, fontWeight: 600 }}>{fc(v)}</span></div>)}
+                                {[["Sales (Gross)", grossSales], ["Closing Stock (FIFO)", fifoClosing]].map(([l, v]) => <div key={l} style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 3 }}><span style={{ color: C.muted }}>{l}</span><span style={{ color: C.green, fontWeight: 600 }}>{fc(v)}</span></div>)}
+                                {salesReturnsAmt > 0 && <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 3 }}><span style={{ color: C.amber }}>Less: Sales Returns</span><span style={{ color: C.red, fontWeight: 600 }}>({fc(salesReturnsAmt)})</span></div>}
                                 {te.filter(e => e.side === "cr").map(e => <div key={e.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 11, marginBottom: 3, alignItems: "center" }}><span style={{ color: C.muted }}>{e.description}</span><span style={{ display: "flex", gap: 5 }}>{fc(e.amount)}<button style={BTND} onClick={() => cascadeDelete("tradingEntries", e.id)}>✕</button></span></div>)}
                                 <div style={{ borderTop: "1px solid #334155", paddingTop: 6, fontWeight: 800, color: C.green, textAlign: "right" }}>Total Cr: {fc(tradingCr)}</div>
                                 {grossProfit < 0 && <div style={{ color: C.red, fontWeight: 800, textAlign: "right", fontSize: 11, marginTop: 4 }}>Gross Loss c/d: {fabs(grossProfit)}</div>}
@@ -925,7 +956,7 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
                                     </select>
                                 </div>
                                 <div style={{ background: C.mid, borderRadius: 12, overflowX: "auto" }}>
-                                    <table style={TBL}><thead><tr>{["✓", "Name", "Date", "Opening", "From Entries", "Total Due", isC ? "Cash Paid" : "Cash Rcvd", "Balance", "Period", "Due Date", "Status", isC ? "" : "Ledger", "Del"].map(h => <th key={h} style={THS}>{h}</th>)}</tr></thead>
+                                    <table style={TBL}><thead><tr>{["✓", "Name", "Date", "Opening", "From Entries", "Total Due", isC ? "Cash Paid" : "Cash Rcvd", "Balance", "Period", "Due Date", "Status", "Ledger", "Del"].map(h => <th key={h} style={THS}>{h}</th>)}</tr></thead>
                                         <tbody>{!filteredItems.length && <tr><td colSpan={12} style={{ ...TDS, textAlign: "center", color: C.muted }}>No entries</td></tr>}
                                             {filteredItems.map(e => {
                                                 const fromS = getFromStock(e.id), fromO = getFromOther(e.id), cp = getCash(e.id), totalDue = Number(e.amount) + fromS + fromO, bal = Math.max(0, totalDue - cp);
@@ -963,9 +994,39 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
                                                     <td style={TDS}>{hasTerm ? e.creditPeriod + "d" : "—"}</td>
                                                     <td style={TDS}>{hasTerm ? due.toLocaleDateString("en-IN") : "—"}</td>
                                                     <td style={TDS}><Badge label={isAutoSettled ? "Settled" : sl} color={isAutoSettled ? C.green : sc} /></td>
-                                                    {!isC && <td style={TDS}><button style={{ ...BTNP(), padding: "3px 8px", fontSize: 10 }} onClick={() => setExpandedDebtor(expandedDebtor === e.id ? null : e.id)}>{expandedDebtor === e.id ? "▲ Hide" : "▼ Ledger"}</button></td>}
+                                                    <td style={TDS}><button style={{ ...BTNP(), padding: "3px 8px", fontSize: 10 }} onClick={() => isC ? setExpandedCreditor(expandedCreditor === e.id ? null : e.id) : setExpandedDebtor(expandedDebtor === e.id ? null : e.id)}>{(isC ? expandedCreditor === e.id : expandedDebtor === e.id) ? "▲ Hide" : "▼ Ledger"}</button></td>
                                                     <td style={TDS}><button style={BTND} onClick={() => cascadeDelete(isC ? "creditors" : "debtors", e.id)}>Del</button></td>
                                                 </tr>
+                                                {isC && expandedCreditor === e.id && (() => {
+                                                    const cPurchases = si.filter(x => x.settleMode === "creditor" && x.linkedPartyId === e.id && !x.isReturn).sort((a,b) => new Date(a.date)-new Date(b.date));
+                                                    const cReturns = si.filter(x => x.settleMode === "creditor" && x.linkedPartyId === e.id && x.isReturn).sort((a,b) => new Date(a.date)-new Date(b.date));
+                                                    const cCash = cash.filter(x => x.dir === "out" && x.linkedId === e.id).sort((a,b) => new Date(a.date)-new Date(b.date));
+                                                    const allTx = [
+                                                        ...(Number(e.amount) > 0 ? [{ _t: "opening", date: e.date, desc: "Opening Balance", dr: Number(e.amount), cr: 0 }] : []),
+                                                        ...cPurchases.map(x => ({ _t: "purchase", date: x.date, desc: `Purchase: ${x.bottleType} (${x.category}) — ${x.godown} | Batch: ${x.batchNo}`, dr: Number(x.totalAmount), cr: 0 })),
+                                                        ...cReturns.map(x => ({ _t: "return", date: x.date, desc: `Purchase Return: ${x.bottleType} (${x.category}) — ${x.godown} | Batch: ${x.batchNo}`, dr: 0, cr: Number(x.totalAmount) })),
+                                                        ...cCash.map(x => ({ _t: "cash", date: x.date, desc: x.description || "Cash Payment", dr: 0, cr: Number(x.amount) })),
+                                                    ].sort((a,b) => new Date(a.date)-new Date(b.date));
+                                                    let running = 0;
+                                                    return <tr key={e.id + "_cled"}><td colSpan={13} style={{ padding: "0 0 12px 32px", background: "#0a0f1e" }}>
+                                                        <div style={{ borderLeft: "3px solid " + C.amber, paddingLeft: 12, marginTop: 8 }}>
+                                                            <div style={{ fontSize: 11, fontWeight: 800, color: C.amber, marginBottom: 8 }}>📒 Creditor Ledger — {e.name}</div>
+                                                            <table style={{ ...TBL, fontSize: 11 }}>
+                                                                <thead><tr>{["Date","Description","Dr (Added)","Cr (Reduced)","Running Balance"].map(h => <th key={h} style={{ ...THS, fontSize: 10 }}>{h}</th>)}</tr></thead>
+                                                                <tbody>
+                                                                    {allTx.length === 0 && <tr><td colSpan={5} style={{ ...TDS, color: C.muted, textAlign: "center" }}>No transactions</td></tr>}
+                                                                    {allTx.map((t, i) => { running += t.dr - t.cr; return <tr key={i} style={{ background: t._t === "return" ? "rgba(245,158,11,0.07)" : t._t === "cash" ? "rgba(34,197,94,0.05)" : "transparent" }}>
+                                                                        <td style={TDS}>{t.date}</td>
+                                                                        <td style={{ ...TDS, color: t._t === "return" ? C.amber : t._t === "cash" ? C.green : C.text }}>{t.desc}</td>
+                                                                        <td style={{ ...TDS, color: C.amber, fontWeight: 700 }}>{t.dr > 0 ? fc(t.dr) : "—"}</td>
+                                                                        <td style={{ ...TDS, color: t._t === "return" ? C.amber : C.green, fontWeight: 700 }}>{t.cr > 0 ? fc(t.cr) : "—"}</td>
+                                                                        <td style={{ ...TDS, fontWeight: 800, color: running > 0 ? C.amber : C.green }}>{fc(Math.max(0, running))}</td>
+                                                                    </tr>; })}
+                                                                </tbody>
+                                                            </table>
+                                                        </div>
+                                                    </td></tr>;
+                                                })()}
                                                 {!isC && expandedDebtor === e.id && (() => {
                                                     const dSales = so.filter(x => x.settleMode === "debtor" && x.linkedPartyId === e.id && !x.isReturn).sort((a,b) => new Date(a.date)-new Date(b.date));
                                                     const dReturns = so.filter(x => x.settleMode === "debtor" && x.linkedPartyId === e.id && x.isReturn).sort((a,b) => new Date(a.date)-new Date(b.date));
@@ -1402,7 +1463,25 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
                             <input type="number" style={INP} placeholder="Qty *" value={form.qty || ""} onChange={e => setForm(f => ({ ...f, qty: e.target.value }))} />
                             <input type="number" style={INP} placeholder="Rate/Unit (₹) *" value={form.ratePerUnit || ""} onChange={e => setForm(f => ({ ...f, ratePerUnit: e.target.value }))} />
                             {form.qty && form.ratePerUnit && <div style={{ background: C.mid, border: "1.5px solid #6366f1", borderRadius: 7, padding: "7px 11px", marginBottom: 9, display: "flex", justifyContent: "space-between" }}><span style={{ color: C.muted, fontSize: 12 }}>Total</span><span style={{ color: C.purple, fontWeight: 800, fontSize: 15 }}>{fc(Number(form.qty) * Number(form.ratePerUnit))}</span></div>}
-                            <SettlePanel {...sp} form={{ ...form, _settleContext: "purchase" }} setForm={setForm} />
+                            {form.isReturn === "true" ? (
+                                <div style={{ background: "#0a0f1e", borderRadius: 8, padding: 12, marginBottom: 9, border: "2px solid " + C.amber }}>
+                                    <div style={{ fontSize: 11, color: C.amber, fontWeight: 700, marginBottom: 7 }}>↩️ Purchase Return — Select Creditor</div>
+                                    <select style={INP} value={form.returnCreditorId || ""} onChange={e => setForm(f => ({ ...f, returnCreditorId: e.target.value }))}>
+                                        <option value="">Select Creditor *</option>
+                                        {(state.creditors || []).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                                    </select>
+                                    {form.returnCreditorId && (() => {
+                                        const cred = (state.creditors || []).find(c => c.id === form.returnCreditorId);
+                                        const bal = cred ? creditorBal(cred) : 0;
+                                        const returnAmt = Number(form.qty || 0) * Number(form.ratePerUnit || 0);
+                                        return cred
+                                            ? <div style={{ fontSize: 10, color: C.teal, marginTop: 6, background: "#042f2e", padding: "6px 10px", borderRadius: 6 }}>✓ Creditor found: <strong>{cred.name}</strong> | Current Balance: {fc(bal)} | Will reduce by: {fc(returnAmt)}</div>
+                                            : <div style={{ fontSize: 10, color: C.amber, marginTop: 4 }}>⚠️ No creditor found — entry will be recorded as Journal</div>;
+                                    })()}
+                                </div>
+                            ) : (
+                                <SettlePanel {...sp} form={{ ...form, _settleContext: "purchase" }} setForm={setForm} />
+                            )}
                             <button style={{ ...BTNP(), width: "100%" }} onClick={applyStockIn}>Save</button>
                         </div>}
 
@@ -1419,10 +1498,9 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
                             {form.qty && form.ratePerUnit && <div style={{ background: C.mid, border: "1.5px solid #6366f1", borderRadius: 7, padding: "7px 11px", marginBottom: 9, display: "flex", justifyContent: "space-between" }}><span style={{ color: C.muted, fontSize: 12 }}>Total</span><span style={{ color: C.purple, fontWeight: 800, fontSize: 15 }}>{fc(Number(form.qty) * Number(form.ratePerUnit))}</span></div>}
 
                             {form.isReturn === "true" ? (
-                                /* Sales Return: only show client selector */
                                 <div style={{ background: "#0a0f1e", borderRadius: 8, padding: 12, marginBottom: 9, border: "2px solid " + C.amber }}>
                                     <div style={{ fontSize: 11, color: C.amber, fontWeight: 700, marginBottom: 7 }}>↩️ Sales Return — Select Client</div>
-                                    <select style={INP} value={form.returnClientId || ""} onChange={e => setForm(f => ({ ...f, returnClientId: e.target.value }))}>
+                                    <select style={INP} value={form.returnClientId || ""} onChange={e => setForm(f => ({ ...f, returnClientId: e.target.value, returnSettleMode: "" }))}>
                                         <option value="">Select Client *</option>
                                         {(state.clients || []).map(c => <option key={c.id} value={c.id}>{c.name} ({c.type})</option>)}
                                     </select>
@@ -1433,9 +1511,20 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
                                             || (clName ? debs.find(d => d.name.trim().toLowerCase() === clName.trim().toLowerCase()) : null);
                                         const bal = deb ? debtorBal(deb) : 0;
                                         const returnAmt = Number(form.qty || 0) * Number(form.ratePerUnit || 0);
-                                        return deb
-                                            ? <div style={{ fontSize: 10, color: C.teal, marginTop: 6, background: "#042f2e", padding: "6px 10px", borderRadius: 6 }}>✓ Debtor found: <strong>{deb.name}</strong> | Current Balance: {fc(bal)} | Will reduce by: {fc(returnAmt)}</div>
-                                            : <div style={{ fontSize: 10, color: C.amber, marginTop: 4 }}>⚠️ No debtor found matching "{clName}" — entry will be recorded as Journal</div>;
+                                        return <div>
+                                            {deb
+                                                ? <div style={{ fontSize: 10, color: C.teal, marginTop: 6, background: "#042f2e", padding: "6px 10px", borderRadius: 6 }}>✓ Debtor found: <strong>{deb.name}</strong> | Current Balance: {fc(bal)} | Return Amt: {fc(returnAmt)}</div>
+                                                : <div style={{ fontSize: 10, color: C.amber, marginTop: 4, marginBottom: 6 }}>⚠️ No debtor found matching "{clName}"</div>}
+                                            <div style={{ fontSize: 11, color: "#94a3b8", fontWeight: 700, marginTop: 10, marginBottom: 6 }}>💳 Return Settlement</div>
+                                            <div style={{ display: "flex", gap: 6, marginBottom: 4, flexWrap: "wrap" }}>
+                                                {deb && <button onClick={() => setForm(f => ({ ...f, returnSettleMode: "debtor" }))} style={{ flex: 1, minWidth: 90, padding: "7px 4px", border: "2px solid " + (form.returnSettleMode === "debtor" ? C.violet : C.border), borderRadius: 7, background: form.returnSettleMode === "debtor" ? C.violet + "18" : C.mid, color: form.returnSettleMode === "debtor" ? C.violet : C.muted, fontWeight: 700, fontSize: 11, cursor: "pointer" }}>📋 Adjust Debtor</button>}
+                                                <button onClick={() => setForm(f => ({ ...f, returnSettleMode: "cash" }))} style={{ flex: 1, minWidth: 90, padding: "7px 4px", border: "2px solid " + (form.returnSettleMode === "cash" ? C.red : C.border), borderRadius: 7, background: form.returnSettleMode === "cash" ? C.red + "18" : C.mid, color: form.returnSettleMode === "cash" ? C.red : C.muted, fontWeight: 700, fontSize: 11, cursor: "pointer" }}>💵 Cash Refund</button>
+                                                <button onClick={() => setForm(f => ({ ...f, returnSettleMode: "journal" }))} style={{ flex: 1, minWidth: 90, padding: "7px 4px", border: "2px solid " + (form.returnSettleMode === "journal" ? C.muted : C.border), borderRadius: 7, background: form.returnSettleMode === "journal" ? C.muted + "18" : C.mid, color: form.returnSettleMode === "journal" ? C.muted : C.border, fontWeight: 700, fontSize: 11, cursor: "pointer" }}>📝 Journal Only</button>
+                                            </div>
+                                            {form.returnSettleMode === "debtor" && deb && <div style={{ fontSize: 10, color: C.violet, marginTop: 4 }}>Will reduce <strong>{deb.name}</strong>'s outstanding by {fc(returnAmt)}</div>}
+                                            {form.returnSettleMode === "cash" && <div style={{ fontSize: 10, color: C.red, marginTop: 4 }}>💵 Cash Out of {fc(returnAmt)} will be recorded in Cash Book as refund</div>}
+                                            {form.returnSettleMode === "journal" && <div style={{ fontSize: 10, color: C.muted, marginTop: 4 }}>Entry recorded in Trading A/C only — no debtor/cash effect</div>}
+                                        </div>;
                                     })()}
                                 </div>
                             ) : (
