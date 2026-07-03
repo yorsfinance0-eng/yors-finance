@@ -1,0 +1,114 @@
+diff --git a/index.html b/index.html
+index 18fd0e9..8e75388 100644
+--- a/index.html
++++ b/index.html
+@@ -82,7 +82,7 @@
+         // ─── Constants ────────────────────────────────────────
+         const BOTTLE_TYPES = ["200ml", "500ml", "1L"];
+         const GODOWNS = ["Hazra", "Dunlop", "Bhawanipur", "Alipore", "Gariahat"];
+-        const TABS = ["Dashboard", "Inventory", "Stock In", "Stock Out", "Debtors", "Creditors", "Clients", "Cash Book", "Trading A/C", "P&L Account", "Balance Sheet", "Trial Balance", "Cash Flow", "Journal", "Depreciation", "Charts"];
++        const TABS = ["Dashboard", "Inventory", "Stock In", "Stock Out", "Debtors", "Creditors", "Clients", "Cash Book", "Trading A/C", "P&L Account", "Balance Sheet", "Trial Balance", "Cash Flow", "Journal", "Audit Trail", "Depreciation", "Charts"];
+         const CLIENT_TYPES = ["Retailer", "Distributor"];
+         const CASH_IN_TYPES = ["Sales Receipt", "Debtor Payment", "Capital Introduced", "Loan Received", "Purchase Return Receipt", "Other Income Receipt"];
+         const CASH_OUT_TYPES = ["Expense Payment", "Creditor Payment", "Stock Purchase Payment", "Loan Repayment", "Sales Return Refund", "Other Payment"];
+@@ -1553,32 +1553,57 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
+                         </div>
+                     </div>}
+ 
+-                    {tab === "Trial Balance" && <div>
+-                        <div style={{ fontSize: 16, fontWeight: 800, marginBottom: 14, color: C.teal }}>⚖️ Trial Balance</div>
+-                        <div style={{ background: C.mid, borderRadius: 12, padding: 16, border: "1px solid #334155" }}>
+-                            <table style={TBL}>
+-                                <thead><tr><th style={THS}>Account</th><th style={{...THS, textAlign: "right"}}>Debit (Dr)</th><th style={{...THS, textAlign: "right"}}>Credit (Cr)</th></tr></thead>
+-                                <tbody>
+-                                    <tr><td style={TDS}>Opening Stock</td><td style={{...TDS, textAlign:"right"}}>{fc(state.openingStock?.amount || 0)}</td><td style={TDS}></td></tr>
+-                                    <tr><td style={TDS}>Purchases</td><td style={{...TDS, textAlign:"right"}}>{fc(si.filter(x => !x.isReturn).reduce((s, e) => s + e.totalAmount, 0))}</td><td style={TDS}></td></tr>
+-                                    <tr><td style={TDS}>Purchase Returns</td><td style={TDS}></td><td style={{...TDS, textAlign:"right"}}>{fc(si.filter(x => x.isReturn).reduce((s, e) => s + e.totalAmount, 0))}</td></tr>
+-                                    <tr><td style={TDS}>Sales</td><td style={TDS}></td><td style={{...TDS, textAlign:"right"}}>{fc(so.filter(x => !x.isReturn).reduce((s, e) => s + e.totalAmount, 0))}</td></tr>
+-                                    <tr><td style={TDS}>Sales Returns</td><td style={{...TDS, textAlign:"right"}}>{fc(so.filter(x => x.isReturn).reduce((s, e) => s + e.totalAmount, 0))}</td><td style={TDS}></td></tr>
+-                                    <tr><td style={TDS}>Trading Dr (Direct Exp)</td><td style={{...TDS, textAlign:"right"}}>{fc(te.filter(x => x.side === "dr").reduce((s, e) => s + e.amount, 0))}</td><td style={TDS}></td></tr>
+-                                    <tr><td style={TDS}>Trading Cr (Direct Inc)</td><td style={TDS}></td><td style={{...TDS, textAlign:"right"}}>{fc(te.filter(x => x.side === "cr").reduce((s, e) => s + e.amount, 0))}</td></tr>
+-                                    <tr><td style={TDS}>P&L Expenses</td><td style={{...TDS, textAlign:"right"}}>{fc(ple.filter(x => x.side === "expense").reduce((s, e) => s + e.amount, 0))}</td><td style={TDS}></td></tr>
+-                                    <tr><td style={TDS}>P&L Income</td><td style={TDS}></td><td style={{...TDS, textAlign:"right"}}>{fc(ple.filter(x => x.side === "income").reduce((s, e) => s + e.amount, 0))}</td></tr>
+-                                    <tr><td style={TDS}>Depreciation (Expense)</td><td style={{...TDS, textAlign:"right"}}>{fc(totalDepreciation)}</td><td style={TDS}></td></tr>
+-                                    <tr><td style={TDS}>Trade Debtors</td><td style={{...TDS, textAlign:"right"}}>{fc(totalDebtors)}</td><td style={TDS}></td></tr>
+-                                    <tr><td style={TDS}>Trade Creditors</td><td style={TDS}></td><td style={{...TDS, textAlign:"right"}}>{fc(totalCreditors)}</td></tr>
+-                                    <tr><td style={TDS}>Cash Balance</td><td style={{...TDS, textAlign:"right"}}>{cashBal >= 0 ? fc(cashBal) : ""}</td><td style={{...TDS, textAlign:"right"}}>{cashBal < 0 ? fc(Math.abs(cashBal)) : ""}</td></tr>
+-                                    <tr><td style={TDS}>Manual BS Assets</td><td style={{...TDS, textAlign:"right"}}>{fc(Object.values(state.balanceSheet?.assets || {}).reduce((s, e) => s + Number(e.amount), 0))}</td><td style={TDS}></td></tr>
+-                                    <tr><td style={TDS}>Manual BS Liab & Equity</td><td style={TDS}></td><td style={{...TDS, textAlign:"right"}}>{fc(Object.values(state.balanceSheet?.liabilities || {}).reduce((s, e) => s + Number(e.amount), 0))}</td></tr>
+-                                </tbody>
+-                            </table>
+-                            <div style={{ marginTop: 12, fontSize: 10, color: C.muted, textAlign: "center" }}>Note: This is a pre-closing Trial Balance (closing stock is not included; opening stock is).</div>
+-                        </div>
+-                    </div>}
++                    {tab === "Trial Balance" && (() => {
++                        const rows = [
++                            { name: "Opening Stock", dr: state.openingStock?.amount || 0, cr: 0 },
++                            { name: "Purchases", dr: si.filter(x => !x.isReturn).reduce((s, e) => s + e.totalAmount, 0), cr: 0 },
++                            { name: "Purchase Returns", dr: 0, cr: si.filter(x => x.isReturn).reduce((s, e) => s + e.totalAmount, 0) },
++                            { name: "Sales", dr: 0, cr: so.filter(x => !x.isReturn).reduce((s, e) => s + e.totalAmount, 0) },
++                            { name: "Sales Returns", dr: so.filter(x => x.isReturn).reduce((s, e) => s + e.totalAmount, 0), cr: 0 },
++                            { name: "Trading Dr (Direct Exp)", dr: te.filter(x => x.side === "dr").reduce((s, e) => s + e.amount, 0), cr: 0 },
++                            { name: "Trading Cr (Direct Inc)", dr: 0, cr: te.filter(x => x.side === "cr").reduce((s, e) => s + e.amount, 0) },
++                            { name: "P&L Expenses", dr: ple.filter(x => x.side === "expense").reduce((s, e) => s + e.amount, 0), cr: 0 },
++                            { name: "P&L Income", dr: 0, cr: ple.filter(x => x.side === "income").reduce((s, e) => s + e.amount, 0) },
++                            { name: "Depreciation (Expense)", dr: totalDepreciation, cr: 0 },
++                            { name: "Trade Debtors", dr: totalDebtors, cr: 0 },
++                            { name: "Trade Creditors", dr: 0, cr: totalCreditors },
++                            { name: "Cash Balance", dr: cashBal >= 0 ? cashBal : 0, cr: cashBal < 0 ? Math.abs(cashBal) : 0 },
++                            { name: "Manual BS Assets", dr: Object.values(state.balanceSheet?.assets || {}).reduce((s, e) => s + Number(e.amount), 0), cr: 0 },
++                            { name: "Manual BS Liab & Equity", dr: 0, cr: Object.values(state.balanceSheet?.liabilities || {}).reduce((s, e) => s + Number(e.amount), 0) }
++                        ];
++                        const totalDr = rows.reduce((acc, r) => acc + r.dr, 0);
++                        const totalCr = rows.reduce((acc, r) => acc + r.cr, 0);
++                        const diff = Math.abs(totalDr - totalCr);
++                        const balanced = diff < 0.01;
++
++                        return <div>
++                            <div style={{ fontSize: 16, fontWeight: 800, marginBottom: 14, color: C.teal }}>⚖️ Trial Balance</div>
++                            <div style={{ background: C.mid, borderRadius: 12, padding: 16, border: "1px solid #334155" }}>
++                                <table style={TBL}>
++                                    <thead><tr><th style={THS}>Account</th><th style={{...THS, textAlign: "right"}}>Debit (Dr)</th><th style={{...THS, textAlign: "right"}}>Credit (Cr)</th></tr></thead>
++                                    <tbody>
++                                        {rows.map(r => (
++                                            <tr key={r.name}>
++                                                <td style={TDS}>{r.name}</td>
++                                                <td style={{...TDS, textAlign:"right"}}>{r.dr > 0 ? fc(r.dr) : "—"}</td>
++                                                <td style={{...TDS, textAlign:"right"}}>{r.cr > 0 ? fc(r.cr) : "—"}</td>
++                                            </tr>
++                                        ))}
++                                    </tbody>
++                                    <tfoot>
++                                        <tr style={{ borderTop: "2px solid #334155", fontWeight: 800 }}>
++                                            <td style={{ ...TDS, fontWeight: "bold" }}>Total</td>
++                                            <td style={{ ...TDS, textAlign: "right", fontWeight: "bold", color: balanced ? C.green : C.red }}>{fc(totalDr)}</td>
++                                            <td style={{ ...TDS, textAlign: "right", fontWeight: "bold", color: balanced ? C.green : C.red }}>{fc(totalCr)}</td>
++                                        </tr>
++                                    </tfoot>
++                                </table>
++                                {!balanced && <div style={{ color: C.red, fontSize: 11, fontWeight: 700, marginTop: 8, textAlign: "center" }}>⚠️ Trial Balance Mismatch! Difference: {fc(diff)}</div>}
++                                {balanced && <div style={{ color: C.green, fontSize: 11, fontWeight: 700, marginTop: 8, textAlign: "center" }}>✅ Trial Balance Balanced</div>}
++                                <div style={{ marginTop: 12, fontSize: 10, color: C.muted, textAlign: "center" }}>Note: This is a pre-closing Trial Balance (closing stock is not included; opening stock is).</div>
++                            </div>
++                        </div>;
++                    })()}
+ 
+                     {tab === "Cash Flow" && (() => {
+                         const sums = {};
+@@ -1657,16 +1682,6 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
+                         </div>;
+                     })()}
+ 
+-                    {/* Audit Log (Always visible at bottom) */}
+-                    <div style={{ marginTop: 24, background: C.mid, borderRadius: 12, padding: 16, border: "1px solid #334155" }}>
+-                        <div style={{ fontSize: 14, fontWeight: 800, marginBottom: 12, color: "#94a3b8" }}>📋 Recent Activity Log</div>
+-                        {(state.auditLog || []).length === 0 ? <div style={{ fontSize: 12, color: C.muted, textAlign: "center", padding: 10 }}>No activity recorded yet.</div> : (
+-                            <div style={{ maxHeight: 200, overflowY: "auto", fontSize: 11 }}>
+-                                {(state.auditLog || []).slice(0, 10).map(l => (
+-                                    <div key={l.id} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", borderBottom: "1px solid #334155" }}>
+-                                        <div style={{ display: "flex", gap: 10 }}>
+-                                            <span style={{ color: l.action === "DELETE" ? C.red : (l.action === "UPDATE" ? C.amber : C.green), fontWeight: 700 }}>{l.action}</span>
+-                                            <span style={{ color: C.text }}>{l.desc}</span>
+                                         </div>
+                                         <div style={{ color: C.muted, fontSize: 10 }}>{new Date(l.ts).toLocaleString()}</div>
+                                     </div>

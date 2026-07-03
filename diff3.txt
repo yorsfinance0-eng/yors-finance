@@ -1,0 +1,263 @@
+diff --git a/index.html b/index.html
+index 18fd0e9..8c1b436 100644
+--- a/index.html
++++ b/index.html
+@@ -82,7 +82,7 @@
+         // ─── Constants ────────────────────────────────────────
+         const BOTTLE_TYPES = ["200ml", "500ml", "1L"];
+         const GODOWNS = ["Hazra", "Dunlop", "Bhawanipur", "Alipore", "Gariahat"];
+-        const TABS = ["Dashboard", "Inventory", "Stock In", "Stock Out", "Debtors", "Creditors", "Clients", "Cash Book", "Trading A/C", "P&L Account", "Balance Sheet", "Trial Balance", "Cash Flow", "Journal", "Depreciation", "Charts"];
++        const TABS = ["Dashboard", "Inventory", "Stock In", "Stock Out", "Debtors", "Creditors", "Clients", "Cash Book", "Trading A/C", "P&L Account", "Balance Sheet", "Trial Balance", "Cash Flow", "Journal", "Audit Trail", "Depreciation", "Charts"];
+         const CLIENT_TYPES = ["Retailer", "Distributor"];
+         const CASH_IN_TYPES = ["Sales Receipt", "Debtor Payment", "Capital Introduced", "Loan Received", "Purchase Return Receipt", "Other Income Receipt"];
+         const CASH_OUT_TYPES = ["Expense Payment", "Creditor Payment", "Stock Purchase Payment", "Loan Repayment", "Sales Return Refund", "Other Payment"];
+@@ -710,6 +710,20 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
+ 
+                 <div style={{ maxWidth: 1400, margin: "0 auto", padding: "20px" }}>
+ 
++                    {/* View-Only Mode Banner */}
++                    {!isAdmin && (
++                        <div style={{ background: "#1e293b", border: "1.5px solid #334155", borderRadius: 12, padding: "12px 18px", marginBottom: 16, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
++                            <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
++                                <span style={{ fontSize: 18 }}>🔒</span>
++                                <div>
++                                    <div style={{ fontWeight: 800, color: "#94a3b8", fontSize: 12 }}>View-Only Mode</div>
++                                    <div style={{ fontSize: 10, color: C.muted }}>You are viewing the dashboard. To make additions or changes, switch to Admin Mode using the lock icon in the header.</div>
++                                </div>
++                            </div>
++                            <button onClick={toggleAdmin} style={{ ...BTNP("linear-gradient(90deg,#6366f1,#8b5cf6)"), padding: "6px 14px" }}>🔓 Enter Admin PIN</button>
++                        </div>
++                    )}
++
+                     {tab === "Dashboard" && <div>
+                         <div style={{ fontSize: 16, fontWeight: 800, marginBottom: 14, color: C.purple }}>📊 Dashboard</div>
+                         <div style={{ display: "flex", gap: 9, flexWrap: "wrap", marginBottom: 18 }}>
+@@ -741,8 +755,8 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
+                         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+                             <div style={{ fontSize: 16, fontWeight: 800, color: C.teal }}>🔄 Trading Account</div>
+                             <div style={{ display: "flex", gap: 8 }}>
+-                                <button style={BTNP("linear-gradient(90deg,#0891b2,#0ea5e9)")} onClick={() => openM("openingStock")}>Set Opening Stock</button>
+-                                <button style={BTNP()} onClick={() => openM("trading")}>+ Manual Entry</button>
++                                {isAdmin && <button style={BTNP("linear-gradient(90deg,#0891b2,#0ea5e9)")} onClick={() => openM("openingStock")}>Set Opening Stock</button>}
++                                {isAdmin && <button style={BTNP()} onClick={() => openM("trading")}>+ Manual Entry</button>}
+                             </div>
+                         </div>
+                         <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
+@@ -886,7 +900,7 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
+                     {tab === "Stock In" && <div>
+                         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+                             <div style={{ fontSize: 16, fontWeight: 800, color: C.green }}>📥 Stock In</div>
+-                            <button style={BTNP()} onClick={() => openM("stockIn")}>+ Add Stock In</button>
++                            {isAdmin && <button style={BTNP()} onClick={() => openM("stockIn")}>+ Add Stock In</button>}
+                         </div>
+                         {/* Filter Bar */}
+                         <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+@@ -957,7 +971,7 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
+                     {tab === "Stock Out" && <div>
+                         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+                             <div style={{ fontSize: 16, fontWeight: 800, color: C.red }}>📤 Stock Out</div>
+-                            <button style={BTNP()} onClick={() => openM("stockOut")}>+ Add Stock Out</button>
++                            {isAdmin && <button style={BTNP()} onClick={() => openM("stockOut")}>+ Add Stock Out</button>}
+                         </div>
+                         {/* Filter Bar */}
+                         <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+@@ -996,7 +1010,7 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
+                     {tab === "P&L Account" && <div>
+                         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+                             <div style={{ fontSize: 16, fontWeight: 800, color: "#10b981" }}>📈 Profit & Loss Account</div>
+-                            <button style={BTNP()} onClick={() => openM("pl")}>+ Add Entry</button>
++                            {isAdmin && <button style={BTNP()} onClick={() => openM("pl")}>+ Add Entry</button>}
+                         </div>
+                         <div style={{ background: "#0a1628", borderRadius: 10, padding: "8px 14px", marginBottom: 12, border: "1px solid #334155", fontSize: 10, color: "#64748b" }}>
+                             ℹ️ <strong style={{ color: "#94a3b8" }}>Accounting Note:</strong> P&amp;L is derived from Trading Account (Gross Profit/Loss) + manual P&amp;L entries + Depreciation only. Cash Book entries do <em>not</em> feed into P&amp;L to prevent double-entry.
+@@ -1030,8 +1044,8 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
+                         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+                             <div style={{ fontSize: 16, fontWeight: 800, color: "#10b981" }}>💵 Cash Book</div>
+                             <div style={{ display: "flex", gap: 8 }}>
+-                                <button style={BTNP("linear-gradient(90deg,#22c55e,#16a34a)")} onClick={() => openM("cash", { dir: "in" })}>+ Cash In</button>
+-                                <button style={BTNP("linear-gradient(90deg,#ef4444,#dc2626)")} onClick={() => openM("cash", { dir: "out" })}>+ Cash Out</button>
++                                {isAdmin && <button style={BTNP("linear-gradient(90deg,#22c55e,#16a34a)")} onClick={() => openM("cash", { dir: "in" })}>+ Cash In</button>}
++                                {isAdmin && <button style={BTNP("linear-gradient(90deg,#ef4444,#dc2626)")} onClick={() => openM("cash", { dir: "out" })}>+ Cash Out</button>}
+                             </div>
+                         </div>
+                         <div style={{ display: "flex", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
+@@ -1052,8 +1066,8 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
+ 
+                     {(tab === "Creditors" || tab === "Debtors") && <div>
+                         {tab === "Creditors"
+-                            ? <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}><div style={{ fontSize: 16, fontWeight: 800, color: C.amber }}>🏦 Creditors</div><button style={BTNP()} onClick={() => openM("creditor")}>+ Add Creditor</button></div>
+-                            : <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}><div style={{ fontSize: 16, fontWeight: 800, color: C.violet }}>📋 Debtors</div><button style={BTNP()} onClick={() => openM("debtor")}>+ Add Debtor</button></div>}
++                            ? <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}><div style={{ fontSize: 16, fontWeight: 800, color: C.amber }}>🏦 Creditors</div>{isAdmin && <button style={BTNP()} onClick={() => openM("creditor")}>+ Add Creditor</button>}</div>
++                            : <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}><div style={{ fontSize: 16, fontWeight: 800, color: C.violet }}>📋 Debtors</div>{isAdmin && <button style={BTNP()} onClick={() => openM("debtor")}>+ Add Debtor</button>}</div>}
+                         {(() => {
+                             const isC = tab === "Creditors", items = isC ? creds : debs, ac = isC ? C.amber : C.violet;
+                             const getFromStock = id => isC ? creditorFromStock(id) : debtorFromStock(id);
+@@ -1369,7 +1383,7 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
+                         return <div>
+                             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+                                 <div style={{ fontSize: 16, fontWeight: 800, color: C.teal }}>👥 Clients</div>
+-                                <button style={BTNP()} onClick={() => openM("addClient")}>+ Add Client</button>
++                                {isAdmin && <button style={BTNP()} onClick={() => openM("addClient")}>+ Add Client</button>}
+                             </div>
+ 
+                             {/* Normal / Customized main toggle */}
+@@ -1463,7 +1477,7 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
+                     {tab === "Balance Sheet" && <div>
+                         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+                             <div style={{ fontSize: 16, fontWeight: 800, color: C.blue }}>🏛️ Balance Sheet</div>
+-                            <button style={BTNP()} onClick={() => openM("bs")}>+ Manual Entry</button>
++                            {isAdmin && <button style={BTNP()} onClick={() => openM("bs")}>+ Manual Entry</button>}
+                         </div>
+                         <div style={{ background: "#0a1628", borderRadius: 10, padding: "10px 14px", marginBottom: 12, border: "1px solid #334155", fontSize: 10, color: "#64748b" }}>
+                             <strong style={{ color: "#94a3b8" }}>ℹ️ Auto-populated items (read-only):</strong> Cash Balance, Closing Stock (FIFO), Trade Debtors, Accum. Depreciation, Trade Creditors, Net Profit/Loss — these are derived from other modules and <em>cannot be entered here</em>. Use <strong style={{ color: "#94a3b8" }}>+ Manual Entry</strong> for items like Fixed Assets, Share Capital, Long-term Loans, etc. Balance Sheet entries do <em>not</em> affect P&amp;L.
+@@ -1526,7 +1540,7 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
+                     {tab === "Depreciation" && <div>
+                         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+                             <div style={{ fontSize: 16, fontWeight: 800, color: C.amber }}>📉 Depreciation Register</div>
+-                            <button style={BTNP()} onClick={() => openM("depr")}>+ Add Depreciation</button>
++                            {isAdmin && <button style={BTNP()} onClick={() => openM("depr")}>+ Add Depreciation</button>}
+                         </div>
+                         <div style={{ display: "flex", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
+                             {[["Gross Cost", fc(deprCostTotal), "#f59e0b,#d97706"], ["Accum. Depr", fc(totalDepreciation), "#ef4444,#dc2626"], ["Net WDV", fc(deprWDVTotal), "#22c55e,#16a34a"]].map(([l, v, g]) => (
+@@ -1553,32 +1567,57 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
+                         </div>
+                     </div>}
+ 
+-                    {tab === "Trial Balance" && <div>
+-                        <div style={{ fontSize: 16, fontWeight: 800, marginBottom: 14, color: C.teal }}>⚖️ Trial Balance</div>
+-                        <div style={{ background: C.mid, borderRadius: 12, padding: 16, border: "1px solid #334155" }}>
+-                            <table style={TBL}>
+-                                <thead><tr><th style={THS}>Account</th><th style={{...THS, textAlign: "right"}}>Debit (Dr)</th><th style={{...THS, textAlign: "right"}}>Credit (Cr)</th></tr></thead>
+-                                <tbody>
+-                                    <tr><td style={TDS}>Opening Stock</td><td style={{...TDS, textAlign:"right"}}>{fc(state.openingStock?.amount || 0)}</td><td style={TDS}></td></tr>
+-                                    <tr><td style={TDS}>Purchases</td><td style={{...TDS, textAlign:"right"}}>{fc(si.filter(x => !x.isReturn).reduce((s, e) => s + e.totalAmount, 0))}</td><td style={TDS}></td></tr>
+-                                    <tr><td style={TDS}>Purchase Returns</td><td style={TDS}></td><td style={{...TDS, textAlign:"right"}}>{fc(si.filter(x => x.isReturn).reduce((s, e) => s + e.totalAmount, 0))}</td></tr>
+-                                    <tr><td style={TDS}>Sales</td><td style={TDS}></td><td style={{...TDS, textAlign:"right"}}>{fc(so.filter(x => !x.isReturn).reduce((s, e) => s + e.totalAmount, 0))}</td></tr>
+-                                    <tr><td style={TDS}>Sales Returns</td><td style={{...TDS, textAlign:"right"}}>{fc(so.filter(x => x.isReturn).reduce((s, e) => s + e.totalAmount, 0))}</td><td style={TDS}></td></tr>
+-                                    <tr><td style={TDS}>Trading Dr (Direct Exp)</td><td style={{...TDS, textAlign:"right"}}>{fc(te.filter(x => x.side === "dr").reduce((s, e) => s + e.amount, 0))}</td><td style={TDS}></td></tr>
+-                                    <tr><td style={TDS}>Trading Cr (Direct Inc)</td><td style={TDS}></td><td style={{...TDS, textAlign:"right"}}>{fc(te.filter(x => x.side === "cr").reduce((s, e) => s + e.amount, 0))}</td></tr>
+-                                    <tr><td style={TDS}>P&L Expenses</td><td style={{...TDS, textAlign:"right"}}>{fc(ple.filter(x => x.side === "expense").reduce((s, e) => s + e.amount, 0))}</td><td style={TDS}></td></tr>
+-                                    <tr><td style={TDS}>P&L Income</td><td style={TDS}></td><td style={{...TDS, textAlign:"right"}}>{fc(ple.filter(x => x.side === "income").reduce((s, e) => s + e.amount, 0))}</td></tr>
+-                                    <tr><td style={TDS}>Depreciation (Expense)</td><td style={{...TDS, textAlign:"right"}}>{fc(totalDepreciation)}</td><td style={TDS}></td></tr>
+-                                    <tr><td style={TDS}>Trade Debtors</td><td style={{...TDS, textAlign:"right"}}>{fc(totalDebtors)}</td><td style={TDS}></td></tr>
+-                                    <tr><td style={TDS}>Trade Creditors</td><td style={TDS}></td><td style={{...TDS, textAlign:"right"}}>{fc(totalCreditors)}</td></tr>
+-                                    <tr><td style={TDS}>Cash Balance</td><td style={{...TDS, textAlign:"right"}}>{cashBal >= 0 ? fc(cashBal) : ""}</td><td style={{...TDS, textAlign:"right"}}>{cashBal < 0 ? fc(Math.abs(cashBal)) : ""}</td></tr>
+-                                    <tr><td style={TDS}>Manual BS Assets</td><td style={{...TDS, textAlign:"right"}}>{fc(Object.values(state.balanceSheet?.assets || {}).reduce((s, e) => s + Number(e.amount), 0))}</td><td style={TDS}></td></tr>
+-                                    <tr><td style={TDS}>Manual BS Liab & Equity</td><td style={TDS}></td><td style={{...TDS, textAlign:"right"}}>{fc(Object.values(state.balanceSheet?.liabilities || {}).reduce((s, e) => s + Number(e.amount), 0))}</td></tr>
+-                                </tbody>
+-                            </table>
+-                            <div style={{ marginTop: 12, fontSize: 10, color: C.muted, textAlign: "center" }}>Note: This is a pre-closing Trial Balance (closing stock is not included; opening stock is).</div>
+-                        </div>
+-                    </div>}
++                    {tab === "Trial Balance" && (() => {
++                        const rows = [
++                            { name: "Opening Stock", dr: state.openingStock?.amount || 0, cr: 0 },
++                            { name: "Purchases", dr: si.filter(x => !x.isReturn).reduce((s, e) => s + e.totalAmount, 0), cr: 0 },
++                            { name: "Purchase Returns", dr: 0, cr: si.filter(x => x.isReturn).reduce((s, e) => s + e.totalAmount, 0) },
++                            { name: "Sales", dr: 0, cr: so.filter(x => !x.isReturn).reduce((s, e) => s + e.totalAmount, 0) },
++                            { name: "Sales Returns", dr: so.filter(x => x.isReturn).reduce((s, e) => s + e.totalAmount, 0), cr: 0 },
++                            { name: "Trading Dr (Direct Exp)", dr: te.filter(x => x.side === "dr").reduce((s, e) => s + e.amount, 0), cr: 0 },
++                            { name: "Trading Cr (Direct Inc)", dr: 0, cr: te.filter(x => x.side === "cr").reduce((s, e) => s + e.amount, 0) },
++                            { name: "P&L Expenses", dr: ple.filter(x => x.side === "expense").reduce((s, e) => s + e.amount, 0), cr: 0 },
++                            { name: "P&L Income", dr: 0, cr: ple.filter(x => x.side === "income").reduce((s, e) => s + e.amount, 0) },
++                            { name: "Depreciation (Expense)", dr: totalDepreciation, cr: 0 },
++                            { name: "Trade Debtors", dr: totalDebtors, cr: 0 },
++                            { name: "Trade Creditors", dr: 0, cr: totalCreditors },
++                            { name: "Cash Balance", dr: cashBal >= 0 ? cashBal : 0, cr: cashBal < 0 ? Math.abs(cashBal) : 0 },
++                            { name: "Manual BS Assets", dr: Object.values(state.balanceSheet?.assets || {}).reduce((s, e) => s + Number(e.amount), 0), cr: 0 },
++                            { name: "Manual BS Liab & Equity", dr: 0, cr: Object.values(state.balanceSheet?.liabilities || {}).reduce((s, e) => s + Number(e.amount), 0) }
++                        ];
++                        const totalDr = rows.reduce((acc, r) => acc + r.dr, 0);
++                        const totalCr = rows.reduce((acc, r) => acc + r.cr, 0);
++                        const diff = Math.abs(totalDr - totalCr);
++                        const balanced = diff < 0.01;
++
++                        return <div>
++                            <div style={{ fontSize: 16, fontWeight: 800, marginBottom: 14, color: C.teal }}>⚖️ Trial Balance</div>
++                            <div style={{ background: C.mid, borderRadius: 12, padding: 16, border: "1px solid #334155" }}>
++                                <table style={TBL}>
++                                    <thead><tr><th style={THS}>Account</th><th style={{...THS, textAlign: "right"}}>Debit (Dr)</th><th style={{...THS, textAlign: "right"}}>Credit (Cr)</th></tr></thead>
++                                    <tbody>
++                                        {rows.map(r => (
++                                            <tr key={r.name}>
++                                                <td style={TDS}>{r.name}</td>
++                                                <td style={{...TDS, textAlign:"right"}}>{r.dr > 0 ? fc(r.dr) : "—"}</td>
++                                                <td style={{...TDS, textAlign:"right"}}>{r.cr > 0 ? fc(r.cr) : "—"}</td>
++                                            </tr>
++                                        ))}
++                                    </tbody>
++                                    <tfoot>
++                                        <tr style={{ borderTop: "2px solid #334155", fontWeight: 800 }}>
++                                            <td style={{ ...TDS, fontWeight: "bold" }}>Total</td>
++                                            <td style={{ ...TDS, textAlign: "right", fontWeight: "bold", color: balanced ? C.green : C.red }}>{fc(totalDr)}</td>
++                                            <td style={{ ...TDS, textAlign: "right", fontWeight: "bold", color: balanced ? C.green : C.red }}>{fc(totalCr)}</td>
++                                        </tr>
++                                    </tfoot>
++                                </table>
++                                {!balanced && <div style={{ color: C.red, fontSize: 11, fontWeight: 700, marginTop: 8, textAlign: "center" }}>⚠️ Trial Balance Mismatch! Difference: {fc(diff)}</div>}
++                                {balanced && <div style={{ color: C.green, fontSize: 11, fontWeight: 700, marginTop: 8, textAlign: "center" }}>✅ Trial Balance Balanced</div>}
++                                <div style={{ marginTop: 12, fontSize: 10, color: C.muted, textAlign: "center" }}>Note: This is a pre-closing Trial Balance (closing stock is not included; opening stock is).</div>
++                            </div>
++                        </div>;
++                    })()}
+ 
+                     {tab === "Cash Flow" && (() => {
+                         const sums = {};
+@@ -1657,24 +1696,39 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
+                         </div>;
+                     })()}
+ 
+-                    {/* Audit Log (Always visible at bottom) */}
+-                    <div style={{ marginTop: 24, background: C.mid, borderRadius: 12, padding: 16, border: "1px solid #334155" }}>
+-                        <div style={{ fontSize: 14, fontWeight: 800, marginBottom: 12, color: "#94a3b8" }}>📋 Recent Activity Log</div>
+-                        {(state.auditLog || []).length === 0 ? <div style={{ fontSize: 12, color: C.muted, textAlign: "center", padding: 10 }}>No activity recorded yet.</div> : (
+-                            <div style={{ maxHeight: 200, overflowY: "auto", fontSize: 11 }}>
+-                                {(state.auditLog || []).slice(0, 10).map(l => (
+-                                    <div key={l.id} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", borderBottom: "1px solid #334155" }}>
+-                                        <div style={{ display: "flex", gap: 10 }}>
+-                                            <span style={{ color: l.action === "DELETE" ? C.red : (l.action === "UPDATE" ? C.amber : C.green), fontWeight: 700 }}>{l.action}</span>
+-                                            <span style={{ color: C.text }}>{l.desc}</span>
+-                                        </div>
+-                                        <div style={{ color: C.muted, fontSize: 10 }}>{new Date(l.ts).toLocaleString()}</div>
+-                                    </div>
+-                                ))}
+-                                {(state.auditLog || []).length > 10 && <div style={{ textAlign: "center", padding: 8, color: C.muted, fontSize: 10 }}>Showing latest 10 of {(state.auditLog || []).length} events</div>}
+-                            </div>
+-                        )}
+-                    </div>
++                    {tab === "Audit Trail" && <div>
++                        <div style={{ fontSize: 16, fontWeight: 800, marginBottom: 14, color: "#94a3b8" }}>📋 Audit Trail</div>
++                        <div style={{ background: C.mid, borderRadius: 12, overflow: "hidden", border: "1px solid #334155" }}>
++                            {(state.auditLog || []).length === 0
++                                ? <div style={{ fontSize: 12, color: C.muted, textAlign: "center", padding: 32 }}>No activity recorded yet.</div>
++                                : <table style={TBL}>
++                                    <thead><tr>
++                                        <th style={THS}>#</th>
++                                        <th style={THS}>Action</th>
++                                        <th style={THS}>Module</th>
++                                        <th style={THS}>Description</th>
++                                        <th style={THS}>User</th>
++                                        <th style={THS}>Date & Time</th>
++                                    </tr></thead>
++                                    <tbody>
++                                        {(state.auditLog || []).map((l, i) => (
++                                            <tr key={l.id}>
++                                                <td style={{...TDS, color: C.muted, fontSize: 10}}>{(state.auditLog||[]).length - i}</td>
++                                                <td style={TDS}>
++                                                    <span style={{ background: l.action==="DELETE" ? "#ef444420" : l.action==="UPDATE" ? "#f59e0b20" : "#22c55e20", color: l.action==="DELETE" ? C.red : l.action==="UPDATE" ? C.amber : C.green, fontWeight: 800, fontSize: 10, padding: "2px 8px", borderRadius: 5, border: "1px solid currentColor" }}>{l.action}</span>
++                                                </td>
++                                                <td style={{...TDS, color: C.blue, fontSize: 11}}>{l.module}</td>
++                                                <td style={{...TDS, fontSize: 11}}>{l.desc}</td>
++                                                <td style={{...TDS, color: C.muted, fontSize: 10}}>{l.user || "—"}</td>
++                                                <td style={{...TDS, color: C.muted, fontSize: 10, whiteSpace: "nowrap"}}>{new Date(l.ts).toLocaleString()}</td>
++                                            </tr>
++                                        ))}
++                                    </tbody>
++                                </table>
++                            }
++                        </div>
++                        <div style={{ marginTop: 8, fontSize: 10, color: C.muted, textAlign: "center" }}>Showing all {(state.auditLog||[]).length} audit events (latest first)</div>
++                    </div>}
+ 
+                 </div>
+ 
