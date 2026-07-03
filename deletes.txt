@@ -1,0 +1,78 @@
+Line 550: const cascadeDelete = (key, id) => {
+  [548] };
+  [549] 
+  [550] const cascadeDelete = (key, id) => {
+  [551] if (!checkRoleAction()) return;
+  [552] setState(p => {
+Line 581: const delBS = (side, id) => {
+  [579] };
+  [580] 
+  [581] const delBS = (side, id) => {
+  [582] if (!checkRoleAction()) return;
+  [583] setState(p => {
+Line 1149: {te.filter(e => e.side === "dr").map(e => <div key={e.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 11, marginBottom: 3, alignItems: "center" }}><span style={{ color: C.muted }}>{e.description}</span><span style={{ display: "flex", gap: 5 }}>{fc(e.amount)}<button style={BTND} onClick={() => cascadeDelete("tradingEntries", e.id)}>✕</button></span></div>)}
+  [1147] {[["Opening Stock", openingStockAmt], ["Purchases (Gross)", grossPurchases]].map(([l, v]) => <div key={l} style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 3 }}><span style={{ color: C.muted }}>{l}</span><span style={{ color: C.red, fontWeight: 600 }}>{fc(v)}</span></div>)}
+  [1148] {purchaseReturnsAmt > 0 && <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 3 }}><span style={{ color: C.amber }}>Less: Purchase Returns</span><span style={{ color: C.green, fontWeight: 600 }}>({fc(purchaseReturnsAmt)})</span></div>}
+  [1149] {te.filter(e => e.side === "dr").map(e => <div key={e.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 11, marginBottom: 3, alignItems: "center" }}><span style={{ color: C.muted }}>{e.description}</span><span style={{ display: "flex", gap: 5 }}>{fc(e.amount)}<button style={BTND} onClick={() => cascadeDelete("tradingEntries", e.id)}>✕</button></span></div>)}
+  [1150] <div style={{ borderTop: "1px solid #334155", paddingTop: 6, fontWeight: 800, color: C.red, textAlign: "right" }}>Total Dr: {fc(tradingDr)}</div>
+  [1151] {grossProfit >= 0 && <div style={{ color: C.green, fontWeight: 800, textAlign: "right", fontSize: 11, marginTop: 4 }}>Gross Profit c/d: {fc(grossProfit)}</div>}
+Line 1157: {te.filter(e => e.side === "cr").map(e => <div key={e.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 11, marginBottom: 3, alignItems: "center" }}><span style={{ color: C.muted }}>{e.description}</span><span style={{ display: "flex", gap: 5 }}>{fc(e.amount)}<button style={BTND} onClick={() => cascadeDelete("tradingEntries", e.id)}>✕</button></span></div>)}
+  [1155] {[["Sales (Gross)", grossSales], ["Closing Stock (FIFO)", fifoClosing]].map(([l, v]) => <div key={l} style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 3 }}><span style={{ color: C.muted }}>{l}</span><span style={{ color: C.green, fontWeight: 600 }}>{fc(v)}</span></div>)}
+  [1156] {salesReturnsAmt > 0 && <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 3 }}><span style={{ color: C.amber }}>Less: Sales Returns</span><span style={{ color: C.red, fontWeight: 600 }}>({fc(salesReturnsAmt)})</span></div>}
+  [1157] {te.filter(e => e.side === "cr").map(e => <div key={e.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 11, marginBottom: 3, alignItems: "center" }}><span style={{ color: C.muted }}>{e.description}</span><span style={{ display: "flex", gap: 5 }}>{fc(e.amount)}<button style={BTND} onClick={() => cascadeDelete("tradingEntries", e.id)}>✕</button></span></div>)}
+  [1158] <div style={{ borderTop: "1px solid #334155", paddingTop: 6, fontWeight: 800, color: C.green, textAlign: "right" }}>Total Cr: {fc(tradingCr)}</div>
+  [1159] {grossProfit < 0 && <div style={{ color: C.red, fontWeight: 800, textAlign: "right", fontSize: 11, marginTop: 4 }}>Gross Loss c/d: {fabs(grossProfit)}</div>}
+Line 1344: <button style={BTND} onClick={() => cascadeDelete("stockIn", e.id)}>Del</button>
+  [1342] {e.locked ? "🔒" : "🔓"}
+  [1343] </button>
+  [1344] <button style={BTND} onClick={() => cascadeDelete("stockIn", e.id)}>Del</button>
+  [1345] </div>
+  [1346] </td>
+Line 1392: <button style={BTND} onClick={() => cascadeDelete("stockOut", e.id)}>Del</button>
+  [1390] {e.locked ? "🔒" : "🔓"}
+  [1391] </button>
+  [1392] <button style={BTND} onClick={() => cascadeDelete("stockOut", e.id)}>Del</button>
+  [1393] </div>
+  [1394] </td></tr>; })
+Line 1414: {PL_CATS.expenses.map(cat => { const ents = ple.filter(e => e.side === "expense" && e.category === cat); return ents.length ? <div key={cat} style={{ marginBottom: 6 }}><div style={{ color: "#94a3b8", fontSize: 10, fontWeight: 700, marginBottom: 2 }}>{cat}</div>{ents.map(e => <div key={e.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 11, paddingLeft: 8, alignItems: "center", marginBottom: 2 }}><span>{e.description}</span><span style={{ display: "flex", gap: 5 }}>{fc(e.amount)}<button style={BTND} onClick={() => cascadeDelete("plEntries", e.id)}>✕</button></span></div>)}</div> : null; })}
+  [1412] {grossProfit < 0 && <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: C.red, marginBottom: 4 }}><span>Gross Loss b/d</span><span style={{ fontWeight: 700 }}>{fabs(grossProfit)}</span></div>}
+  [1413] {totalDepreciation > 0 && <div style={{ marginBottom: 6 }}><div style={{ color: "#94a3b8", fontSize: 10, fontWeight: 700, marginBottom: 2 }}>Depreciation (auto)</div>{da.map(a => { const d = calcDepreciation(a); return d.totalDepr > 0 ? <div key={a.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 11, paddingLeft: 8, color: C.amber, marginBottom: 2 }}><span>{a.name}</span><span>{fc(d.totalDepr)}</span></div> : null; })}</div>}
+  [1414] {PL_CATS.expenses.map(cat => { const ents = ple.filter(e => e.side === "expense" && e.category === cat); return ents.length ? <div key={cat} style={{ marginBottom: 6 }}><div style={{ color: "#94a3b8", fontSize: 10, fontWeight: 700, marginBottom: 2 }}>{cat}</div>{ents.map(e => <div key={e.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 11, paddingLeft: 8, alignItems: "center", marginBottom: 2 }}><span>{e.description}</span><span style={{ display: "flex", gap: 5 }}>{fc(e.amount)}<button style={BTND} onClick={() => cascadeDelete("plEntries", e.id)}>✕</button></span></div>)}</div> : null; })}
+  [1415] {plExpense === 0 && <div style={{ color: C.muted, fontSize: 11, textAlign: "center", padding: "8px 0" }}>No expenses recorded</div>}
+  [1416] <div style={{ borderTop: "2px solid #334155", paddingTop: 6, fontWeight: 900, color: C.red, textAlign: "right" }}>Total Dr: {fc(plExpense)}</div>
+Line 1422: {PL_CATS.income.map(cat => { const ents = ple.filter(e => e.side === "income" && e.category === cat); return ents.length ? <div key={cat} style={{ marginBottom: 6 }}><div style={{ color: "#94a3b8", fontSize: 10, fontWeight: 700, marginBottom: 2 }}>{cat}</div>{ents.map(e => <div key={e.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 11, paddingLeft: 8, alignItems: "center", marginBottom: 2 }}><span>{e.description}</span><span style={{ display: "flex", gap: 5 }}>{fc(e.amount)}<button style={BTND} onClick={() => cascadeDelete("plEntries", e.id)}>✕</button></span></div>)}</div> : null; })}
+  [1420] <div style={{ fontWeight: 800, color: C.green, fontSize: 12, marginBottom: 6, borderBottom: "1px solid #334155", paddingBottom: 4 }}>Cr — Income</div>
+  [1421] {grossProfit >= 0 && <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: C.green, marginBottom: 4 }}><span>Gross Profit b/d</span><span style={{ fontWeight: 700 }}>{fc(grossProfit)}</span></div>}
+  [1422] {PL_CATS.income.map(cat => { const ents = ple.filter(e => e.side === "income" && e.category === cat); return ents.length ? <div key={cat} style={{ marginBottom: 6 }}><div style={{ color: "#94a3b8", fontSize: 10, fontWeight: 700, marginBottom: 2 }}>{cat}</div>{ents.map(e => <div key={e.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 11, paddingLeft: 8, alignItems: "center", marginBottom: 2 }}><span>{e.description}</span><span style={{ display: "flex", gap: 5 }}>{fc(e.amount)}<button style={BTND} onClick={() => cascadeDelete("plEntries", e.id)}>✕</button></span></div>)}</div> : null; })}
+  [1423] {plIncome === 0 && <div style={{ color: C.muted, fontSize: 11, textAlign: "center", padding: "8px 0" }}>No income recorded</div>}
+  [1424] <div style={{ borderTop: "2px solid #334155", paddingTop: 6, fontWeight: 900, color: C.green, textAlign: "right" }}>Total Cr: {fc(plIncome)}</div>
+Line 1456: <button style={BTND} onClick={() => cascadeDelete("cashEntries", e.id)}>Del</button>
+  [1454] {e.locked ? "🔒" : "🔓"}
+  [1455] </button>
+  [1456] <button style={BTND} onClick={() => cascadeDelete("cashEntries", e.id)}>Del</button>
+  [1457] </div>
+  [1458] </td></tr>
+Line 1535: <button style={BTND} onClick={() => cascadeDelete(isC ? "creditors" : "debtors", e.id)}>Del</button>
+  [1533] {e.locked ? "🔒" : "🔓"}
+  [1534] </button>
+  [1535] <button style={BTND} onClick={() => cascadeDelete(isC ? "creditors" : "debtors", e.id)}>Del</button>
+  [1536] </div></td>
+  [1537] </tr>
+Line 1870: <td style={TDS}><button style={BTND} onClick={ev => { ev.stopPropagation(); cascadeDelete("clients", cl.id); }}>Del</button></td>
+  [1868] <td style={TDS}>{fc(cl.avgO)}</td>
+  [1869] <td style={TDS}>{cl.lastDate || "—"}</td>
+  [1870] <td style={TDS}><button style={BTND} onClick={ev => { ev.stopPropagation(); cascadeDelete("clients", cl.id); }}>Del</button></td>
+  [1871] </tr>
+  [1872] ))}</tbody>
+Line 1924: {subE.map(e => <div key={e.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: C.text, alignItems: "center", paddingLeft: 12, marginBottom: 2 }}><span>{e.description}</span><span style={{ display: "flex", gap: 5 }}>{fc(e.amount)}{!e.autoFromDepr && <button style={BTND} onClick={() => delBS(side, e.id)}>✕</button>}</span></div>)}
+  [1922] return (<div key={sub} style={{ marginBottom: 5 }}>
+  [1923] <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 700, marginBottom: 2, paddingLeft: 4 }}>{sub}</div>
+  [1924] {subE.map(e => <div key={e.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: C.text, alignItems: "center", paddingLeft: 12, marginBottom: 2 }}><span>{e.description}</span><span style={{ display: "flex", gap: 5 }}>{fc(e.amount)}{!e.autoFromDepr && <button style={BTND} onClick={() => delBS(side, e.id)}>✕</button>}</span></div>)}
+  [1925] {autoSub.map((a, i) => <div key={i} style={{ display: "flex", justifyContent: "space-between", fontSize: 11, paddingLeft: 12, color: a.c }}><span>{a.label} <span style={{ color: C.muted, fontSize: 9 }}>(auto)</span></span><span style={{ fontWeight: 700 }}>{fc(a.val)}</span></div>)}
+  [1926] {subTotal !== 0 && <div style={{ textAlign: "right", fontSize: 11, color, fontWeight: 700, paddingRight: 4, marginTop: 3 }}>Sub-total: {fc(subTotal)}</div>}
+Line 1955: <tbody>{da.map(a => { const d = calcDepreciation(a); return (<tr key={a.id}><td style={{ ...TDS, fontWeight: 700 }}>{a.name}</td><td style={TDS}>{fc(a.cost)}</td><td style={TDS}>{a.startDate}</td><td style={TDS}><Badge label={a.method === "Straight Line (SLM)" ? "SLM" : "WDV"} color={C.blue} /></td><td style={TDS}>{a.depRate}%</td><td style={{ ...TDS, color: C.red, fontWeight: 700 }}>{fc(d.totalDepr)}</td><td style={{ ...TDS, color: C.green, fontWeight: 700 }}>{fc(d.wdv)}</td><td style={TDS}><button style={BTND} onClick={() => cascadeDelete("depreciationAssets", a.id)}>Del</button></td></tr>); })}</tbody>
+  [1953] {da.length === 0 ? <div style={{ background: C.mid, borderRadius: 12, padding: 24, textAlign: "center", color: C.muted }}>Add a Fixed Asset in Balance Sheet first, then add depreciation here.</div> : (
+  [1954] <div style={{ background: C.mid, borderRadius: 12, overflowX: "auto" }}><table style={TBL}><thead><tr>{["Asset", "Cost", "Start", "Method", "Rate", "Accum.Depr", "WDV", "Del"].map(h => <th key={h} style={THS}>{h}</th>)}</tr></thead>
+  [1955] <tbody>{da.map(a => { const d = calcDepreciation(a); return (<tr key={a.id}><td style={{ ...TDS, fontWeight: 700 }}>{a.name}</td><td style={TDS}>{fc(a.cost)}</td><td style={TDS}>{a.startDate}</td><td style={TDS}><Badge label={a.method === "Straight Line (SLM)" ? "SLM" : "WDV"} color={C.blue} /></td><td style={TDS}>{a.depRate}%</td><td style={{ ...TDS, color: C.red, fontWeight: 700 }}>{fc(d.totalDepr)}</td><td style={{ ...TDS, color: C.green, fontWeight: 700 }}>{fc(d.wdv)}</td><td style={TDS}><button style={BTND} onClick={() => cascadeDelete("depreciationAssets", a.id)}>Del</button></td></tr>); })}</tbody>
+  [1956] </table></div>
+  [1957] )}
