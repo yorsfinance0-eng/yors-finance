@@ -1214,17 +1214,17 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
                         if (selectedClient) {
                             const cl = clients.find(c => c.id === selectedClient);
                             if (!cl) { setSelectedClient(null); return null; }
-                            const allOrders = so.filter(e => e.clientId === cl.id && (clGodownF === "All" || e.godown === clGodownF)).sort((a,b) => new Date(b.date) - new Date(a.date));
+                            const allOrders = so.filter(e => e.clientId === cl.id && !e.isReturn && (clGodownF === "All" || e.godown === clGodownF)).sort((a,b) => new Date(b.date) - new Date(a.date));
                             const clOrders = clDetailCat === "all" ? allOrders : allOrders.filter(e => e.category === clDetailCat);
 
-                            const totalQty = clOrders.reduce((a,b) => a + Number(b.qty) * (b.isReturn ? -1 : 1), 0);
-                            const totalAmt = clOrders.reduce((a,b) => a + Number(b.totalAmount) * (b.isReturn ? -1 : 1), 0);
+                            const totalQty = clOrders.reduce((a,b) => a + Number(b.qty), 0);
+                            const totalAmt = clOrders.reduce((a,b) => a + Number(b.totalAmount), 0);
                             const avgOrder = clOrders.length > 0 ? totalAmt / clOrders.length : 0;
                             const linkedDebtors = debs.filter(d => d.clientId === cl.id);
                             const outstandingBal = linkedDebtors.reduce((a,d) => a + debtorBal(d), 0);
                             const relatedCash = linkedDebtors.length > 0 ? cash.filter(e => e.dir === "in" && linkedDebtors.some(d => e.linkedId === d.id)) : [];
-                            const clSalesOrders = clOrders.filter(e => !e.isReturn);
-                            const clSalesReturns = clOrders.filter(e => e.isReturn);
+                            const clSalesOrders = clOrders; // allOrders already excludes returns
+                            const clSalesReturns = so.filter(e => e.clientId === cl.id && e.isReturn && (clDetailCat === "all" || e.category === clDetailCat) && (clGodownF === "All" || e.godown === clGodownF)).sort((a,b) => new Date(b.date) - new Date(a.date));
 
                             const monthMap = {};
                             clOrders.forEach(e => { const d = new Date(e.date), k = d.getFullYear() + "-" + String(d.getMonth()+1).padStart(2,"0"); monthMap[k] = (monthMap[k] || { amt: 0, qty: 0 }); const mult = e.isReturn ? -1 : 1; monthMap[k].amt += Number(e.totalAmount) * mult; monthMap[k].qty += Number(e.qty) * mult; });
@@ -1343,10 +1343,10 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
                         /* ── List View ── */
                         /* Per-category enrichment */
                         const enrichedClients = clients.map(cl => {
-                            const allO = so.filter(e => e.clientId === cl.id && (clGodownF === "All" || e.godown === clGodownF));
+                            const allO = so.filter(e => e.clientId === cl.id && !e.isReturn && (clGodownF === "All" || e.godown === clGodownF));
                             const catO = clCatView === "all" ? allO : allO.filter(e => e.category === clCatView);
-                            const tQty = catO.reduce((a,b) => a + Number(b.qty) * (b.isReturn ? -1 : 1), 0);
-                            const tAmt = catO.reduce((a,b) => a + Number(b.totalAmount) * (b.isReturn ? -1 : 1), 0);
+                            const tQty = catO.reduce((a,b) => a + Number(b.qty), 0);
+                            const tAmt = catO.reduce((a,b) => a + Number(b.totalAmount), 0);
                             const avgO = catO.length > 0 ? tAmt / catO.length : 0;
                             const lastDate = catO.length > 0 ? catO.sort((a,b) => new Date(b.date) - new Date(a.date))[0].date : "";
                             return { ...cl, allO, catO, tQty, tAmt, avgO, lastDate };
@@ -1355,8 +1355,8 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
                         const totalClientRevenue = enrichedClients.reduce((a,c) => a + c.tAmt, 0);
                         const retailerCount = clients.filter(c => c.type === "Retailer").length;
                         const distributorCount = clients.filter(c => c.type === "Distributor").length;
-                        const normalRevenue = so.filter(e => e.clientId && e.category === "normal").reduce((a,b) => a + Number(b.totalAmount) * (b.isReturn ? -1 : 1), 0);
-                        const customRevenue = so.filter(e => e.clientId && e.category === "customized").reduce((a,b) => a + Number(b.totalAmount) * (b.isReturn ? -1 : 1), 0);
+                        const normalRevenue = so.filter(e => e.clientId && e.category === "normal" && !e.isReturn).reduce((a,b) => a + Number(b.totalAmount), 0);
+                        const customRevenue = so.filter(e => e.clientId && e.category === "customized" && !e.isReturn).reduce((a,b) => a + Number(b.totalAmount), 0);
 
                         const filtered = enrichedClients.filter(cl => {
                             if (clTypeF !== "All" && cl.type !== clTypeF) return false;
