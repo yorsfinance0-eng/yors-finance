@@ -86,7 +86,7 @@
         const CLIENT_TYPES = ["Retailer", "Distributor"];
         const CASH_IN_TYPES = ["Sales Receipt", "Debtor Payment", "Capital Introduced", "Loan Received", "Purchase Return Receipt", "Other Income Receipt"];
         const CASH_OUT_TYPES = ["Expense Payment", "Creditor Payment", "Stock Purchase Payment", "Loan Repayment", "Sales Return Refund", "Other Payment"];
-        const PL_CATS = { income: ["Other Income", "Finance Income"], expenses: ["Employee Benefit Expense", "Finance Costs", "Other Expenses", "Admin Expenses"] };
+        const PL_CATS = { income: ["Other Income", "Finance Income"], expenses: ["Employee Benefit Expense", "Finance Costs", "Other Expenses", "Admin Expenses", "Bad Debts"] };
         const SCHEDULE3 = {
             assets: { "Non-Current Assets": ["Fixed Assets", "Capital Work in Progress", "Long Term Investments", "Deferred Tax Assets"], "Current Assets": ["Inventories", "Trade Receivables", "Cash and Cash Equivalents", "Short Term Loans", "Other Current Assets"] },
             liabilities: { "Equity and Reserves": ["Share Capital", "Retained Earnings / Net Profit", "Other Reserves"], "Non-Current Liabilities": ["Long Term Borrowings", "Deferred Tax Liabilities", "Other Long Term Liabilities"], "Current Liabilities": ["Trade Payables", "Short Term Borrowings", "Other Current Liabilities", "Provisions"] }
@@ -201,8 +201,8 @@
             const mode = form._settleContext; if (!mode) return null;
             const isIn = ["sale", "trading_cr", "bs_liability_reduce", "pl_income"].includes(mode);
             const canCreditor = ["purchase", "trading_dr", "bs_asset_increase", "pl_expense", "bs_liability_reduce"].includes(mode);
-            const canDebtor = ["sale", "trading_cr", "pl_income"].includes(mode);
-            const canNone = ["bs_asset_increase", "bs_liability_reduce", "trading_dr", "trading_cr"].includes(mode);
+            const canDebtor = ["sale", "trading_cr", "pl_income", "pl_expense"].includes(mode);
+            const canNone = ["bs_asset_increase", "bs_liability_reduce", "trading_dr", "trading_cr", "pl_expense", "pl_income"].includes(mode);
             const options = ["cash", canCreditor && "creditor", canDebtor && "debtor", canNone && "none"].filter(Boolean);
             const mColors = { cash: C.green, creditor: C.amber, debtor: C.violet, none: C.muted };
             const mLabels = { cash: isIn ? "💵 Cash In" : "💵 Cash Out", creditor: "🏦 Creditor", debtor: "📋 Debtor", none: "📝 Journal Only" };
@@ -367,11 +367,53 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
             const netPL = plIncome - plExpense;
 
             const creditorFromStock = id => si.filter(x => x.settleMode === "creditor" && x.linkedPartyId === id).reduce((a, b) => a + Number(b.totalAmount) * (b.isReturn ? -1 : 1), 0);
-            const creditorFromOther = id => [...te, ...ple, ...Object.values(state.balanceSheet?.assets || {}), ...Object.values(state.balanceSheet?.liabilities || {})].filter(x => x.settleMode === "creditor" && x.linkedPartyId === id).reduce((a, b) => a + Number(b.amount || 0), 0);
+            const creditorFromOther = id => {
+                let sum = 0;
+                te.forEach(x => {
+                    if (x.settleMode === "creditor" && x.linkedPartyId === id) {
+                        if (x.side === "dr") sum += Number(x.amount || 0);
+                        else if (x.side === "cr") sum -= Number(x.amount || 0);
+                    }
+                });
+                ple.forEach(x => {
+                    if (x.settleMode === "creditor" && x.linkedPartyId === id) {
+                        if (x.side === "expense") sum += Number(x.amount || 0);
+                        else if (x.side === "income") sum -= Number(x.amount || 0);
+                    }
+                });
+                Object.values(state.balanceSheet?.assets || {}).forEach(x => {
+                    if (x.settleMode === "creditor" && x.linkedPartyId === id) sum += Number(x.amount || 0);
+                });
+                Object.values(state.balanceSheet?.liabilities || {}).forEach(x => {
+                    if (x.settleMode === "creditor" && x.linkedPartyId === id) sum += Number(x.amount || 0);
+                });
+                return sum;
+            };
             const creditorCashPaid = id => cash.filter(e => e.dir === "out" && e.linkedId === id).reduce((a, b) => a + Number(b.amount), 0);
             const creditorBal = c => Math.max(0, Number(c.amount) + creditorFromStock(c.id) + creditorFromOther(c.id) - creditorCashPaid(c.id));
             const debtorFromStock = id => so.filter(x => x.settleMode === "debtor" && x.linkedPartyId === id).reduce((a, b) => a + Number(b.totalAmount) * (b.isReturn ? -1 : 1), 0);
-            const debtorFromOther = id => [...te, ...ple, ...Object.values(state.balanceSheet?.assets || {}), ...Object.values(state.balanceSheet?.liabilities || {})].filter(x => x.settleMode === "debtor" && x.linkedPartyId === id).reduce((a, b) => a + Number(b.amount || 0), 0);
+            const debtorFromOther = id => {
+                let sum = 0;
+                te.forEach(x => {
+                    if (x.settleMode === "debtor" && x.linkedPartyId === id) {
+                        if (x.side === "cr") sum += Number(x.amount || 0);
+                        else if (x.side === "dr") sum -= Number(x.amount || 0);
+                    }
+                });
+                ple.forEach(x => {
+                    if (x.settleMode === "debtor" && x.linkedPartyId === id) {
+                        if (x.side === "income") sum += Number(x.amount || 0);
+                        else if (x.side === "expense") sum -= Number(x.amount || 0);
+                    }
+                });
+                Object.values(state.balanceSheet?.assets || {}).forEach(x => {
+                    if (x.settleMode === "debtor" && x.linkedPartyId === id) sum += Number(x.amount || 0);
+                });
+                Object.values(state.balanceSheet?.liabilities || {}).forEach(x => {
+                    if (x.settleMode === "debtor" && x.linkedPartyId === id) sum -= Number(x.amount || 0);
+                });
+                return sum;
+            };
             const debtorCashRcvd = id => cash.filter(e => e.dir === "in" && e.linkedId === id).reduce((a, b) => a + Number(b.amount), 0);
             const debtorBal = d => Math.max(0, Number(d.amount) + debtorFromStock(d.id) + debtorFromOther(d.id) - debtorCashRcvd(d.id));
             const totalCreditors = creds.reduce((a, b) => a + creditorBal(b), 0);
@@ -639,7 +681,13 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
                     let np = { ...p, balanceSheet: { ...p.balanceSheet, [form.side]: { ...p.balanceSheet[form.side], [id]: entry } } };
                     if (res.createdCreditorId) np.creditors = [...np.creditors, { id: res.createdCreditorId, name: form.newPartyName, date: form.date || today(), amount: 0, creditPeriod: form.newPartyCredit || "", notified: false, checked: false }];
                     if (res.createdDebtorId) np.debtors = [...np.debtors, { id: res.createdDebtorId, name: form.newPartyName, date: form.date || today(), amount: 0, creditPeriod: form.newPartyCredit || "", notified: false, checked: false }];
-                    res.cashEffects.forEach(e => { np.cashEntries = [...np.cashEntries, { ...e, payType: isAsset ? "Other Payment" : "Capital Introduced" }]; }); 
+                    const isBorrowing = form.subCategory === "Long Term Borrowings" || form.subCategory === "Short Term Borrowings";
+                    res.cashEffects.forEach(e => {
+                        np.cashEntries = [...np.cashEntries, {
+                            ...e,
+                            payType: isAsset ? "Other Payment" : (isBorrowing ? "Loan Received" : "Capital Introduced")
+                        }];
+                    });
                     np = withLog(np, "CREATE", "balanceSheet." + form.side, id, `Added Balance Sheet Entry: ${form.description}`);
                     return np;
                 }); closeM();
@@ -652,6 +700,50 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
                     let np = { ...p, [key]: [...p[key], { id, name: form.name, date: form.date, amount: Number(form.amount || 0), creditPeriod: form.creditPeriod, notified: false, checked: false }] };
                     return withLog(np, "CREATE", key, id, `Added ${side} ${form.name}`);
                 }); closeM();
+            };
+            const triggerBadDebt = debtor => {
+                const bal = debtorBal(debtor);
+                openM("badDebt", {
+                    debtorId: debtor.id,
+                    debtorName: debtor.name,
+                    amount: bal > 0 ? String(bal) : "",
+                    description: `Bad Debt Write-off — ${debtor.name}`
+                });
+            };
+            const applyBadDebtWriteOff = () => {
+                const { date, amount, description, debtorId, debtorName } = form;
+                if (!date || !amount || !description || !debtorId) { alert("Fill all fields"); return; }
+                const amt = Number(amount);
+                if (amt <= 0) { alert("Amount must be > 0"); return; }
+                
+                const debtor = state.debtors.find(d => d.id === debtorId);
+                if (!debtor) { alert("Debtor not found"); return; }
+                const bal = debtorBal(debtor);
+                if (amt > bal) {
+                    if (!window.confirm(`Warning: The write-off amount (₹${amt}) is greater than the debtor's outstanding balance (₹${bal}). Proceed anyway?`)) return;
+                }
+
+                const id = gid();
+                upd(p => {
+                    const badDebtEntry = {
+                        id,
+                        date,
+                        side: "expense",
+                        category: "Bad Debts",
+                        description,
+                        amount: amt,
+                        settleMode: "debtor",
+                        linkedPartyId: debtorId,
+                        linkedPartyName: debtorName
+                    };
+                    let np = {
+                        ...p,
+                        plEntries: [...p.plEntries, badDebtEntry]
+                    };
+                    np = withLog(np, "CREATE", "plEntries", id, `Written off Bad Debt for debtor ${debtorName}: ₹${amt}`);
+                    return np;
+                });
+                closeM();
             };
             const applyCash = () => {
                 if (!form.date || !form.payType || !form.amount || !form.description) { alert("Fill all fields"); return; }
@@ -1082,6 +1174,10 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
                             });
                             
                             const total = filteredItems.reduce((a, b) => a + getBal(b), 0);
+                            const headers = ["✓", "Name", "Date", "Opening", "From Entries", "Total Due", isC ? "Cash Paid" : "Cash Rcvd", "Balance", "Period", "Due Date", "Status", "Ledger"];
+                            if (!isC) headers.push("Bad Debt");
+                            headers.push("Del");
+
                             return (<div>
                                 <div style={{ display: "flex", gap: 10, marginBottom: 14, alignItems: "center" }}>
                                     <div style={{ fontSize: 13, color: C.muted, fontWeight: 700 }}>Filter by Godown:</div>
@@ -1091,8 +1187,8 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
                                     </select>
                                 </div>
                                 <div style={{ background: C.mid, borderRadius: 12, overflowX: "auto" }}>
-                                    <table style={TBL}><thead><tr>{["✓", "Name", "Date", "Opening", "From Entries", "Total Due", isC ? "Cash Paid" : "Cash Rcvd", "Balance", "Period", "Due Date", "Status", "Ledger", "Del"].map(h => <th key={h} style={THS}>{h}</th>)}</tr></thead>
-                                        <tbody>{!filteredItems.length && <tr><td colSpan={12} style={{ ...TDS, textAlign: "center", color: C.muted }}>No entries</td></tr>}
+                                    <table style={TBL}><thead><tr>{headers.map(h => <th key={h} style={THS}>{h}</th>)}</tr></thead>
+                                        <tbody>{!filteredItems.length && <tr><td colSpan={headers.length} style={{ ...TDS, textAlign: "center", color: C.muted }}>No entries</td></tr>}
                                             {filteredItems.map(e => {
                                                 const fromS = getFromStock(e.id), fromO = getFromOther(e.id), cp = getCash(e.id), totalDue = Number(e.amount) + fromS + fromO, bal = Math.max(0, totalDue - cp);
                                                 const isAutoSettled = bal === 0 && totalDue > 0;
@@ -1130,18 +1226,27 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
                                                     <td style={TDS}>{hasTerm ? due.toLocaleDateString("en-IN") : "—"}</td>
                                                     <td style={TDS}><Badge label={isAutoSettled ? "Settled" : sl} color={isAutoSettled ? C.green : sc} /></td>
                                                     <td style={TDS}><button style={{ ...BTNP(), padding: "3px 8px", fontSize: 10 }} onClick={() => isC ? setExpandedCreditor(expandedCreditor === e.id ? null : e.id) : setExpandedDebtor(expandedDebtor === e.id ? null : e.id)}>{(isC ? expandedCreditor === e.id : expandedDebtor === e.id) ? "▲ Hide" : "▼ Ledger"}</button></td>
+                                                    {!isC && <td style={TDS}><button style={{ ...BTNP("linear-gradient(90deg,#ef4444,#dc2626)"), padding: "3px 8px", fontSize: 10 }} onClick={() => triggerBadDebt(e)} disabled={isAutoSettled}>Bad Debt</button></td>}
                                                     <td style={TDS}><button style={BTND} onClick={() => cascadeDelete(isC ? "creditors" : "debtors", e.id)}>Del</button></td>
                                                 </tr>
                                                 {isC && expandedCreditor === e.id && (() => {
                                                     const cPurchases = si.filter(x => x.settleMode === "creditor" && x.linkedPartyId === e.id && !x.isReturn).sort((a,b) => new Date(a.date)-new Date(b.date));
                                                     const cReturns = si.filter(x => x.settleMode === "creditor" && x.linkedPartyId === e.id && x.isReturn).sort((a,b) => new Date(a.date)-new Date(b.date));
                                                     const cCash = cash.filter(x => x.dir === "out" && x.linkedId === e.id).sort((a,b) => new Date(a.date)-new Date(b.date));
-                                                    const cOthers = [...te, ...ple, ...Object.values(state.balanceSheet?.assets || {}), ...Object.values(state.balanceSheet?.liabilities || {})].filter(x => x.settleMode === "creditor" && x.linkedPartyId === e.id);
+                                                    const cOthers = [...te, ...ple, ...Object.values(state.balanceSheet?.assets || {}), ...Object.values(state.balanceSheet?.liabilities || {})]
+                                                         .filter(x => x.settleMode === "creditor" && x.linkedPartyId === e.id)
+                                                         .map(x => {
+                                                             let dr = 0, cr = 0;
+                                                             const isDrType = x.side === "dr" || x.side === "expense" || x.side === "assets" || x.side === "liabilities";
+                                                             if (isDrType) dr = Number(x.amount);
+                                                             else cr = Number(x.amount);
+                                                             return { _t: "other", date: x.date, desc: x.description || "Manual Entry", dr, cr };
+                                                         });
                                                     const allTx = [
                                                         ...(Number(e.amount) > 0 ? [{ _t: "opening", date: e.date, desc: "Opening Balance", dr: Number(e.amount), cr: 0 }] : []),
                                                         ...cPurchases.map(x => ({ _t: "purchase", date: x.date, desc: `Purchase: ${x.bottleType} (${x.category}) — ${x.godown} | Batch: ${x.batchNo}`, dr: Number(x.totalAmount), cr: 0 })),
                                                         ...cReturns.map(x => ({ _t: "return", date: x.date, desc: `Purchase Return: ${x.bottleType} (${x.category}) — ${x.godown} | Batch: ${x.batchNo}`, dr: 0, cr: Number(x.totalAmount) })),
-                                                        ...cOthers.map(x => ({ _t: "other", date: x.date, desc: x.description || "Manual Entry", dr: Number(x.amount), cr: 0 })),
+                                                        ...cOthers,
                                                         ...cCash.map(x => ({ _t: "cash", date: x.date, desc: x.description || "Cash Payment", dr: 0, cr: Number(x.amount) })),
                                                     ].sort((a,b) => new Date(a.date)-new Date(b.date));
                                                     let running = 0;
@@ -1168,12 +1273,20 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
                                                     const dSales = so.filter(x => x.settleMode === "debtor" && x.linkedPartyId === e.id && !x.isReturn).sort((a,b) => new Date(a.date)-new Date(b.date));
                                                     const dReturns = so.filter(x => x.settleMode === "debtor" && x.linkedPartyId === e.id && x.isReturn).sort((a,b) => new Date(a.date)-new Date(b.date));
                                                     const dCash = cash.filter(x => x.dir === "in" && x.linkedId === e.id).sort((a,b) => new Date(a.date)-new Date(b.date));
-                                                    const dOthers = [...te, ...ple, ...Object.values(state.balanceSheet?.assets || {}), ...Object.values(state.balanceSheet?.liabilities || {})].filter(x => x.settleMode === "debtor" && x.linkedPartyId === e.id);
+                                                    const dOthers = [...te, ...ple, ...Object.values(state.balanceSheet?.assets || {}), ...Object.values(state.balanceSheet?.liabilities || {})]
+                                                         .filter(x => x.settleMode === "debtor" && x.linkedPartyId === e.id)
+                                                         .map(x => {
+                                                             let dr = 0, cr = 0;
+                                                             const isDrType = x.side === "cr" || x.side === "income" || x.side === "assets";
+                                                             if (isDrType) dr = Number(x.amount);
+                                                             else cr = Number(x.amount);
+                                                             return { _t: "other", date: x.date, desc: x.description || "Manual Entry", dr, cr };
+                                                         });
                                                     const allTx = [
                                                         ...(Number(e.amount) > 0 ? [{ _t: "opening", date: e.date, desc: "Opening Balance", dr: Number(e.amount), cr: 0 }] : []),
                                                         ...dSales.map(x => ({ _t: "sale", date: x.date, desc: `Sales: ${x.bottleType} (${x.category}) — ${x.godown}${x.billNo ? " | Bill: " + x.billNo : ""}`, dr: Number(x.totalAmount), cr: 0 })),
                                                         ...dReturns.map(x => ({ _t: "return", date: x.date, desc: `Sales Return: ${x.bottleType} (${x.category}) — ${x.godown}${x.billNo ? " | Bill: " + x.billNo : ""} — Client: ${x.clientName || ""}`, dr: 0, cr: Number(x.totalAmount) })),
-                                                        ...dOthers.map(x => ({ _t: "other", date: x.date, desc: x.description || "Manual Entry", dr: Number(x.amount), cr: 0 })),
+                                                        ...dOthers,
                                                         ...dCash.map(x => ({ _t: "cash", date: x.date, desc: x.description || "Cash Receipt", dr: 0, cr: Number(x.amount) })),
                                                     ].sort((a,b) => new Date(a.date)-new Date(b.date));
                                                     let running = 0;
@@ -1977,6 +2090,20 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
                             <input type="number" style={INP} placeholder="Opening Balance (₹)" value={form.amount || "0"} onChange={e => setForm(f => ({ ...f, amount: e.target.value }))} />
                             <input type="number" style={INP} placeholder="Credit Period (days) *" value={form.creditPeriod || ""} onChange={e => setForm(f => ({ ...f, creditPeriod: e.target.value }))} />
                             <button style={{ ...BTNP(), width: "100%" }} onClick={() => applyCredDeb("debtor")}>Save</button>
+                        </div>}
+
+                        {modal === "badDebt" && <div>
+                            <div style={{ fontWeight: 800, fontSize: 15, color: "#ef4444", marginBottom: 12 }}>📝 Write Off Bad Debt</div>
+                            <div style={{ fontSize: 13, color: C.text, marginBottom: 12 }}>
+                                Writing off outstanding balance for debtor: <strong style={{ color: C.violet }}>{form.debtorName}</strong>
+                            </div>
+                            <DateInput value={form.date} onChange={v => setForm(f => ({ ...f, date: v }))} />
+                            <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 10 }}>
+                                <span style={{ fontSize: 12, color: C.muted }}>Write-off Amount (₹) *</span>
+                            </div>
+                            <input type="number" style={INP} placeholder="Amount (₹) *" value={form.amount || ""} onChange={e => setForm(f => ({ ...f, amount: e.target.value }))} />
+                            <input style={INP} placeholder="Description *" value={form.description || ""} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} />
+                            <button style={{ ...BTNP("linear-gradient(90deg,#ef4444,#dc2626)"), width: "100%" }} onClick={applyBadDebtWriteOff}>Write Off</button>
                         </div>}
 
                         {modal === "cash" && <div>
