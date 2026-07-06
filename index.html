@@ -200,8 +200,8 @@
         function SettlePanel({ form, setForm, creds, debs }) {
             const mode = form._settleContext; if (!mode) return null;
             const isIn = ["sale", "trading_cr", "bs_liability_reduce", "pl_income"].includes(mode);
-            const canCreditor = ["purchase", "trading_dr", "bs_asset_increase", "pl_expense"].includes(mode);
-            const canDebtor = ["sale", "trading_cr", "bs_liability_reduce", "pl_income"].includes(mode);
+            const canCreditor = ["purchase", "trading_dr", "bs_asset_increase", "pl_expense", "bs_liability_reduce"].includes(mode);
+            const canDebtor = ["sale", "trading_cr", "pl_income"].includes(mode);
             const canNone = ["bs_asset_increase", "bs_liability_reduce", "trading_dr", "trading_cr"].includes(mode);
             const options = ["cash", canCreditor && "creditor", canDebtor && "debtor", canNone && "none"].filter(Boolean);
             const mColors = { cash: C.green, creditor: C.amber, debtor: C.violet, none: C.muted };
@@ -367,11 +367,11 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
             const netPL = plIncome - plExpense;
 
             const creditorFromStock = id => si.filter(x => x.settleMode === "creditor" && x.linkedPartyId === id).reduce((a, b) => a + Number(b.totalAmount) * (b.isReturn ? -1 : 1), 0);
-            const creditorFromOther = id => [...te, ...ple].filter(x => x.settleMode === "creditor" && x.linkedPartyId === id).reduce((a, b) => a + Number(b.amount || 0), 0);
+            const creditorFromOther = id => [...te, ...ple, ...Object.values(state.balanceSheet?.assets || {}), ...Object.values(state.balanceSheet?.liabilities || {})].filter(x => x.settleMode === "creditor" && x.linkedPartyId === id).reduce((a, b) => a + Number(b.amount || 0), 0);
             const creditorCashPaid = id => cash.filter(e => e.dir === "out" && e.linkedId === id).reduce((a, b) => a + Number(b.amount), 0);
             const creditorBal = c => Math.max(0, Number(c.amount) + creditorFromStock(c.id) + creditorFromOther(c.id) - creditorCashPaid(c.id));
             const debtorFromStock = id => so.filter(x => x.settleMode === "debtor" && x.linkedPartyId === id).reduce((a, b) => a + Number(b.totalAmount) * (b.isReturn ? -1 : 1), 0);
-            const debtorFromOther = id => [...te, ...ple].filter(x => x.settleMode === "debtor" && x.linkedPartyId === id).reduce((a, b) => a + Number(b.amount || 0), 0);
+            const debtorFromOther = id => [...te, ...ple, ...Object.values(state.balanceSheet?.assets || {}), ...Object.values(state.balanceSheet?.liabilities || {})].filter(x => x.settleMode === "debtor" && x.linkedPartyId === id).reduce((a, b) => a + Number(b.amount || 0), 0);
             const debtorCashRcvd = id => cash.filter(e => e.dir === "in" && e.linkedId === id).reduce((a, b) => a + Number(b.amount), 0);
             const debtorBal = d => Math.max(0, Number(d.amount) + debtorFromStock(d.id) + debtorFromOther(d.id) - debtorCashRcvd(d.id));
             const totalCreditors = creds.reduce((a, b) => a + creditorBal(b), 0);
@@ -506,13 +506,13 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
                 if (isReturn === "true") {
                     if (!date || !godown || !bottleType || !category || !batchNo || !qty || !ratePerUnit) { alert("Fill all fields"); return; }
                     if (Number(qty) <= 0 || Number(ratePerUnit) <= 0) { alert("Qty and Rate must be > 0"); return; }
-                    if (!form.returnCreditorId) { alert("Select a creditor for the return"); return; }
                     if (!form.returnSettleMode) { alert("Select a return settlement mode"); return; }
+                    if (form.returnSettleMode === "creditor" && !form.returnCreditorId) { alert("Select a creditor for the return"); return; }
                     const total = Number(qty) * Number(ratePerUnit), id = gid();
-                    const cred = (state.creditors || []).find(c => c.id === form.returnCreditorId);
+                    const cred = form.returnCreditorId ? (state.creditors || []).find(c => c.id === form.returnCreditorId) : null;
                     const settleMode = form.returnSettleMode;
                     const linkedPartyId = settleMode === "creditor" && cred ? cred.id : null;
-                    const linkedPartyName = settleMode === "creditor" && cred ? cred.name : (cred ? cred.name : "");
+                    const linkedPartyName = settleMode === "creditor" && cred ? cred.name : "";
                     upd(p => {
                         let np = { ...p, stockIn: [...p.stockIn, { id, date, godown, bottleType, category, batchNo, qty: Number(qty), ratePerUnit: Number(ratePerUnit), totalAmount: total, settleMode, linkedPartyId, linkedPartyName, isReturn: true }] };
                         if (settleMode === "cash") {
@@ -546,13 +546,13 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
                 if (isReturn === "true") {
                     if (!date || !godown || !bottleType || !category || !qty || !ratePerUnit) { alert("Fill all fields"); return; }
                     if (Number(qty) <= 0 || Number(ratePerUnit) <= 0) { alert("Qty and Rate must be > 0"); return; }
-                    if (!form.returnClientId) { alert("Select a client for the return"); return; }
                     if (!form.returnSettleMode) { alert("Select a return settlement mode"); return; }
+                    if (form.returnSettleMode === "debtor" && !form.returnClientId) { alert("Select a client for the return"); return; }
                     const total = Number(qty) * Number(ratePerUnit), id = gid();
-                    const cl = (state.clients || []).find(c => c.id === form.returnClientId);
-                    const clientId = form.returnClientId, clientName = cl ? cl.name : "";
-                    const linkedDeb = (state.debtors || []).find(d => d.clientId === clientId)
-                        || (clientName ? (state.debtors || []).find(d => d.name.trim().toLowerCase() === clientName.trim().toLowerCase()) : null);
+                    const cl = form.returnClientId ? (state.clients || []).find(c => c.id === form.returnClientId) : null;
+                    const clientId = form.returnClientId || null, clientName = cl ? cl.name : "";
+                    const linkedDeb = clientId ? ((state.debtors || []).find(d => d.clientId === clientId)
+                        || (clientName ? (state.debtors || []).find(d => d.name.trim().toLowerCase() === clientName.trim().toLowerCase()) : null)) : null;
                     const settleMode = form.returnSettleMode;
                     const linkedPartyId = settleMode === "debtor" && linkedDeb ? linkedDeb.id : null;
                     const linkedPartyName = settleMode === "debtor" && linkedDeb ? linkedDeb.name : clientName;
@@ -1136,10 +1136,12 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
                                                     const cPurchases = si.filter(x => x.settleMode === "creditor" && x.linkedPartyId === e.id && !x.isReturn).sort((a,b) => new Date(a.date)-new Date(b.date));
                                                     const cReturns = si.filter(x => x.settleMode === "creditor" && x.linkedPartyId === e.id && x.isReturn).sort((a,b) => new Date(a.date)-new Date(b.date));
                                                     const cCash = cash.filter(x => x.dir === "out" && x.linkedId === e.id).sort((a,b) => new Date(a.date)-new Date(b.date));
+                                                    const cOthers = [...te, ...ple, ...Object.values(state.balanceSheet?.assets || {}), ...Object.values(state.balanceSheet?.liabilities || {})].filter(x => x.settleMode === "creditor" && x.linkedPartyId === e.id);
                                                     const allTx = [
                                                         ...(Number(e.amount) > 0 ? [{ _t: "opening", date: e.date, desc: "Opening Balance", dr: Number(e.amount), cr: 0 }] : []),
                                                         ...cPurchases.map(x => ({ _t: "purchase", date: x.date, desc: `Purchase: ${x.bottleType} (${x.category}) — ${x.godown} | Batch: ${x.batchNo}`, dr: Number(x.totalAmount), cr: 0 })),
                                                         ...cReturns.map(x => ({ _t: "return", date: x.date, desc: `Purchase Return: ${x.bottleType} (${x.category}) — ${x.godown} | Batch: ${x.batchNo}`, dr: 0, cr: Number(x.totalAmount) })),
+                                                        ...cOthers.map(x => ({ _t: "other", date: x.date, desc: x.description || "Manual Entry", dr: Number(x.amount), cr: 0 })),
                                                         ...cCash.map(x => ({ _t: "cash", date: x.date, desc: x.description || "Cash Payment", dr: 0, cr: Number(x.amount) })),
                                                     ].sort((a,b) => new Date(a.date)-new Date(b.date));
                                                     let running = 0;
@@ -1166,10 +1168,12 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
                                                     const dSales = so.filter(x => x.settleMode === "debtor" && x.linkedPartyId === e.id && !x.isReturn).sort((a,b) => new Date(a.date)-new Date(b.date));
                                                     const dReturns = so.filter(x => x.settleMode === "debtor" && x.linkedPartyId === e.id && x.isReturn).sort((a,b) => new Date(a.date)-new Date(b.date));
                                                     const dCash = cash.filter(x => x.dir === "in" && x.linkedId === e.id).sort((a,b) => new Date(a.date)-new Date(b.date));
+                                                    const dOthers = [...te, ...ple, ...Object.values(state.balanceSheet?.assets || {}), ...Object.values(state.balanceSheet?.liabilities || {})].filter(x => x.settleMode === "debtor" && x.linkedPartyId === e.id);
                                                     const allTx = [
                                                         ...(Number(e.amount) > 0 ? [{ _t: "opening", date: e.date, desc: "Opening Balance", dr: Number(e.amount), cr: 0 }] : []),
                                                         ...dSales.map(x => ({ _t: "sale", date: x.date, desc: `Sales: ${x.bottleType} (${x.category}) — ${x.godown}${x.billNo ? " | Bill: " + x.billNo : ""}`, dr: Number(x.totalAmount), cr: 0 })),
                                                         ...dReturns.map(x => ({ _t: "return", date: x.date, desc: `Sales Return: ${x.bottleType} (${x.category}) — ${x.godown}${x.billNo ? " | Bill: " + x.billNo : ""} — Client: ${x.clientName || ""}`, dr: 0, cr: Number(x.totalAmount) })),
+                                                        ...dOthers.map(x => ({ _t: "other", date: x.date, desc: x.description || "Manual Entry", dr: Number(x.amount), cr: 0 })),
                                                         ...dCash.map(x => ({ _t: "cash", date: x.date, desc: x.description || "Cash Receipt", dr: 0, cr: Number(x.amount) })),
                                                     ].sort((a,b) => new Date(a.date)-new Date(b.date));
                                                     let running = 0;
@@ -1804,25 +1808,33 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
                                 
                                 {form.isReturn === "true" ? (
                                     <div style={{ background: "#0a0f1e", borderRadius: 8, padding: 12, marginBottom: 9, border: "2px solid " + C.amber }}>
-                                        <div style={{ fontSize: 11, color: C.amber, fontWeight: 700, marginBottom: 7 }}>↩️ Purchase Return — Select Creditor</div>
-                                        <select style={INP} value={form.returnCreditorId || ""} onChange={e => setForm(f => ({ ...f, returnCreditorId: e.target.value, returnSettleMode: "" }))}>
-                                            <option value="">Select Creditor *</option>
-                                            {(state.creditors || []).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-                                        </select>
-                                        {form.returnCreditorId && (() => {
-                                            const cred = (state.creditors || []).find(c => c.id === form.returnCreditorId);
+                                        <div style={{ fontSize: 11, color: C.amber, fontWeight: 700, marginBottom: 7 }}>↩️ Purchase Return Settlement</div>
+                                        <div style={{ display: "flex", gap: 6, marginBottom: 8, flexWrap: "wrap" }}>
+                                            <button onClick={() => setForm(f => ({ ...f, returnSettleMode: "creditor", returnCreditorId: "" }))} style={{ flex: 1, minWidth: 90, padding: "7px 4px", border: "2px solid " + (form.returnSettleMode === "creditor" ? C.amber : C.border), borderRadius: 7, background: form.returnSettleMode === "creditor" ? C.amber + "18" : C.mid, color: form.returnSettleMode === "creditor" ? C.amber : C.muted, fontWeight: 700, fontSize: 11, cursor: "pointer" }}>🏦 Adjust Creditor</button>
+                                            <button onClick={() => setForm(f => ({ ...f, returnSettleMode: "cash", returnCreditorId: "" }))} style={{ flex: 1, minWidth: 90, padding: "7px 4px", border: "2px solid " + (form.returnSettleMode === "cash" ? C.green : C.border), borderRadius: 7, background: form.returnSettleMode === "cash" ? C.green + "18" : C.mid, color: form.returnSettleMode === "cash" ? C.green : C.muted, fontWeight: 700, fontSize: 11, cursor: "pointer" }}>💵 Cash Refund</button>
+                                            <button onClick={() => setForm(f => ({ ...f, returnSettleMode: "journal", returnCreditorId: "" }))} style={{ flex: 1, minWidth: 90, padding: "7px 4px", border: "2px solid " + (form.returnSettleMode === "journal" ? C.muted : C.border), borderRadius: 7, background: form.returnSettleMode === "journal" ? C.muted + "18" : C.mid, color: form.returnSettleMode === "journal" ? C.muted : C.border, fontWeight: 700, fontSize: 11, cursor: "pointer" }}>📝 Journal Only</button>
+                                        </div>
+
+                                        {form.returnSettleMode === "creditor" && (
+                                            <div>
+                                                <select style={INP} value={form.returnCreditorId || ""} onChange={e => setForm(f => ({ ...f, returnCreditorId: e.target.value }))}>
+                                                    <option value="">Select Creditor *</option>
+                                                    {(state.creditors || []).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                                                </select>
+                                            </div>
+                                        )}
+
+                                        {(() => {
+                                            const cred = form.returnCreditorId ? (state.creditors || []).find(c => c.id === form.returnCreditorId) : null;
                                             const bal = cred ? creditorBal(cred) : 0;
                                             const returnAmt = Number(form.qty || 0) * Number(form.ratePerUnit || 0);
                                             return <div>
-                                                {cred
-                                                    ? <div style={{ fontSize: 10, color: C.teal, marginTop: 6, background: "#042f2e", padding: "6px 10px", borderRadius: 6 }}>✓ Creditor found: <strong>{cred.name}</strong> | Current Balance: {fc(bal)} | Return Amt: {fc(returnAmt)}</div>
-                                                    : <div style={{ fontSize: 10, color: C.amber, marginTop: 4, marginBottom: 6 }}>⚠️ No creditor found matching that ID</div>}
-                                                <div style={{ fontSize: 11, color: "#94a3b8", fontWeight: 700, marginTop: 10, marginBottom: 6 }}>💳 Return Settlement</div>
-                                                <div style={{ display: "flex", gap: 6, marginBottom: 4, flexWrap: "wrap" }}>
-                                                    {cred && <button onClick={() => setForm(f => ({ ...f, returnSettleMode: "creditor" }))} style={{ flex: 1, minWidth: 90, padding: "7px 4px", border: "2px solid " + (form.returnSettleMode === "creditor" ? C.amber : C.border), borderRadius: 7, background: form.returnSettleMode === "creditor" ? C.amber + "18" : C.mid, color: form.returnSettleMode === "creditor" ? C.amber : C.muted, fontWeight: 700, fontSize: 11, cursor: "pointer" }}>🏦 Adjust Creditor</button>}
-                                                    <button onClick={() => setForm(f => ({ ...f, returnSettleMode: "cash" }))} style={{ flex: 1, minWidth: 90, padding: "7px 4px", border: "2px solid " + (form.returnSettleMode === "cash" ? C.green : C.border), borderRadius: 7, background: form.returnSettleMode === "cash" ? C.green + "18" : C.mid, color: form.returnSettleMode === "cash" ? C.green : C.muted, fontWeight: 700, fontSize: 11, cursor: "pointer" }}>💵 Cash Refund</button>
-                                                    <button onClick={() => setForm(f => ({ ...f, returnSettleMode: "journal" }))} style={{ flex: 1, minWidth: 90, padding: "7px 4px", border: "2px solid " + (form.returnSettleMode === "journal" ? C.muted : C.border), borderRadius: 7, background: form.returnSettleMode === "journal" ? C.muted + "18" : C.mid, color: form.returnSettleMode === "journal" ? C.muted : C.border, fontWeight: 700, fontSize: 11, cursor: "pointer" }}>📝 Journal Only</button>
-                                                </div>
+                                                {form.returnSettleMode === "creditor" && cred && (
+                                                    <div style={{ fontSize: 10, color: C.teal, marginTop: 6, background: "#042f2e", padding: "6px 10px", borderRadius: 6 }}>✓ Creditor found: <strong>{cred.name}</strong> | Current Balance: {fc(bal)} | Return Amt: {fc(returnAmt)}</div>
+                                                )}
+                                                {form.returnSettleMode === "creditor" && form.returnCreditorId && !cred && (
+                                                    <div style={{ fontSize: 10, color: C.amber, marginTop: 4, marginBottom: 6 }}>⚠️ No creditor found matching that ID</div>
+                                                )}
                                                 {form.returnSettleMode === "creditor" && cred && <div style={{ fontSize: 10, color: C.amber, marginTop: 4 }}>Will reduce <strong>{cred.name}</strong>'s outstanding by {fc(returnAmt)}</div>}
                                                 {form.returnSettleMode === "cash" && <div style={{ fontSize: 10, color: C.green, marginTop: 4 }}>💵 Cash In of {fc(returnAmt)} will be recorded in Cash Book as refund receipt</div>}
                                                 {form.returnSettleMode === "journal" && <div style={{ fontSize: 10, color: C.muted, marginTop: 4 }}>Entry recorded in Trading A/C only — no creditor/cash effect</div>}
@@ -1850,28 +1862,35 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
 
                             {form.isReturn === "true" ? (
                                 <div style={{ background: "#0a0f1e", borderRadius: 8, padding: 12, marginBottom: 9, border: "2px solid " + C.amber }}>
-                                    <div style={{ fontSize: 11, color: C.amber, fontWeight: 700, marginBottom: 7 }}>↩️ Sales Return — Select Client</div>
-                                    <select style={INP} value={form.returnClientId || ""} onChange={e => setForm(f => ({ ...f, returnClientId: e.target.value, returnSettleMode: "" }))}>
-                                        <option value="">Select Client *</option>
-                                        {(state.clients || []).map(c => <option key={c.id} value={c.id}>{c.name} ({c.type})</option>)}
-                                    </select>
-                                    {form.returnClientId && (() => {
-                                        const cl = (state.clients || []).find(c => c.id === form.returnClientId);
+                                    <div style={{ fontSize: 11, color: C.amber, fontWeight: 700, marginBottom: 7 }}>↩️ Sales Return Settlement</div>
+                                    <div style={{ display: "flex", gap: 6, marginBottom: 8, flexWrap: "wrap" }}>
+                                        <button onClick={() => setForm(f => ({ ...f, returnSettleMode: "debtor", returnClientId: "" }))} style={{ flex: 1, minWidth: 90, padding: "7px 4px", border: "2px solid " + (form.returnSettleMode === "debtor" ? C.violet : C.border), borderRadius: 7, background: form.returnSettleMode === "debtor" ? C.violet + "18" : C.mid, color: form.returnSettleMode === "debtor" ? C.violet : C.muted, fontWeight: 700, fontSize: 11, cursor: "pointer" }}>📋 Adjust Debtor</button>
+                                        <button onClick={() => setForm(f => ({ ...f, returnSettleMode: "cash", returnClientId: "" }))} style={{ flex: 1, minWidth: 90, padding: "7px 4px", border: "2px solid " + (form.returnSettleMode === "cash" ? C.red : C.border), borderRadius: 7, background: form.returnSettleMode === "cash" ? C.red + "18" : C.mid, color: form.returnSettleMode === "cash" ? C.red : C.muted, fontWeight: 700, fontSize: 11, cursor: "pointer" }}>💵 Cash Refund</button>
+                                        <button onClick={() => setForm(f => ({ ...f, returnSettleMode: "journal", returnClientId: "" }))} style={{ flex: 1, minWidth: 90, padding: "7px 4px", border: "2px solid " + (form.returnSettleMode === "journal" ? C.muted : C.border), borderRadius: 7, background: form.returnSettleMode === "journal" ? C.muted + "18" : C.mid, color: form.returnSettleMode === "journal" ? C.muted : C.border, fontWeight: 700, fontSize: 11, cursor: "pointer" }}>📝 Journal Only</button>
+                                    </div>
+
+                                    {form.returnSettleMode === "debtor" && (
+                                        <div>
+                                            <select style={INP} value={form.returnClientId || ""} onChange={e => setForm(f => ({ ...f, returnClientId: e.target.value }))}>
+                                                <option value="">Select Client *</option>
+                                                {(state.clients || []).map(c => <option key={c.id} value={c.id}>{c.name} ({c.type})</option>)}
+                                            </select>
+                                        </div>
+                                    )}
+
+                                    {(() => {
+                                        const cl = form.returnClientId ? (state.clients || []).find(c => c.id === form.returnClientId) : null;
                                         const clName = cl ? cl.name : "";
-                                        const deb = debs.find(d => d.clientId === form.returnClientId)
-                                            || (clName ? debs.find(d => d.name.trim().toLowerCase() === clName.trim().toLowerCase()) : null);
+                                        const deb = clName ? (debs.find(d => d.clientId === form.returnClientId) || debs.find(d => d.name.trim().toLowerCase() === clName.trim().toLowerCase())) : null;
                                         const bal = deb ? debtorBal(deb) : 0;
                                         const returnAmt = Number(form.qty || 0) * Number(form.ratePerUnit || 0);
                                         return <div>
-                                            {deb
-                                                ? <div style={{ fontSize: 10, color: C.teal, marginTop: 6, background: "#042f2e", padding: "6px 10px", borderRadius: 6 }}>✓ Debtor found: <strong>{deb.name}</strong> | Current Balance: {fc(bal)} | Return Amt: {fc(returnAmt)}</div>
-                                                : <div style={{ fontSize: 10, color: C.amber, marginTop: 4, marginBottom: 6 }}>⚠️ No debtor found matching "{clName}"</div>}
-                                            <div style={{ fontSize: 11, color: "#94a3b8", fontWeight: 700, marginTop: 10, marginBottom: 6 }}>💳 Return Settlement</div>
-                                            <div style={{ display: "flex", gap: 6, marginBottom: 4, flexWrap: "wrap" }}>
-                                                {deb && <button onClick={() => setForm(f => ({ ...f, returnSettleMode: "debtor" }))} style={{ flex: 1, minWidth: 90, padding: "7px 4px", border: "2px solid " + (form.returnSettleMode === "debtor" ? C.violet : C.border), borderRadius: 7, background: form.returnSettleMode === "debtor" ? C.violet + "18" : C.mid, color: form.returnSettleMode === "debtor" ? C.violet : C.muted, fontWeight: 700, fontSize: 11, cursor: "pointer" }}>📋 Adjust Debtor</button>}
-                                                <button onClick={() => setForm(f => ({ ...f, returnSettleMode: "cash" }))} style={{ flex: 1, minWidth: 90, padding: "7px 4px", border: "2px solid " + (form.returnSettleMode === "cash" ? C.red : C.border), borderRadius: 7, background: form.returnSettleMode === "cash" ? C.red + "18" : C.mid, color: form.returnSettleMode === "cash" ? C.red : C.muted, fontWeight: 700, fontSize: 11, cursor: "pointer" }}>💵 Cash Refund</button>
-                                                <button onClick={() => setForm(f => ({ ...f, returnSettleMode: "journal" }))} style={{ flex: 1, minWidth: 90, padding: "7px 4px", border: "2px solid " + (form.returnSettleMode === "journal" ? C.muted : C.border), borderRadius: 7, background: form.returnSettleMode === "journal" ? C.muted + "18" : C.mid, color: form.returnSettleMode === "journal" ? C.muted : C.border, fontWeight: 700, fontSize: 11, cursor: "pointer" }}>📝 Journal Only</button>
-                                            </div>
+                                            {form.returnSettleMode === "debtor" && deb && (
+                                                <div style={{ fontSize: 10, color: C.teal, marginTop: 6, background: "#042f2e", padding: "6px 10px", borderRadius: 6 }}>✓ Debtor found: <strong>{deb.name}</strong> | Current Balance: {fc(bal)} | Return Amt: {fc(returnAmt)}</div>
+                                            )}
+                                            {form.returnSettleMode === "debtor" && form.returnClientId && !deb && (
+                                                <div style={{ fontSize: 10, color: C.amber, marginTop: 4, marginBottom: 6 }}>⚠️ No debtor found matching "{clName}"</div>
+                                            )}
                                             {form.returnSettleMode === "debtor" && deb && <div style={{ fontSize: 10, color: C.violet, marginTop: 4 }}>Will reduce <strong>{deb.name}</strong>'s outstanding by {fc(returnAmt)}</div>}
                                             {form.returnSettleMode === "cash" && <div style={{ fontSize: 10, color: C.red, marginTop: 4 }}>💵 Cash Out of {fc(returnAmt)} will be recorded in Cash Book as refund</div>}
                                             {form.returnSettleMode === "journal" && <div style={{ fontSize: 10, color: C.muted, marginTop: 4 }}>Entry recorded in Trading A/C only — no debtor/cash effect</div>}
