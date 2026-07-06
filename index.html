@@ -85,7 +85,7 @@
         const TABS = ["Dashboard", "Inventory", "Stock In", "Stock Out", "Debtors", "Creditors", "Clients", "Cash Book", "Trading A/C", "P&L Account", "Balance Sheet", "Trial Balance", "Cash Flow", "Journal", "Audit Trail", "Depreciation", "Charts"];
         const CLIENT_TYPES = ["Retailer", "Distributor"];
         const CASH_IN_TYPES = ["Sales Receipt", "Debtor Payment", "Capital Introduced", "Loan Received", "Purchase Return Receipt", "Other Income Receipt"];
-        const CASH_OUT_TYPES = ["Expense Payment", "Creditor Payment", "Stock Purchase Payment", "Loan Repayment", "Sales Return Refund", "Other Payment"];
+        const CASH_OUT_TYPES = ["Expense Payment", "Creditor Payment", "Stock Purchase Payment", "Loan Repayment", "Interest on Loan Repayment", "Sales Return Refund", "Other Payment"];
         const PL_CATS = { income: ["Other Income", "Finance Income"], expenses: ["Employee Benefit Expense", "Finance Costs", "Other Expenses", "Admin Expenses", "Bad Debts"] };
         const SCHEDULE3 = {
             assets: { "Non-Current Assets": ["Fixed Assets", "Capital Work in Progress", "Long Term Investments", "Deferred Tax Assets"], "Current Assets": ["Inventories", "Trade Receivables", "Cash and Cash Equivalents", "Short Term Loans", "Other Current Assets"] },
@@ -317,6 +317,7 @@
             const [tab, setTab] = useState("Dashboard");
             const [modal, setModal] = useState(null);
             const [form, setForm] = useState({});
+            const [loanPopup, setLoanPopup] = useState(false);
             const [filterGodown, setFilterGodown] = useState("");
 const [filterBottleType, setFilterBottleType] = useState("");
 const [filterReturn, setFilterReturn] = useState(null); // true, false, or null for all
@@ -360,10 +361,47 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
             const totalDepreciation = da.reduce((a, b) => a + calcDepreciation(b).totalDepr, 0);
             const deprWDVTotal = da.reduce((a, b) => a + calcDepreciation(b).wdv, 0);
             const deprCostTotal = da.reduce((a, b) => a + Number(b.cost), 0);
-            // P&L is derived ONLY from Trading Account (gross profit) + manual P&L entries + depreciation.
+            const calcInterestForEntry = (e) => {
+                if (!e.interestRate || !e.amount) return { monthly: 0, total: 0, months: 0 };
+                const principal = Number(e.amount);
+                const rate = Number(e.interestRate) / 100;
+                const startDate = new Date(e.date || today());
+                const now = new Date();
+                let mo = (now.getFullYear() - startDate.getFullYear()) * 12 + (now.getMonth() - startDate.getMonth());
+                if (mo < 0) mo = 0;
+                const monthly = (principal * rate) / 12;
+                const total = monthly * mo;
+                return { monthly, total, months: mo };
+            };
+            const totalLoanInterest = Object.values(state.balanceSheet?.liabilities || {})
+                .filter(e => e.subCategory === "Long Term Borrowings" && e.interestRate)
+                .reduce((sum, e) => sum + calcInterestForEntry(e).total, 0);
+            const loanInterestPaid = (loanId) => {
+                return cash.filter(e => e.dir === "out" && e.payType === "Interest on Loan Repayment" && e.linkedId === loanId)
+                           .reduce((sum, e) => sum + Number(e.amount || 0), 0);
+            };
+            const loanInterestOutstanding = (loan) => {
+                const accrued = calcInterestForEntry(loan).total;
+                const paid = loanInterestPaid(loan.id);
+                return Math.max(0, accrued - paid);
+            };
+            const totalInterestPaid = cash
+                .filter(e => e.dir === "out" && e.payType === "Interest on Loan Repayment")
+                .reduce((sum, e) => sum + Number(e.amount || 0), 0);
+            const outstandingInterestLiab = Math.max(0, totalLoanInterest - totalInterestPaid);
+            const loanPrincipalPaid = (loanId) => {
+                return cash.filter(e => e.dir === "out" && e.payType === "Loan Repayment" && e.linkedId === loanId)
+                           .reduce((sum, e) => sum + Number(e.amount || 0), 0);
+            };
+            const loanPrincipalOutstanding = (loan) => {
+                const original = Number(loan.amount || 0);
+                const paid = loanPrincipalPaid(loan.id);
+                return Math.max(0, original - paid);
+            };
+            // P&L is derived ONLY from Trading Account (gross profit) + manual P&L entries + depreciation + loan interest.
             // Cash Book is a receipts/payments register — it does NOT feed P&L to avoid double entry.
             const plIncome = (grossProfit > 0 ? grossProfit : 0) + manualIncome;
-            const plExpense = manualExpense + totalDepreciation + (grossProfit < 0 ? Math.abs(grossProfit) : 0);
+            const plExpense = manualExpense + totalDepreciation + totalLoanInterest + (grossProfit < 0 ? Math.abs(grossProfit) : 0);
             const netPL = plIncome - plExpense;
 
             const creditorFromStock = id => si.filter(x => x.settleMode === "creditor" && x.linkedPartyId === id).reduce((a, b) => a + Number(b.totalAmount) * (b.isReturn ? -1 : 1), 0);
@@ -421,7 +459,12 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
             // Balance Sheet manual entries: exclude Fixed Assets that have depreciation linked
             // (their WDV is shown via the auto depreciation line to avoid double-counting).
             const bsManualAssetsRaw = Object.values(state.balanceSheet?.assets || {});
-            const bsManualLiabRaw = Object.values(state.balanceSheet?.liabilities || {});
+            const bsManualLiabRaw = Object.values(state.balanceSheet?.liabilities || {}).map(e => {
+                if (e.subCategory === "Long Term Borrowings") {
+                    return { ...e, amount: loanPrincipalOutstanding(e) };
+                }
+                return e;
+            });
             // IDs of BS entries that sourced cash (to exclude from P&L cash flows)
             const bsEntryIds = new Set([...bsManualAssetsRaw, ...bsManualLiabRaw].map(e => e.id));
             const bsManualAssets = bsManualAssetsRaw.reduce((a, b) => a + Number(b.amount), 0);
@@ -676,7 +719,24 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
                 if (!form.side || !form.category || !form.subCategory || !form.description || !form.amount || !form.settleMode) { alert("Fill all fields"); return; }
                 if (Number(form.amount) <= 0) { alert("Amount must be > 0"); return; }
                 const amt = Number(form.amount), id = gid(), isAsset = form.side === "assets", direction = isAsset ? "out" : "in", res = resolveSettle(form, amt, form.date || today(), form.description, id, direction);
-                const entry = { id, side: form.side, category: form.category, subCategory: form.subCategory, description: form.description, date: form.date || today(), amount: amt, settleMode: form.settleMode, linkedPartyId: res.partyId, linkedPartyName: res.partyName, createdCreditorId: res.createdCreditorId, createdDebtorId: res.createdDebtorId };
+                const entry = { 
+                    id, 
+                    side: form.side, 
+                    category: form.category, 
+                    subCategory: form.subCategory, 
+                    description: form.description, 
+                    date: form.date || today(), 
+                    amount: amt, 
+                    settleMode: form.settleMode, 
+                    linkedPartyId: res.partyId, 
+                    linkedPartyName: res.partyName, 
+                    createdCreditorId: res.createdCreditorId, 
+                    createdDebtorId: res.createdDebtorId,
+                    ...(form.subCategory === "Long Term Borrowings" ? {
+                        interestRate: Number(form.interestRate || 0),
+                        isLoan: true
+                    } : {})
+                };
                 upd(p => {
                     let np = { ...p, balanceSheet: { ...p.balanceSheet, [form.side]: { ...p.balanceSheet[form.side], [id]: entry } } };
                     if (res.createdCreditorId) np.creditors = [...np.creditors, { id: res.createdCreditorId, name: form.newPartyName, date: form.date || today(), amount: 0, creditPeriod: form.newPartyCredit || "", notified: false, checked: false }];
@@ -1112,6 +1172,23 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
                                 <div style={{ fontWeight: 800, color: C.red, fontSize: 12, marginBottom: 6, borderBottom: "1px solid #334155", paddingBottom: 4 }}>Dr — Expenses</div>
                                 {grossProfit < 0 && <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: C.red, marginBottom: 4 }}><span>Gross Loss b/d</span><span style={{ fontWeight: 700 }}>{fabs(grossProfit)}</span></div>}
                                 {totalDepreciation > 0 && <div style={{ marginBottom: 6 }}><div style={{ color: "#94a3b8", fontSize: 10, fontWeight: 700, marginBottom: 2 }}>Depreciation (auto)</div>{da.map(a => { const d = calcDepreciation(a); return d.totalDepr > 0 ? <div key={a.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 11, paddingLeft: 8, color: C.amber, marginBottom: 2 }}><span>{a.name}</span><span>{fc(d.totalDepr)}</span></div> : null; })}</div>}
+                                {totalLoanInterest > 0 && (
+                                    <div style={{ marginBottom: 6 }}>
+                                        <div style={{ color: "#94a3b8", fontSize: 10, fontWeight: 700, marginBottom: 2 }}>Finance Costs (auto-accrued)</div>
+                                        {Object.values(state.balanceSheet?.liabilities || {})
+                                            .filter(e => e.subCategory === "Long Term Borrowings" && e.interestRate)
+                                            .map(e => {
+                                                const i = calcInterestForEntry(e);
+                                                return i.total > 0 ? (
+                                                    <div key={e.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 11, paddingLeft: 8, color: C.amber, marginBottom: 2 }}>
+                                                        <span>Interest on {e.description} ({e.interestRate}% p.a.)</span>
+                                                        <span>{fc(i.total)}</span>
+                                                    </div>
+                                                ) : null;
+                                            })
+                                        }
+                                    </div>
+                                )}
                                 {PL_CATS.expenses.map(cat => { const ents = ple.filter(e => e.side === "expense" && e.category === cat); return ents.length ? <div key={cat} style={{ marginBottom: 6 }}><div style={{ color: "#94a3b8", fontSize: 10, fontWeight: 700, marginBottom: 2 }}>{cat}</div>{ents.map(e => <div key={e.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 11, paddingLeft: 8, alignItems: "center", marginBottom: 2 }}><span>{e.description}</span><span style={{ display: "flex", gap: 5 }}>{fc(e.amount)}<button style={BTND} onClick={() => cascadeDelete("plEntries", e.id)}>✕</button></span></div>)}</div> : null; })}
                                 {plExpense === 0 && <div style={{ color: C.muted, fontSize: 11, textAlign: "center", padding: "8px 0" }}>No expenses recorded</div>}
                                 <div style={{ borderTop: "2px solid #334155", paddingTop: 6, fontWeight: 900, color: C.red, textAlign: "right" }}>Total Dr: {fc(plExpense)}</div>
@@ -1605,7 +1682,7 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
                         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                             {["liabilities", "assets"].map(side => {
                                 const color = side === "assets" ? C.blue : C.amber;
-                                const entries = Object.values(state.balanceSheet?.[side] || {});
+                                const entries = side === "assets" ? Object.values(state.balanceSheet?.assets || {}) : bsManualLiabRaw;
                                 const autoItems = [];
                                 if (side === "assets") {
                                     if (cashBal !== 0) autoItems.push({ sub: "Cash and Cash Equivalents", label: "Cash Balance", val: cashBal, c: C.green });
@@ -1614,6 +1691,7 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
                                     if (totalDepreciation > 0) autoItems.push({ sub: "Fixed Assets", label: "Less: Accum. Depr", val: -totalDepreciation, c: C.red });
                                 } else {
                                     if (totalCreditors > 0) autoItems.push({ sub: "Trade Payables", label: "Trade Creditors", val: totalCreditors, c: C.amber });
+                                    if (outstandingInterestLiab > 0) autoItems.push({ sub: "Other Current Liabilities", label: "Interest Outstanding on Loans", val: outstandingInterestLiab, c: C.amber });
                                     autoItems.push({ sub: "Retained Earnings / Net Profit", label: netPL >= 0 ? "Net Profit (auto)" : "Net Loss (auto)", val: netPL, c: netPL >= 0 ? C.green : C.red });
                                 }
                                 const groupTotals = {};
@@ -1635,7 +1713,38 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
                                                 if (!subE.length && !autoSub.length) return null;
                                                 return (<div key={sub} style={{ marginBottom: 5 }}>
                                                     <div style={{ fontSize: 10, color: "#94a3b8", fontWeight: 700, marginBottom: 2, paddingLeft: 4 }}>{sub}</div>
-                                                    {subE.map(e => <div key={e.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: C.text, alignItems: "center", paddingLeft: 12, marginBottom: 2 }}><span>{e.description}</span><span style={{ display: "flex", gap: 5 }}>{fc(e.amount)}{!e.autoFromDepr && <button style={BTND} onClick={() => delBS(side, e.id)}>✕</button>}</span></div>)}
+                                                    {subE.map(e => {
+                                                         if (e.subCategory === "Long Term Borrowings") {
+                                                             const repaid = loanPrincipalPaid(e.id);
+                                                             const original = Number(e.amount) + repaid;
+                                                             return (
+                                                                 <div key={e.id} style={{ marginBottom: 6, paddingLeft: 12, width: "100%" }}>
+                                                                     <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: C.text, alignItems: "center" }}>
+                                                                         <span>{e.description}{e.interestRate ? ` (${e.interestRate}% p.a.)` : ""}</span>
+                                                                         <span style={{ display: "flex", gap: 5 }}>{fc(original)}{!e.autoFromDepr && <button style={BTND} onClick={() => delBS(side, e.id)}>✕</button>}</span>
+                                                                     </div>
+                                                                     {repaid > 0 && (
+                                                                         <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: C.red, paddingLeft: 8, marginTop: 1 }}>
+                                                                             <span>Less: Repaid Principal</span>
+                                                                             <span>-{fc(repaid)}</span>
+                                                                         </div>
+                                                                     )}
+                                                                     {repaid > 0 && (
+                                                                         <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: C.blue, paddingLeft: 8, marginTop: 1, fontWeight: 700 }}>
+                                                                             <span>Net Loan Outstanding</span>
+                                                                             <span>{fc(e.amount)}</span>
+                                                                         </div>
+                                                                     )}
+                                                                 </div>
+                                                             );
+                                                         }
+                                                         return (
+                                                             <div key={e.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: C.text, alignItems: "center", paddingLeft: 12, marginBottom: 2 }}>
+                                                                 <span>{e.description}</span>
+                                                                 <span style={{ display: "flex", gap: 5 }}>{fc(e.amount)}{!e.autoFromDepr && <button style={BTND} onClick={() => delBS(side, e.id)}>✕</button>}</span>
+                                                             </div>
+                                                         );
+                                                     })}
                                                     {autoSub.map((a, i) => <div key={i} style={{ display: "flex", justifyContent: "space-between", fontSize: 11, paddingLeft: 12, color: a.c }}><span>{a.label} <span style={{ color: C.muted, fontSize: 9 }}>(auto)</span></span><span style={{ fontWeight: 700 }}>{fc(a.val)}</span></div>)}
                                                     {subTotal !== 0 && <div style={{ textAlign: "right", fontSize: 11, color, fontWeight: 700, paddingRight: 4, marginTop: 3 }}>Sub-total: {fc(subTotal)}</div>}
                                                 </div>);
@@ -1700,7 +1809,9 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
                             { name: "Trade Creditors", dr: 0, cr: totalCreditors },
                             { name: "Cash Balance", dr: cashBal >= 0 ? cashBal : 0, cr: cashBal < 0 ? Math.abs(cashBal) : 0 },
                             { name: "Manual BS Assets", dr: Object.values(state.balanceSheet?.assets || {}).reduce((s, e) => s + Number(e.amount), 0), cr: 0 },
-                            { name: "Manual BS Liab & Equity", dr: 0, cr: Object.values(state.balanceSheet?.liabilities || {}).reduce((s, e) => s + Number(e.amount), 0) }
+                            { name: "Manual BS Liab & Equity", dr: 0, cr: bsManualLiabRaw.reduce((s, e) => s + Number(e.amount), 0) },
+                            { name: "Loan Interest (Expense)", dr: totalLoanInterest, cr: 0 },
+                            { name: "Interest Outstanding on Loans", dr: 0, cr: outstandingInterestLiab }
                         ];
                         const totalDr = rows.reduce((acc, r) => acc + r.dr, 0);
                         const totalCr = rows.reduce((acc, r) => acc + r.cr, 0);
@@ -1745,7 +1856,7 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
                         const investingIn = sums["Purchase Return Receipt"]; // Return of capital/stock
                         const investingOut = sums["Other Payment"]; // Usually fixed assets
                         const financingIn = sums["Capital Introduced"] + sums["Loan Received"];
-                        const financingOut = sums["Loan Repayment"];
+                        const financingOut = sums["Loan Repayment"] + (sums["Interest on Loan Repayment"] || 0);
                         const opNet = operatingIn - operatingOut;
                         const invNet = investingIn - investingOut;
                         const finNet = financingIn - financingOut;
@@ -1775,6 +1886,9 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
                                 <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: C.green, padding: "2px 0" }}><span>+ Capital Introduced</span><span>{fc(sums["Capital Introduced"])}</span></div>
                                 <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: C.green, padding: "2px 0" }}><span>+ Loan Received</span><span>{fc(sums["Loan Received"])}</span></div>
                                 <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: C.red, padding: "2px 0" }}><span>- Loan Repayment</span><span>{fc(sums["Loan Repayment"])}</span></div>
+                                {sums["Interest on Loan Repayment"] > 0 && (
+                                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: C.red, padding: "2px 0" }}><span>- Interest on Loan Repayment</span><span>{fc(sums["Interest on Loan Repayment"])}</span></div>
+                                )}
                                 <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, fontWeight: 700, color: finNet >= 0 ? C.green : C.red, marginTop: 6, paddingTop: 4, borderTop: "1px dashed #334155" }}><span>Net Cash from Financing Activities</span><span>{fc(finNet)}</span></div>
                             </div>
 
@@ -1789,9 +1903,65 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
                         let j = [];
                         si.forEach(e => j.push({ date: e.date, type: "Stock In", desc: `Batch ${e.batchNo} (${e.bottleType})`, id: e.id, amt: e.totalAmount, dir: "dr" }));
                         so.forEach(e => j.push({ date: e.date, type: "Stock Out", desc: `${e.qty} ${e.bottleType}`, id: e.id, amt: e.totalAmount, dir: "cr" }));
-                        cash.forEach(e => j.push({ date: e.date, type: "Cash", desc: e.description, id: e.id, amt: e.amount, dir: e.dir }));
+                        cash.forEach(e => {
+                            j.push({ date: e.date, type: "Cash", desc: e.description, id: e.id, amt: e.amount, dir: e.dir });
+                            if (e.dir === "out" && e.payType === "Loan Repayment" && e.linkedId) {
+                                const loan = Object.values(state.balanceSheet?.liabilities || {}).find(x => x.id === e.linkedId);
+                                j.push({
+                                    date: e.date,
+                                    type: "Balance Sheet",
+                                    desc: `Debit: Principal Repayment of ${loan ? loan.description : "Loan"}`,
+                                    id: e.id + "_repay_dr",
+                                    amt: e.amount,
+                                    dir: "dr"
+                                });
+                            }
+                            if (e.dir === "out" && e.payType === "Interest on Loan Repayment" && e.linkedId) {
+                                const loan = Object.values(state.balanceSheet?.liabilities || {}).find(x => x.id === e.linkedId);
+                                j.push({
+                                    date: e.date,
+                                    type: "Balance Sheet",
+                                    desc: `Debit: Interest Paid on ${loan ? loan.description : "Loan"}`,
+                                    id: e.id + "_intpaid_dr",
+                                    amt: e.amount,
+                                    dir: "dr"
+                                });
+                            }
+                        });
                         te.forEach(e => j.push({ date: e.date, type: "Trading", desc: e.description, id: e.id, amt: e.amount, dir: e.side }));
                         ple.forEach(e => j.push({ date: e.date, type: "P&L", desc: e.description, id: e.id, amt: e.amount, dir: e.side }));
+                        Object.values(state.balanceSheet?.liabilities || {})
+                            .filter(e => e.subCategory === "Long Term Borrowings" && e.interestRate)
+                            .forEach(e => {
+                                const principal = Number(e.amount);
+                                const rate = Number(e.interestRate) / 100;
+                                const startDate = new Date(e.date);
+                                const now = new Date();
+                                let mo = (now.getFullYear() - startDate.getFullYear()) * 12 + (now.getMonth() - startDate.getMonth());
+                                if (mo < 0) mo = 0;
+                                const monthlyAmt = (principal * rate) / 12;
+                                for (let m = 1; m <= mo; m++) {
+                                    const interestDate = new Date(startDate.getTime());
+                                    interestDate.setMonth(startDate.getMonth() + m);
+                                    const dateStr = interestDate.toISOString().slice(0, 10);
+                                    j.push({
+                                        date: dateStr,
+                                        type: "P&L",
+                                        desc: `Auto Interest Accrual: ${e.description} (${e.interestRate}% p.a.)`,
+                                        id: e.id + `_int_${m}_dr`,
+                                        amt: monthlyAmt,
+                                        dir: "dr"
+                                    });
+                                    j.push({
+                                        date: dateStr,
+                                        type: "Balance Sheet",
+                                        desc: `Auto Interest Outstanding: ${e.description} (${e.interestRate}% p.a.)`,
+                                        id: e.id + `_int_${m}_cr`,
+                                        amt: monthlyAmt,
+                                        dir: "cr"
+                                    });
+                                }
+                            });
                         j.sort((a,b) => new Date(b.date) - new Date(a.date));
                         
                         return <div>
@@ -2064,12 +2234,35 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
                             {form.side && <select style={INP} value={form.category || ""} onChange={e => setForm(f => ({ ...f, category: e.target.value, subCategory: "" }))}>
                                 <option value="">Group *</option>{Object.keys(SCHEDULE3[form.side]).map(g => <option key={g}>{g}</option>)}
                             </select>}
-                            {form.category && <select style={INP} value={form.subCategory || ""} onChange={e => setForm(f => ({ ...f, subCategory: e.target.value }))}>
+                            {form.category && <select style={INP} value={form.subCategory || ""} onChange={e => {
+                                const val = e.target.value;
+                                setForm(f => ({ ...f, subCategory: val }));
+                                if (val === "Long Term Borrowings") {
+                                    setLoanPopup(true);
+                                }
+                            }}>
                                 <option value="">Sub-Category *</option>{(SCHEDULE3[form.side]?.[form.category] || []).map(s => <option key={s}>{s}</option>)}
                             </select>}
                             <input style={INP} placeholder="Description *" value={form.description || ""} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} />
                             <DateInput value={form.date} onChange={v => setForm(f => ({ ...f, date: v }))} />
                             <input type="number" style={INP} placeholder="Amount (₹) *" value={form.amount || ""} onChange={e => setForm(f => ({ ...f, amount: e.target.value }))} />
+                            
+                            {form.subCategory === "Long Term Borrowings" && (
+                                <div style={{ background: "#1e293b", border: "1px solid #334155", borderRadius: 8, padding: 10, marginBottom: 9 }}>
+                                    <div style={{ fontSize: 11, fontWeight: 700, color: C.blue, marginBottom: 4 }}>🏦 Loan Configuration</div>
+                                    <div style={{ fontSize: 11, color: C.text }}>
+                                        Rate: <strong>{form.interestRate || 0}% p.a.</strong> | Date: <strong>{form.date || today()}</strong>
+                                    </div>
+                                    <button 
+                                        type="button" 
+                                        style={{ border: "none", background: "none", color: C.blue, fontSize: 10, cursor: "pointer", padding: 0, textDecoration: "underline", marginTop: 4 }} 
+                                        onClick={() => setLoanPopup(true)}
+                                    >
+                                        Edit Loan Details
+                                    </button>
+                                </div>
+                            )}
+
                             {form.side && <SettlePanel {...sp} form={{ ...form, _settleContext: form.side === "assets" ? "bs_asset_increase" : "bs_liability_reduce" }} setForm={setForm} />}
                             <button style={{ ...BTNP(), width: "100%" }} onClick={applyBS}>Save</button>
                         </div>}
@@ -2120,6 +2313,56 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
                             {form.dir === "out" && form.payType === "Creditor Payment" && <select style={INP} value={form.linkedId || ""} onChange={e => { const c = creds.find(x => x.id === e.target.value); setForm(f => ({ ...f, linkedId: e.target.value, description: "Payment to " + (c ? c.name : ""), amount: c ? String(creditorBal(c)) : f.amount })); }}>
                                 <option value="">Select Creditor</option>{creds.filter(c => !c.checked).map(c => <option key={c.id} value={c.id}>{c.name} — {fc(creditorBal(c))}</option>)}
                             </select>}
+                            {form.dir === "out" && form.payType === "Interest on Loan Repayment" && (
+                                <select style={INP} value={form.linkedId || ""} onChange={e => {
+                                    const loan = Object.values(state.balanceSheet?.liabilities || {}).find(x => x.id === e.target.value);
+                                    const remaining = loan ? loanInterestOutstanding(loan) : 0;
+                                    setForm(f => ({
+                                        ...f,
+                                        linkedId: e.target.value,
+                                        description: "Interest Payment for " + (loan ? loan.description : ""),
+                                        amount: loan ? String(remaining) : f.amount
+                                    }));
+                                }}>
+                                    <option value="">Select Loan</option>
+                                    {Object.values(state.balanceSheet?.liabilities || {})
+                                        .filter(x => x.subCategory === "Long Term Borrowings" && x.interestRate)
+                                        .map(loan => {
+                                            const remaining = loanInterestOutstanding(loan);
+                                            return (
+                                                <option key={loan.id} value={loan.id}>
+                                                    {loan.description} — Remaining Interest: {fc(remaining)}
+                                                </option>
+                                            );
+                                        })
+                                    }
+                                </select>
+                            )}
+                            {form.dir === "out" && form.payType === "Loan Repayment" && (
+                                <select style={INP} value={form.linkedId || ""} onChange={e => {
+                                    const loan = Object.values(state.balanceSheet?.liabilities || {}).find(x => x.id === e.target.value);
+                                    const remaining = loan ? loanPrincipalOutstanding(loan) : 0;
+                                    setForm(f => ({
+                                        ...f,
+                                        linkedId: e.target.value,
+                                        description: "Repayment of " + (loan ? loan.description : ""),
+                                        amount: loan ? String(remaining) : f.amount
+                                    }));
+                                }}>
+                                    <option value="">Select Loan</option>
+                                    {Object.values(state.balanceSheet?.liabilities || {})
+                                        .filter(x => x.subCategory === "Long Term Borrowings")
+                                        .map(loan => {
+                                            const remaining = loanPrincipalOutstanding(loan);
+                                            return (
+                                                <option key={loan.id} value={loan.id}>
+                                                    {loan.description} — Remaining Principal: {fc(remaining)}
+                                                </option>
+                                            );
+                                        })
+                                    }
+                                </select>
+                            )}
                             <input style={INP} placeholder="Description *" value={form.description || ""} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} />
                             <input type="number" style={INP} placeholder="Amount (₹) *" value={form.amount || ""} onChange={e => setForm(f => ({ ...f, amount: e.target.value }))} />
                             <button style={{ ...BTNP(form.dir === "in" ? "linear-gradient(90deg,#22c55e,#16a34a)" : "linear-gradient(90deg,#ef4444,#dc2626)"), width: "100%" }} onClick={applyCash}>Save</button>
@@ -2160,6 +2403,71 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
                         <button onClick={closeM} style={{ width: "100%", marginTop: 8, background: C.mid, color: "#94a3b8", border: "none", borderRadius: 7, padding: "7px 0", cursor: "pointer", fontSize: 12 }}>Cancel</button>
                     </div>
                 </div>}
+
+                {loanPopup && (
+                    <div onClick={() => {
+                        setForm(f => ({ ...f, subCategory: "", isLoan: false, interestRate: "" }));
+                        setLoanPopup(false);
+                    }} style={{ position: "fixed", inset: 0, background: "#000000d0", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 300 }}>
+                        <div onClick={e => e.stopPropagation()} style={{ background: C.mid, border: "1.5px solid " + C.blue, borderRadius: 16, padding: 22, width: 340, boxShadow: "0 10px 30px rgba(0,0,0,0.5)" }}>
+                            <div style={{ fontWeight: 800, fontSize: 15, color: C.blue, marginBottom: 12, display: "flex", alignItems: "center", gap: 6 }}>
+                                🏦 Configure Loan Details
+                            </div>
+                            <div style={{ fontSize: 11, color: C.muted, marginBottom: 12 }}>
+                                Please specify the loan details. Interest expense will be calculated monthly from the start date.
+                            </div>
+                            
+                            <label style={{ fontSize: 11, color: "#94a3b8", fontWeight: 700, display: "block", marginBottom: 4 }}>Loan Amount (₹) *</label>
+                            <input 
+                                type="number" 
+                                style={INP} 
+                                placeholder="Principal Amount" 
+                                value={form.amount || ""} 
+                                onChange={e => setForm(f => ({ ...f, amount: e.target.value }))} 
+                            />
+                            
+                            <label style={{ fontSize: 11, color: "#94a3b8", fontWeight: 700, display: "block", marginBottom: 4 }}>Interest Rate (% per annum) *</label>
+                            <input 
+                                type="number" 
+                                step="0.01" 
+                                style={INP} 
+                                placeholder="e.g. 10.5" 
+                                value={form.interestRate || ""} 
+                                onChange={e => setForm(f => ({ ...f, interestRate: e.target.value }))} 
+                            />
+                            
+                            <label style={{ fontSize: 11, color: "#94a3b8", fontWeight: 700, display: "block", marginBottom: 4 }}>Loan Start Date *</label>
+                            <DateInput 
+                                value={form.date} 
+                                onChange={v => setForm(f => ({ ...f, date: v }))} 
+                            />
+
+                            <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+                                <button 
+                                    style={{ ...BTNP(), flex: 1 }} 
+                                    onClick={() => {
+                                        if (!form.amount || Number(form.amount) <= 0) { alert("Please enter a valid loan amount."); return; }
+                                        if (!form.interestRate || Number(form.interestRate) < 0) { alert("Please enter a valid interest rate."); return; }
+                                        if (!form.date) { alert("Please enter a loan start date."); return; }
+                                        setForm(f => ({ ...f, isLoan: true }));
+                                        setLoanPopup(false);
+                                    }}
+                                >
+                                    Confirm Loan
+                                </button>
+                                <button 
+                                    style={{ ...BTNP("transparent"), border: "1px solid #475569", color: "#94a3b8", flex: 1 }} 
+                                    onClick={() => {
+                                        setForm(f => ({ ...f, subCategory: "", isLoan: false, interestRate: "" }));
+                                        setLoanPopup(false);
+                                    }}
+                                >
+                                    Cancel
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                )}
             </div>);
         }
 
