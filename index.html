@@ -682,6 +682,15 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
                         np.plEntries = (np.plEntries || []).filter(e => e.sourceId !== id);
                         np.tradingEntries = (np.tradingEntries || []).filter(e => e.sourceId !== id);
                     }
+                    // Reverse cascade: if deleting a P&L or Trading entry that was auto-created
+                    // by a Cash Book entry (has sourceId pointing to a cash entry), remove that cash entry too.
+                    if ((key === "plEntries" || key === "tradingEntries") && entry.sourceId) {
+                        const srcCash = (np.cashEntries || []).find(e => e.id === entry.sourceId);
+                        if (srcCash) {
+                            np.cashEntries = (np.cashEntries || []).filter(e => e.id !== entry.sourceId);
+                            np = withLog(np, "DELETE", "cashEntries", entry.sourceId, `Auto-removed linked Cash entry for deleted ${key} entry`);
+                        }
+                    }
                     if (entry.createdCreditorId) np.creditors = (np.creditors || []).filter(c => c.id !== entry.createdCreditorId);
                     if (entry.createdDebtorId) np.debtors = (np.debtors || []).filter(d => d.id !== entry.createdDebtorId);
                     if (key === "creditors") np.cashEntries = (np.cashEntries || []).filter(e => !(e.dir === "out" && e.linkedId === id));
@@ -1287,72 +1296,94 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
                     const canAgg = !noAggTypes.includes(form.payType);
                     const existing = canAgg ? p.cashEntries.find(e => !e.isPending && e.description.toLowerCase().trim() === descLower && e.payType === form.payType && e.dir === form.dir) : null;
                     let np = { ...p };
-                    
+
+                    // ── P&L / Trading mirror logic ────────────────────────────────────────
+                    // For Expense/Income/Stock/Sales cash entries, maintain a corresponding
+                    // P&L or Trading entry so the accounting books stay complete.
+                    // We aggregate into an EXISTING P&L/Trading entry with the same description
+                    // to avoid creating duplicate line items on repeat payments.
                     let relId = null;
+                    const isExpPmt  = form.payType === "Expense Payment" || form.payType === "Other Payment";
+                    const isIncPmt  = form.payType === "Other Income Receipt";
+                    const isStockPmt = form.payType === "Stock Purchase Payment";
+                    const isSaleRct  = form.payType === "Sales Receipt";
+
                     if (!existing) {
-                        relId = gid();
-                        if (form.payType === "Expense Payment" || form.payType === "Other Payment") {
-                            np.plEntries = [...(np.plEntries || []), {
-                                id: relId,
-                                date: form.date,
-                                side: "expense",
-                                category: form.payType === "Expense Payment" ? "Other Expenses" : "Admin Expenses",
-                                description: form.description,
-                                amount: baseAmt,
-                                gstRate: gstRateV,
-                                gstAmount: gstAmtV,
-                                totalAmount: totalAmtV,
-                                settleMode: "cash",
-                                linkedPartyId: null,
-                                linkedPartyName: "Cash",
-                                sourceId: id
-                            }];
-                        } else if (form.payType === "Other Income Receipt") {
-                            np.plEntries = [...(np.plEntries || []), {
-                                id: relId,
-                                date: form.date,
-                                side: "income",
-                                category: "Other Income",
-                                description: form.description,
-                                amount: baseAmt,
-                                gstRate: gstRateV,
-                                gstAmount: gstAmtV,
-                                totalAmount: totalAmtV,
-                                settleMode: "cash",
-                                linkedPartyId: null,
-                                linkedPartyName: "Cash",
-                                sourceId: id
-                            }];
-                        } else if (form.payType === "Stock Purchase Payment") {
-                            np.tradingEntries = [...(np.tradingEntries || []), {
-                                id: relId,
-                                date: form.date,
-                                side: "dr",
-                                description: form.description,
-                                amount: baseAmt,
-                                gstRate: gstRateV,
-                                gstAmount: gstAmtV,
-                                totalAmount: totalAmtV,
-                                settleMode: "cash",
-                                linkedPartyId: null,
-                                linkedPartyName: "Cash",
-                                sourceId: id
-                            }];
-                        } else if (form.payType === "Sales Receipt") {
-                            np.tradingEntries = [...(np.tradingEntries || []), {
-                                id: relId,
-                                date: form.date,
-                                side: "cr",
-                                description: form.description,
-                                amount: baseAmt,
-                                gstRate: gstRateV,
-                                gstAmount: gstAmtV,
-                                totalAmount: totalAmtV,
-                                settleMode: "cash",
-                                linkedPartyId: null,
-                                linkedPartyName: "Cash",
-                                sourceId: id
-                            }];
+                        if (isExpPmt) {
+                            const plSide = "expense";
+                            const plCat  = form.payType === "Expense Payment" ? "Other Expenses" : "Admin Expenses";
+                            const existPL = (np.plEntries || []).find(e =>
+                                e.side === plSide && e.description.toLowerCase().trim() === descLower && e.sourceId
+                            );
+                            if (existPL) {
+                                // Aggregate into existing P&L entry
+                                relId = existPL.id;
+                                np.plEntries = np.plEntries.map(e => e.id === existPL.id
+                                    ? { ...e, amount: e.amount + baseAmt, gstAmount: (e.gstAmount||0) + gstAmtV, totalAmount: (e.totalAmount||e.amount) + totalAmtV }
+                                    : e);
+                            } else {
+                                relId = gid();
+                                np.plEntries = [...(np.plEntries || []), {
+                                    id: relId, date: form.date, side: plSide, category: plCat,
+                                    description: form.description, amount: baseAmt,
+                                    gstRate: gstRateV, gstAmount: gstAmtV, totalAmount: totalAmtV,
+                                    settleMode: "cash", linkedPartyId: null, linkedPartyName: "Cash", sourceId: id
+                                }];
+                            }
+                        } else if (isIncPmt) {
+                            const existPL = (np.plEntries || []).find(e =>
+                                e.side === "income" && e.description.toLowerCase().trim() === descLower && e.sourceId
+                            );
+                            if (existPL) {
+                                relId = existPL.id;
+                                np.plEntries = np.plEntries.map(e => e.id === existPL.id
+                                    ? { ...e, amount: e.amount + baseAmt, gstAmount: (e.gstAmount||0) + gstAmtV, totalAmount: (e.totalAmount||e.amount) + totalAmtV }
+                                    : e);
+                            } else {
+                                relId = gid();
+                                np.plEntries = [...(np.plEntries || []), {
+                                    id: relId, date: form.date, side: "income", category: "Other Income",
+                                    description: form.description, amount: baseAmt,
+                                    gstRate: gstRateV, gstAmount: gstAmtV, totalAmount: totalAmtV,
+                                    settleMode: "cash", linkedPartyId: null, linkedPartyName: "Cash", sourceId: id
+                                }];
+                            }
+                        } else if (isStockPmt) {
+                            const existTE = (np.tradingEntries || []).find(e =>
+                                e.side === "dr" && e.description.toLowerCase().trim() === descLower && e.sourceId
+                            );
+                            if (existTE) {
+                                relId = existTE.id;
+                                np.tradingEntries = np.tradingEntries.map(e => e.id === existTE.id
+                                    ? { ...e, amount: e.amount + baseAmt, gstAmount: (e.gstAmount||0) + gstAmtV, totalAmount: (e.totalAmount||e.amount) + totalAmtV }
+                                    : e);
+                            } else {
+                                relId = gid();
+                                np.tradingEntries = [...(np.tradingEntries || []), {
+                                    id: relId, date: form.date, side: "dr",
+                                    description: form.description, amount: baseAmt,
+                                    gstRate: gstRateV, gstAmount: gstAmtV, totalAmount: totalAmtV,
+                                    settleMode: "cash", linkedPartyId: null, linkedPartyName: "Cash", sourceId: id
+                                }];
+                            }
+                        } else if (isSaleRct) {
+                            const existTE = (np.tradingEntries || []).find(e =>
+                                e.side === "cr" && e.description.toLowerCase().trim() === descLower && e.sourceId
+                            );
+                            if (existTE) {
+                                relId = existTE.id;
+                                np.tradingEntries = np.tradingEntries.map(e => e.id === existTE.id
+                                    ? { ...e, amount: e.amount + baseAmt, gstAmount: (e.gstAmount||0) + gstAmtV, totalAmount: (e.totalAmount||e.amount) + totalAmtV }
+                                    : e);
+                            } else {
+                                relId = gid();
+                                np.tradingEntries = [...(np.tradingEntries || []), {
+                                    id: relId, date: form.date, side: "cr",
+                                    description: form.description, amount: baseAmt,
+                                    gstRate: gstRateV, gstAmount: gstAmtV, totalAmount: totalAmtV,
+                                    settleMode: "cash", linkedPartyId: null, linkedPartyName: "Cash", sourceId: id
+                                }];
+                            }
                         }
                     }
 
@@ -3418,11 +3449,12 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
                     {tab === "Cash Flow" && (() => {
                         const sums = {};
                         [...CASH_IN_TYPES, ...CASH_OUT_TYPES].forEach(t => sums[t] = 0);
-                        cash.forEach(e => { sums[e.payType] = (sums[e.payType] || 0) + e.amount; });
+                        // Exclude pending entries — cash hasn't actually moved yet
+                        cash.filter(e => !e.isPending).forEach(e => { sums[e.payType] = (sums[e.payType] || 0) + e.amount; });
                         const operatingIn = sums["Sales Receipt"] + sums["Debtor Payment"] + sums["Other Income Receipt"];
                         const operatingOut = sums["Expense Payment"] + sums["Creditor Payment"] + sums["Stock Purchase Payment"] + sums["Sales Return Refund"];
                         const investingIn = sums["Purchase Return Receipt"]; // Return of capital/stock
-                        const investingOut = sums["Other Payment"]; // Usually fixed assets
+                        const investingOut = sums["Other Payment"] + (sums["Asset Down Payment"] || 0); // Usually fixed assets
                         const financingIn = sums["Capital Introduced"] + sums["Loan Received"];
                         const financingOut = sums["Loan Repayment"] + (sums["Interest on Loan Repayment"] || 0);
                         const opNet = operatingIn - operatingOut;
@@ -3445,7 +3477,7 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
                             <div style={{ background: C.mid, borderRadius: 12, padding: 16, border: "1px solid #334155", marginBottom: 16 }}>
                                 <div style={{ fontSize: 13, fontWeight: 800, color: C.text, marginBottom: 10, borderBottom: "1px solid #334155", paddingBottom: 4 }}>Investing Activities</div>
                                 <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: C.green, padding: "2px 0" }}><span>+ Purchase Return Receipts (Refunds)</span><span>{fc(sums["Purchase Return Receipt"])}</span></div>
-                                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: C.red, padding: "2px 0" }}><span>- Other Payments (Fixed Assets, etc.)</span><span>{fc(sums["Other Payment"])}</span></div>
+                                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: C.red, padding: "2px 0" }}><span>- Other Payments (Fixed Assets, etc.)</span><span>{fc(sums["Other Payment"] + (sums["Asset Down Payment"] || 0))}</span></div>
                                 <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, fontWeight: 700, color: invNet >= 0 ? C.green : C.red, marginTop: 6, paddingTop: 4, borderTop: "1px dashed #334155" }}><span>Net Cash from Investing Activities</span><span>{fc(invNet)}</span></div>
                             </div>
 
