@@ -1053,23 +1053,15 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
                                 liabilities: { ...p.balanceSheet.liabilities, [loanId]: loanEntry }
                             }
                         };
-                        // Down payment goes out as cash
-                        if (downPmt > 0) {
-                            np.cashEntries = [...np.cashEntries, {
-                                id: gid(), dir: "out", payType: "Other Payment",
-                                description: `Down Payment for ${form.description}`,
-                                amount: downPmt, date: form.date || today(), sourceId: id, linkedId: null
-                            }];
-                        }
-                        // Loan received goes in as cash
+                        // Loan received in (from bank/lender)
                         np.cashEntries = [...np.cashEntries, {
                             id: gid(), dir: "in", payType: "Loan Received",
                             description: `Loan Received: ${loanEntry.description}`,
                             amount: loanAmt, date: form.date || today(), sourceId: loanId, linkedId: null
                         }];
-                        // Asset purchase goes out as cash
+                        // Full asset purchase out (to vendor) — net cash effect = loanAmt - amt = -downPmt ✓
                         np.cashEntries = [...np.cashEntries, {
-                            id: gid(), dir: "out", payType: "Other Payment",
+                            id: gid(), dir: "out", payType: "Asset Purchase",
                             description: `Purchase of Asset: ${form.description}`,
                             amount: amt, date: form.date || today(), sourceId: id, linkedId: null
                         }];
