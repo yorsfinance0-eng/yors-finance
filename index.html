@@ -163,7 +163,7 @@
         const TABS = ["Dashboard", "Inventory", "Stock In", "Stock Out", "GST Invoice", "Debtors", "Creditors", "Clients", "Cash Book", "Trading A/C", "P&L Account", "Balance Sheet", "Trial Balance", "Cash Flow", "Journal", "Audit Trail", "Depreciation", "Charts"];
         const CLIENT_TYPES = ["Retailer", "Distributor"];
         const CASH_IN_TYPES = ["Sales Receipt", "Debtor Payment", "Capital Introduced", "Loan Received", "Purchase Return Receipt", "Other Income Receipt"];
-        const CASH_OUT_TYPES = ["Expense Payment", "Creditor Payment", "Stock Purchase Payment", "Loan Repayment", "Interest on Loan Repayment", "Sales Return Refund", "GST Tax Payment", "Other Payment"];
+        const CASH_OUT_TYPES = ["Expense Payment", "Creditor Payment", "Stock Purchase Payment", "Asset Down Payment", "Loan Repayment", "Interest on Loan Repayment", "Sales Return Refund", "GST Tax Payment", "Other Payment"];
         const PL_CATS = { income: ["Other Income", "Finance Income"], expenses: ["Employee Benefit Expense", "Finance Costs", "Other Expenses", "Admin Expenses", "Bad Debts"] };
         const SCHEDULE3 = {
             assets: { "Non-Current Assets": ["Fixed Assets", "Capital Work in Progress", "Long Term Investments", "Deferred Tax Assets"], "Current Assets": ["Inventories", "Trade Receivables", "Cash and Cash Equivalents", "Short Term Loans", "Other Current Assets"] },
@@ -370,7 +370,7 @@
                 setSaving(true);
                 clearTimeout(timer.current);
                 timer.current = setTimeout(() => {
-                    db.collection("companies").doc(uid).set(state, { merge: true })
+                    db.collection("companies").doc(uid).set(state)
                         .catch(console.error).finally(() => setSaving(false));
                 }, 1000);
                 return () => clearTimeout(timer.current);
@@ -465,8 +465,16 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
 
             const totalPurchases = si.reduce((a, b) => a + Number(b.totalAmount - (b.gstAmount || 0)) * (b.isReturn ? -1 : 1), 0);
             const totalSales = so.reduce((a, b) => a + Number(b.totalAmount - (b.gstAmount || 0)) * (b.isReturn ? -1 : 1), 0);
-            const totalGstOutput = so.reduce((a, b) => a + Number(b.gstAmount || 0) * (b.isReturn ? -1 : 1), 0);
-            const totalGstInput = si.reduce((a, b) => a + Number(b.gstAmount || 0) * (b.isReturn ? -1 : 1), 0);
+            const totalGstOutput = 
+                so.reduce((a, b) => a + Number(b.gstAmount || 0) * (b.isReturn ? -1 : 1), 0) +
+                te.filter(e => e.side === "cr").reduce((a, b) => a + Number(b.gstAmount || 0), 0) +
+                ple.filter(e => e.side === "income").reduce((a, b) => a + Number(b.gstAmount || 0), 0) +
+                cash.filter(e => e.dir === "in" && !e.sourceId).reduce((a, b) => a + Number(b.gstAmount || 0), 0);
+            const totalGstInput = 
+                si.reduce((a, b) => a + Number(b.gstAmount || 0) * (b.isReturn ? -1 : 1), 0) +
+                te.filter(e => e.side === "dr").reduce((a, b) => a + Number(b.gstAmount || 0), 0) +
+                ple.filter(e => e.side === "expense").reduce((a, b) => a + Number(b.gstAmount || 0), 0) +
+                cash.filter(e => e.dir === "out" && !e.sourceId).reduce((a, b) => a + Number(b.gstAmount || 0), 0);
             const totalGstPaidToGovt = cash.filter(e => e.payType === "GST Tax Payment").reduce((a, b) => a + Number(b.amount), 0);
             const totalGstPayable = totalGstOutput - totalGstInput - totalGstPaidToGovt;
             const grossPurchases = si.filter(x => !x.isReturn).reduce((a, b) => a + Number(b.totalAmount - (b.gstAmount || 0)), 0);
@@ -479,8 +487,8 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
             const tradingDr = totalPurchases + openingStockAmt + te.filter(e => e.side === "dr").reduce((a, b) => a + Number(b.amount), 0);
             const tradingCr = totalSales + fifoClosing + te.filter(e => e.side === "cr").reduce((a, b) => a + Number(b.amount), 0);
             const grossProfit = tradingCr - tradingDr;
-            const cashIn = cash.filter(e => e.dir === "in").reduce((a, b) => a + Number(b.amount), 0);
-            const cashOut = cash.filter(e => e.dir === "out").reduce((a, b) => a + Number(b.amount), 0);
+            const cashIn = cash.filter(e => e.dir === "in" && !e.isPending).reduce((a, b) => a + Number(b.amount), 0);
+            const cashOut = cash.filter(e => e.dir === "out" && !e.isPending).reduce((a, b) => a + Number(b.amount), 0);
             const cashBal = cashIn - cashOut;
             const manualExpense = ple.filter(e => e.side === "expense").reduce((a, b) => a + Number(b.amount), 0);
             const manualIncome = ple.filter(e => e.side === "income").reduce((a, b) => a + Number(b.amount), 0);
@@ -541,8 +549,9 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
                 });
                 ple.forEach(x => {
                     if (x.settleMode === "creditor" && x.linkedPartyId === id) {
-                        if (x.side === "expense") sum += Number(x.amount || 0);
-                        else if (x.side === "income") sum -= Number(x.amount || 0);
+                        const xAmt = Number(x.totalAmount || x.amount || 0);
+                        if (x.side === "expense") sum += xAmt;
+                        else if (x.side === "income") sum -= xAmt;
                     }
                 });
                 Object.values(state.balanceSheet?.assets || {}).forEach(x => {
@@ -553,7 +562,7 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
                 });
                 return sum;
             };
-            const creditorCashPaid = id => cash.filter(e => e.dir === "out" && e.linkedId === id).reduce((a, b) => a + Number(b.amount), 0);
+            const creditorCashPaid = id => cash.filter(e => e.dir === "out" && e.linkedId === id && !e.isPending).reduce((a, b) => a + Number(b.amount), 0);
             const creditorBal = c => Math.max(0, Number(c.amount) + creditorFromStock(c.id) + creditorFromOther(c.id) - creditorCashPaid(c.id));
             const debtorFromStock = id => so.filter(x => x.settleMode === "debtor" && x.linkedPartyId === id).reduce((a, b) => a + Number(b.totalAmount) * (b.isReturn ? -1 : 1), 0);
             const debtorFromOther = id => {
@@ -566,8 +575,9 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
                 });
                 ple.forEach(x => {
                     if (x.settleMode === "debtor" && x.linkedPartyId === id) {
-                        if (x.side === "income") sum += Number(x.amount || 0);
-                        else if (x.side === "expense") sum -= Number(x.amount || 0);
+                        const xAmt = Number(x.totalAmount || x.amount || 0);
+                        if (x.side === "income") sum += xAmt;
+                        else if (x.side === "expense") sum -= xAmt;
                     }
                 });
                 Object.values(state.balanceSheet?.assets || {}).forEach(x => {
@@ -578,7 +588,7 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
                 });
                 return sum;
             };
-            const debtorCashRcvd = id => cash.filter(e => e.dir === "in" && e.linkedId === id).reduce((a, b) => a + Number(b.amount), 0);
+            const debtorCashRcvd = id => cash.filter(e => e.dir === "in" && e.linkedId === id && !e.isPending).reduce((a, b) => a + Number(b.amount), 0);
             const debtorBal = d => Math.max(0, Number(d.amount) + debtorFromStock(d.id) + debtorFromOther(d.id) - debtorCashRcvd(d.id));
             const totalCreditors = creds.reduce((a, b) => a + creditorBal(b), 0);
             const totalDebtors = debs.reduce((a, b) => a + debtorBal(b), 0);
@@ -598,8 +608,8 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
             // Auto assets: cash balance + closing stock + debtors - accumulated depreciation
             // Cash balance is from cash book (receipts & payments), kept separate from BS manual entries.
             const bsAutoAssets = cashBal + (fifoClosing > 0 ? fifoClosing : 0) + (totalDebtors > 0 ? totalDebtors : 0) - totalDepreciation;
-            // Auto liabilities: creditors + net P&L (net profit is carried to retained earnings / equity)
-            const bsAutoLiab = (totalCreditors > 0 ? totalCreditors : 0) + netPL;
+            // Auto liabilities: creditors + net P&L (net profit is carried to retained earnings / equity) + outstanding interest + GST payable
+            const bsAutoLiab = (totalCreditors > 0 ? totalCreditors : 0) + netPL + (outstandingInterestLiab > 0 ? outstandingInterestLiab : 0) + totalGstPayable;
             const bsTotalAssets = bsManualAssets + bsAutoAssets, bsTotalLiab = bsManualLiab + bsAutoLiab, bsDiff = bsTotalAssets - bsTotalLiab;
 
             const upd = fn => setState(p => fn(p));
@@ -668,6 +678,10 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
                     if (key === "gstInvoices") {
                         np.stockOut = (np.stockOut || []).filter(x => x.gstInvoiceId !== id);
                     }
+                    if (key === "cashEntries") {
+                        np.plEntries = (np.plEntries || []).filter(e => e.sourceId !== id);
+                        np.tradingEntries = (np.tradingEntries || []).filter(e => e.sourceId !== id);
+                    }
                     if (entry.createdCreditorId) np.creditors = (np.creditors || []).filter(c => c.id !== entry.createdCreditorId);
                     if (entry.createdDebtorId) np.debtors = (np.debtors || []).filter(d => d.id !== entry.createdDebtorId);
                     if (key === "creditors") np.cashEntries = (np.cashEntries || []).filter(e => !(e.dir === "out" && e.linkedId === id));
@@ -709,8 +723,50 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
                             np.depreciationAssets = (np.depreciationAssets || []).filter(a => a.id !== entry.linkedDeprId);
                         }
                         np.depreciationAssets = (np.depreciationAssets || []).filter(a => a.bsAssetId !== id);
+                        // If deleting an asset that has a linked loan, also delete the loan
+                        if (entry.linkedLoanId && np.balanceSheet.liabilities[entry.linkedLoanId]) {
+                            const loanId = entry.linkedLoanId;
+                            const liabs = { ...np.balanceSheet.liabilities };
+                            delete liabs[loanId];
+                            np.balanceSheet = { ...np.balanceSheet, liabilities: liabs };
+                            np.cashEntries = (np.cashEntries || []).filter(e => e.sourceId !== loanId);
+                            np = withLog(np, "DELETE", "balanceSheet.liabilities", loanId, `Auto-deleted linked Loan (asset deleted)`);
+                        }
+                        // If deleting a loan that has a linked asset, also delete the asset
+                        if (entry.linkedAssetId && np.balanceSheet.assets[entry.linkedAssetId]) {
+                            const assetId = entry.linkedAssetId;
+                            const assets = { ...np.balanceSheet.assets };
+                            delete assets[assetId];
+                            np.balanceSheet = { ...np.balanceSheet, assets: assets };
+                            np.cashEntries = (np.cashEntries || []).filter(e => e.sourceId !== assetId);
+                            np.depreciationAssets = (np.depreciationAssets || []).filter(a => a.bsAssetId !== assetId);
+                            np = withLog(np, "DELETE", "balanceSheet.assets", assetId, `Auto-deleted linked Asset (loan deleted)`);
+                        }
                     }
                     np = withLog(np, "DELETE", "balanceSheet." + side, id, `Deleted Balance Sheet entry`);
+                    return np;
+                });
+            };
+            const settlePendingCashEntry = (entryId) => {
+                const dateVal = window.prompt("Enter payment/collection date (YYYY-MM-DD) or leave empty for today:", today());
+                if (dateVal === null) return;
+                upd(p => {
+                    const entry = p.cashEntries.find(e => e.id === entryId);
+                    if (!entry) return p;
+                    let np = { ...p };
+                    np.cashEntries = p.cashEntries.map(e => {
+                        if (e.id === entryId) {
+                            return {
+                                ...e,
+                                isPending: false,
+                                date: dateVal || today(),
+                                description: e.description.replace("[PENDING] ", ""),
+                                payType: e.dir === "out" ? "Creditor Payment" : "Debtor Payment"
+                            };
+                        }
+                        return e;
+                    });
+                    np = withLog(np, "UPDATE", "cashEntries", entryId, `Settled pending cash entry: ${entry.description}`);
                     return np;
                 });
             };
@@ -979,31 +1035,77 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
             };
             const applyTrading = () => {
                 if (!form.description || !form.amount || !form.side || !form.date || !form.settleMode) { alert("Fill all fields"); return; }
+                if (form.settleMode === "creditor" || form.settleMode === "debtor") {
+                    if (!form.linkedPartyId) { alert(`Please select a ${form.settleMode === "creditor" ? "Creditor" : "Debtor"}`); return; }
+                    if (form.linkedPartyId === "__new__" && (!form.newPartyName || !form.newPartyCredit)) { alert("Enter new party name and credit period"); return; }
+                }
                 if (Number(form.amount) <= 0) { alert("Amount must be > 0"); return; }
-                const amt = Number(form.amount), id = gid(), direction = form.side === "dr" ? "out" : "in", res = resolveSettle(form, amt, form.date, "Trading: " + form.description, id, direction);
+                const baseAmt = Number(form.amount);
+                const hasGst = form.enableGst === "yes";
+                const gstRateV = hasGst ? Number(form.gstRate || 18) : 0;
+                const gstAmtV = hasGst ? Math.round(baseAmt * gstRateV) / 100 : 0;
+                const totalAmtV = baseAmt + gstAmtV;
+                const id = gid(), direction = form.side === "dr" ? "out" : "in", res = resolveSettle(form, totalAmtV, form.date, "Trading: " + form.description, id, direction);
                 upd(p => {
-                    let np = { ...p, tradingEntries: [...p.tradingEntries, { id, date: form.date, side: form.side, description: form.description, amount: amt, settleMode: form.settleMode, linkedPartyId: res.partyId, linkedPartyName: res.partyName, createdCreditorId: res.createdCreditorId, createdDebtorId: res.createdDebtorId }] };
+                    const descLower = form.description.toLowerCase().trim();
+                    const existing = p.tradingEntries.find(e => e.description.toLowerCase().trim() === descLower && e.side === form.side);
+                    let np = { ...p };
+                    if (existing) {
+                        np.tradingEntries = np.tradingEntries.map(e => e.id === existing.id ? { ...e, amount: e.amount + baseAmt, gstAmount: (e.gstAmount || 0) + gstAmtV, totalAmount: (e.totalAmount || e.amount) + totalAmtV } : e);
+                    } else {
+                        np.tradingEntries = [...np.tradingEntries, { id, date: form.date, side: form.side, description: form.description, amount: baseAmt, gstRate: gstRateV, gstAmount: gstAmtV, totalAmount: totalAmtV, settleMode: form.settleMode, linkedPartyId: res.partyId, linkedPartyName: res.partyName, createdCreditorId: res.createdCreditorId, createdDebtorId: res.createdDebtorId }];
+                    }
                     if (res.createdCreditorId) np.creditors = [...np.creditors, { id: res.createdCreditorId, name: form.newPartyName, date: form.date, amount: 0, creditPeriod: form.newPartyCredit || "", notified: false, checked: false }];
                     if (res.createdDebtorId) np.debtors = [...np.debtors, { id: res.createdDebtorId, name: form.newPartyName, date: form.date, amount: 0, creditPeriod: form.newPartyCredit || "", notified: false, checked: false }];
-                    res.cashEffects.forEach(e => { np.cashEntries = [...np.cashEntries, e]; }); 
-                    np = withLog(np, "CREATE", "tradingEntries", id, `Added Trading Entry: ${form.description}`);
+                    if (!existing) {
+                        res.cashEffects.forEach(e => { np.cashEntries = [...np.cashEntries, e]; });
+                        if (form.settleMode === "creditor" && form.side === "dr") {
+                            np.cashEntries = [...np.cashEntries, { id: gid(), dir: "out", payType: "Expense Payment", description: "[PENDING] " + form.description, amount: totalAmtV, date: form.date, sourceId: id, linkedId: res.partyId, isPending: true }];
+                        }
+                        if (form.settleMode === "debtor" && form.side === "cr") {
+                            np.cashEntries = [...np.cashEntries, { id: gid(), dir: "in", payType: "Other Income Receipt", description: "[PENDING] " + form.description, amount: totalAmtV, date: form.date, sourceId: id, linkedId: res.partyId, isPending: true }];
+                        }
+                    }
+                    np = withLog(np, existing ? "UPDATE" : "CREATE", "tradingEntries", existing ? existing.id : id, `${existing ? "Aggregated" : "Added"} Trading Entry: ${form.description}`);
                     return np;
                 }); closeM();
             };
             const applyPL = () => {
                 if (!form.category || !form.description || !form.amount || !form.date || !form.side || !form.settleMode) { alert("Fill all fields"); return; }
+                if (form.settleMode === "creditor" || form.settleMode === "debtor") {
+                    if (!form.linkedPartyId) { alert(`Please select a ${form.settleMode === "creditor" ? "Creditor" : "Debtor"}`); return; }
+                    if (form.linkedPartyId === "__new__" && (!form.newPartyName || !form.newPartyCredit)) { alert("Enter new party name and credit period"); return; }
+                }
                 if (Number(form.amount) <= 0) { alert("Amount must be > 0"); return; }
-                const amt = Number(form.amount), id = gid(), isExpense = form.side === "expense", direction = isExpense ? "out" : "in", res = resolveSettle(form, amt, form.date, form.description, id, direction);
-                
-                const isDup = (state.plEntries || []).some(e => e.date === form.date && e.amount === amt && e.linkedPartyId === res.partyId);
-                if (isDup && !window.confirm("Possible duplicate entry detected (same amount and party on this date). Save anyway?")) return;
+                const baseAmt = Number(form.amount);
+                const hasGst = form.enableGst === "yes";
+                const gstRateV = hasGst ? Number(form.gstRate || 18) : 0;
+                const gstAmtV = hasGst ? Math.round(baseAmt * gstRateV) / 100 : 0;
+                const totalAmtV = baseAmt + gstAmtV;
+                const id = gid(), isExpense = form.side === "expense", direction = isExpense ? "out" : "in";
+                const res = resolveSettle(form, totalAmtV, form.date, form.description, id, direction);
 
                 upd(p => {
-                    let np = { ...p, plEntries: [...p.plEntries, { id, date: form.date, side: form.side, category: form.category, description: form.description, amount: amt, settleMode: form.settleMode, linkedPartyId: res.partyId, linkedPartyName: res.partyName, createdCreditorId: res.createdCreditorId, createdDebtorId: res.createdDebtorId }] };
+                    const descLower = form.description.toLowerCase().trim();
+                    const existing = p.plEntries.find(e => e.description.toLowerCase().trim() === descLower && e.category === form.category && e.side === form.side);
+                    let np = { ...p };
+                    if (existing) {
+                        np.plEntries = np.plEntries.map(e => e.id === existing.id ? { ...e, amount: e.amount + baseAmt, gstAmount: (e.gstAmount || 0) + gstAmtV, totalAmount: (e.totalAmount || e.amount) + totalAmtV } : e);
+                    } else {
+                        np.plEntries = [...np.plEntries, { id, date: form.date, side: form.side, category: form.category, description: form.description, amount: baseAmt, gstRate: gstRateV, gstAmount: gstAmtV, totalAmount: totalAmtV, settleMode: form.settleMode, linkedPartyId: res.partyId, linkedPartyName: res.partyName, createdCreditorId: res.createdCreditorId, createdDebtorId: res.createdDebtorId }];
+                    }
                     if (res.createdCreditorId) np.creditors = [...np.creditors, { id: res.createdCreditorId, name: form.newPartyName, date: form.date, amount: 0, creditPeriod: form.newPartyCredit || "", notified: false, checked: false }];
                     if (res.createdDebtorId) np.debtors = [...np.debtors, { id: res.createdDebtorId, name: form.newPartyName, date: form.date, amount: 0, creditPeriod: form.newPartyCredit || "", notified: false, checked: false }];
-                    res.cashEffects.forEach(e => { np.cashEntries = [...np.cashEntries, { ...e, payType: isExpense ? "Expense Payment" : "Other Income Receipt" }]; }); 
-                    np = withLog(np, "CREATE", "plEntries", id, `Added P&L Entry: ${form.description}`);
+                    if (!existing) {
+                        res.cashEffects.forEach(e => { np.cashEntries = [...np.cashEntries, { ...e, payType: isExpense ? "Expense Payment" : "Other Income Receipt" }]; });
+                        if (form.settleMode === "creditor" && isExpense) {
+                            np.cashEntries = [...np.cashEntries, { id: gid(), dir: "out", payType: "Expense Payment", description: "[PENDING] " + form.description, amount: totalAmtV, date: form.date, sourceId: id, linkedId: res.partyId, isPending: true }];
+                        }
+                        if (form.settleMode === "debtor" && !isExpense) {
+                            np.cashEntries = [...np.cashEntries, { id: gid(), dir: "in", payType: "Other Income Receipt", description: "[PENDING] " + form.description, amount: totalAmtV, date: form.date, sourceId: id, linkedId: res.partyId, isPending: true }];
+                        }
+                    }
+                    np = withLog(np, existing ? "UPDATE" : "CREATE", "plEntries", existing ? existing.id : id, `${existing ? "Aggregated" : "Added"} P&L Entry: ${form.description}`);
                     return np;
                 }); closeM();
             };
@@ -1011,9 +1113,12 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
                 if (!form.side || !form.category || !form.subCategory || !form.description || !form.amount) { alert("Fill all fields"); return; }
                 if (Number(form.amount) <= 0) { alert("Amount must be > 0"); return; }
                 const isAsset = form.side === "assets";
-                // For loan-settled assets, settlement mode can be omitted (it's via loan)
                 const isLoanSettled = isAsset && form.assetSettleType === "loan";
                 if (!isLoanSettled && !form.settleMode) { alert("Fill all fields"); return; }
+                if (!isLoanSettled && (form.settleMode === "creditor" || form.settleMode === "debtor")) {
+                    if (!form.linkedPartyId) { alert(`Please select a ${form.settleMode === "creditor" ? "Creditor" : "Debtor"}`); return; }
+                    if (form.linkedPartyId === "__new__" && (!form.newPartyName || !form.newPartyCredit)) { alert("Enter new party name and credit period"); return; }
+                }
                 const amt = Number(form.amount), id = gid();
                 const direction = isAsset ? "out" : "in";
 
@@ -1059,10 +1164,10 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
                             description: `Loan Received: ${loanEntry.description}`,
                             amount: loanAmt, date: form.date || today(), sourceId: loanId, linkedId: null
                         }];
-                        // Full asset purchase out (to vendor) — net cash effect = loanAmt - amt = -downPmt ✓
+                        // Full asset purchase out — net cash effect = loanAmt - assetCost = -downPmt ✓
                         np.cashEntries = [...np.cashEntries, {
-                            id: gid(), dir: "out", payType: "Asset Purchase",
-                            description: `Purchase of Asset: ${form.description}`,
+                            id: gid(), dir: "out", payType: "Asset Down Payment",
+                            description: `Purchase of Asset: ${form.description} (Down Payment: ₹${downPmt})`,
                             amount: amt, date: form.date || today(), sourceId: id, linkedId: null
                         }];
                         np = withLog(np, "CREATE", "balanceSheet.assets", id, `Added Asset: ${form.description} (Loan-financed, Down ₹${downPmt})`);
@@ -1166,14 +1271,104 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
             const applyCash = () => {
                 if (!form.date || !form.payType || !form.amount || !form.description) { alert("Fill all fields"); return; }
                 if (Number(form.amount) <= 0) { alert("Amount must be > 0"); return; }
-                
-                const isDup = (state.cashEntries || []).some(e => e.date === form.date && e.amount === Number(form.amount) && e.linkedId === form.linkedId);
+                const baseAmt = Number(form.amount);
+                const hasGst = form.enableGst === "yes";
+                const gstRateV = hasGst ? Number(form.gstRate || 18) : 0;
+                const gstAmtV = hasGst ? Math.round(baseAmt * gstRateV) / 100 : 0;
+                const totalAmtV = baseAmt + gstAmtV;
+
+                const isDup = (state.cashEntries || []).some(e => !e.isPending && e.date === form.date && e.amount === baseAmt && e.linkedId === (form.linkedId || null) && e.payType === form.payType);
                 if (isDup && !window.confirm("Possible duplicate entry detected (same amount and party on this date). Save anyway?")) return;
 
                 const id = gid();
+                const noAggTypes = ["Creditor Payment", "Debtor Payment", "Loan Repayment", "Interest on Loan Repayment", "Sales Return Refund", "Purchase Return Receipt", "GST Tax Payment", "Asset Down Payment", "Expense Payment", "Other Payment", "Other Income Receipt", "Stock Purchase Payment", "Sales Receipt"];
                 upd(p => {
-                    let np = { ...p, cashEntries: [...p.cashEntries, { id, date: form.date, dir: form.dir, payType: form.payType, description: form.description, amount: Number(form.amount), linkedId: form.linkedId || null, sourceId: null, billNo: form.billNo }] };
-                    return withLog(np, "CREATE", "cashEntries", id, `Added Cash ${form.dir === "in" ? "In" : "Out"}: ${form.payType}`);
+                    const descLower = form.description.toLowerCase().trim();
+                    const canAgg = !noAggTypes.includes(form.payType);
+                    const existing = canAgg ? p.cashEntries.find(e => !e.isPending && e.description.toLowerCase().trim() === descLower && e.payType === form.payType && e.dir === form.dir) : null;
+                    let np = { ...p };
+                    
+                    let relId = null;
+                    if (!existing) {
+                        relId = gid();
+                        if (form.payType === "Expense Payment" || form.payType === "Other Payment") {
+                            np.plEntries = [...(np.plEntries || []), {
+                                id: relId,
+                                date: form.date,
+                                side: "expense",
+                                category: form.payType === "Expense Payment" ? "Other Expenses" : "Admin Expenses",
+                                description: form.description,
+                                amount: baseAmt,
+                                gstRate: gstRateV,
+                                gstAmount: gstAmtV,
+                                totalAmount: totalAmtV,
+                                settleMode: "cash",
+                                linkedPartyId: null,
+                                linkedPartyName: "Cash",
+                                sourceId: id
+                            }];
+                        } else if (form.payType === "Other Income Receipt") {
+                            np.plEntries = [...(np.plEntries || []), {
+                                id: relId,
+                                date: form.date,
+                                side: "income",
+                                category: "Other Income",
+                                description: form.description,
+                                amount: baseAmt,
+                                gstRate: gstRateV,
+                                gstAmount: gstAmtV,
+                                totalAmount: totalAmtV,
+                                settleMode: "cash",
+                                linkedPartyId: null,
+                                linkedPartyName: "Cash",
+                                sourceId: id
+                            }];
+                        } else if (form.payType === "Stock Purchase Payment") {
+                            np.tradingEntries = [...(np.tradingEntries || []), {
+                                id: relId,
+                                date: form.date,
+                                side: "dr",
+                                description: form.description,
+                                amount: baseAmt,
+                                gstRate: gstRateV,
+                                gstAmount: gstAmtV,
+                                totalAmount: totalAmtV,
+                                settleMode: "cash",
+                                linkedPartyId: null,
+                                linkedPartyName: "Cash",
+                                sourceId: id
+                            }];
+                        } else if (form.payType === "Sales Receipt") {
+                            np.tradingEntries = [...(np.tradingEntries || []), {
+                                id: relId,
+                                date: form.date,
+                                side: "cr",
+                                description: form.description,
+                                amount: baseAmt,
+                                gstRate: gstRateV,
+                                gstAmount: gstAmtV,
+                                totalAmount: totalAmtV,
+                                settleMode: "cash",
+                                linkedPartyId: null,
+                                linkedPartyName: "Cash",
+                                sourceId: id
+                            }];
+                        }
+                    }
+
+                    if (existing) {
+                        np.cashEntries = np.cashEntries.map(e => e.id === existing.id ? { ...e, amount: e.amount + baseAmt } : e);
+                    } else {
+                        np.cashEntries = [...np.cashEntries, { id, date: form.date, dir: form.dir, payType: form.payType, description: form.description, amount: baseAmt, gstRate: gstRateV, gstAmount: gstAmtV, linkedId: form.linkedId || null, sourceId: relId, billNo: form.billNo }];
+                    }
+                    // Remove pending entries when actual payment clears creditor/debtor
+                    if (form.dir === "out" && form.payType === "Creditor Payment" && form.linkedId) {
+                        np.cashEntries = np.cashEntries.filter(e => !(e.isPending && e.dir === "out" && e.linkedId === form.linkedId));
+                    }
+                    if (form.dir === "in" && form.payType === "Debtor Payment" && form.linkedId) {
+                        np.cashEntries = np.cashEntries.filter(e => !(e.isPending && e.dir === "in" && e.linkedId === form.linkedId));
+                    }
+                    return withLog(np, existing ? "UPDATE" : "CREATE", "cashEntries", existing ? existing.id : id, `${existing ? "Aggregated" : "Added"} Cash ${form.dir === "in" ? "In" : "Out"}: ${form.payType}`);
                 }); closeM();
             };
             const applyDepr = () => {
@@ -2598,9 +2793,7 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
                         <div style={{ background: C.mid, borderRadius: 12, overflowX: "auto" }}>
                             <table style={TBL}><thead><tr>{["Date", "Type", "Description", "In", "Out", "Running Bal", "Del"].map(h => <th key={h} style={THS}>{h}</th>)}</tr></thead>
                                 <tbody>{!cash.length && <tr><td colSpan={7} style={{ ...TDS, textAlign: "center", color: C.muted }}>No entries</td></tr>}
-                                    {cash.reduce((acc, e) => { const prev = acc.length ? acc[acc.length - 1].bal : 0; acc.push({ ...e, bal: e.dir === "in" ? prev + Number(e.amount) : prev - Number(e.amount) }); return acc; }, []).map(e => (
-                                        <tr key={e.id}><td style={TDS}>{e.date}</td><td style={TDS}><Badge label={e.payType} color={e.dir === "in" ? C.green : C.red} /></td><td style={TDS}>{e.description}</td><td style={TDS}>{e.dir === "in" ? <span style={{ color: C.green, fontWeight: 700 }}>{fc(e.amount)}</span> : "—"}</td><td style={TDS}>{e.dir === "out" ? <span style={{ color: C.red, fontWeight: 700 }}>{fc(e.amount)}</span> : "—"}</td><td style={{ ...TDS, fontWeight: 700, color: e.bal >= 0 ? C.green : C.red }}>{fc(e.bal)}</td><td style={TDS}><button style={BTND} onClick={() => cascadeDelete("cashEntries", e.id)}>Del</button></td></tr>
-                                    ))}
+                                    {(() => { let running = 0; return cash.map(e => { if (!e.isPending) running += e.dir === "in" ? Number(e.amount) : -Number(e.amount); const rowBal = running; return (<tr key={e.id} style={{ background: e.isPending ? "rgba(245,158,11,0.07)" : "transparent" }}><td style={TDS}>{e.date}</td><td style={TDS}><Badge label={e.payType} color={e.isPending ? C.amber : (e.dir === "in" ? C.green : C.red)} />{e.isPending && <span style={{ marginLeft: 4, fontSize: 9, background: "#451a03", color: C.amber, borderRadius: 4, padding: "1px 5px", fontWeight: 800, verticalAlign: "middle" }}>⏳ PENDING</span>}</td><td style={TDS}>{e.description}</td><td style={TDS}>{e.dir === "in" ? <span style={{ color: e.isPending ? C.amber : C.green, fontWeight: 700 }}>{fc(e.amount)}</span> : "—"}</td><td style={TDS}>{e.dir === "out" ? <span style={{ color: e.isPending ? C.amber : C.red, fontWeight: 700 }}>{fc(e.amount)}</span> : "—"}</td><td style={{ ...TDS, fontWeight: 700, color: e.isPending ? C.amber : (rowBal >= 0 ? C.green : C.red) }}>{e.isPending ? "— Pending" : fc(rowBal)}</td><td style={TDS}>{e.isPending ? (<div style={{ display: "flex", gap: 5 }}><button style={{ ...BTNP(e.dir === "out" ? "linear-gradient(90deg,#ef4444,#dc2626)" : "linear-gradient(90deg,#22c55e,#16a34a)"), padding: "3px 9px", fontSize: 11 }} onClick={() => settlePendingCashEntry(e.id)}>{e.dir === "out" ? "💳 Pay" : "💵 Collect"}</button><button style={BTND} onClick={() => cascadeDelete("cashEntries", e.id)}>Del</button></div>) : (<button style={BTND} onClick={() => cascadeDelete("cashEntries", e.id)}>Del</button>)}</td></tr>); }); })()}
                                 </tbody>
                             </table>
                         </div>
@@ -3448,7 +3641,18 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
                                 <option value="">Dr / Cr *</option><option value="dr">Dr — Cost</option><option value="cr">Cr — Revenue</option>
                             </select>
                             <input style={INP} placeholder="Description *" value={form.description || ""} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} />
-                            <input type="number" style={INP} placeholder="Amount (₹) *" value={form.amount || ""} onChange={e => setForm(f => ({ ...f, amount: e.target.value }))} />
+                            <input type="number" style={INP} placeholder="Amount (Base, ex-GST) ₹" value={form.amount || ""} onChange={e => setForm(f => ({ ...f, amount: e.target.value }))} />
+                            <div style={{ background: "#0a0f1e", borderRadius: 8, padding: 12, marginBottom: 9, border: "1px solid " + C.border }}>
+                                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                                    <span style={{ fontSize: 11, color: "#94a3b8", fontWeight: 700 }}>Enable GST on this entry?</span>
+                                    <input type="checkbox" checked={form.enableGst === "yes"} onChange={e => setForm(f => ({ ...f, enableGst: e.target.checked ? "yes" : "no", gstRate: "18" }))} />
+                                </div>
+                                {form.enableGst === "yes" && (<div style={{ marginTop: 8 }}>
+                                    <label style={{ fontSize: 9, color: C.muted, fontWeight: 700 }}>GST Rate (%)</label>
+                                    <select style={{ ...INP, marginBottom: 0 }} value={form.gstRate || "18"} onChange={e => setForm(f => ({ ...f, gstRate: e.target.value }))}>{[0, 5, 12, 18, 28].map(r => <option key={r} value={r}>{r}%</option>)}</select>
+                                    {form.amount && <div style={{ fontSize: 11, color: C.amber, marginTop: 6 }}>GST ({form.gstRate || 18}%): {fc(Number(form.amount) * Number(form.gstRate || 18) / 100)} | Total: {fc(Number(form.amount) * (1 + Number(form.gstRate || 18) / 100))}</div>}
+                                </div>)}
+                            </div>
                             {form.side && <SettlePanel {...sp} form={{ ...form, _settleContext: form.side === "dr" ? "trading_dr" : "trading_cr" }} setForm={setForm} />}
                             <button style={{ ...BTNP(), width: "100%" }} onClick={applyTrading}>Save</button>
                         </div>}
@@ -3754,7 +3958,18 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
                             </select>
                             <input style={INP} placeholder="Description *" value={form.description || ""} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} />
                             <DateInput value={form.date} onChange={v => setForm(f => ({ ...f, date: v }))} />
-                            <input type="number" style={INP} placeholder="Amount (₹) *" value={form.amount || ""} onChange={e => setForm(f => ({ ...f, amount: e.target.value }))} />
+                            <input type="number" style={INP} placeholder="Amount (Base, ex-GST) ₹" value={form.amount || ""} onChange={e => setForm(f => ({ ...f, amount: e.target.value }))} />
+                            <div style={{ background: "#0a0f1e", borderRadius: 8, padding: 12, marginBottom: 9, border: "1px solid " + C.border }}>
+                                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                                    <span style={{ fontSize: 11, color: "#94a3b8", fontWeight: 700 }}>Enable GST on this entry?</span>
+                                    <input type="checkbox" checked={form.enableGst === "yes"} onChange={e => setForm(f => ({ ...f, enableGst: e.target.checked ? "yes" : "no", gstRate: "18" }))} />
+                                </div>
+                                {form.enableGst === "yes" && (<div style={{ marginTop: 8 }}>
+                                    <label style={{ fontSize: 9, color: C.muted, fontWeight: 700 }}>GST Rate (%)</label>
+                                    <select style={{ ...INP, marginBottom: 0 }} value={form.gstRate || "18"} onChange={e => setForm(f => ({ ...f, gstRate: e.target.value }))}>{[0, 5, 12, 18, 28].map(r => <option key={r} value={r}>{r}%</option>)}</select>
+                                    {form.amount && <div style={{ fontSize: 11, color: C.amber, marginTop: 6 }}>GST ({form.gstRate || 18}%): {fc(Number(form.amount) * Number(form.gstRate || 18) / 100)} | Total: {fc(Number(form.amount) * (1 + Number(form.gstRate || 18) / 100))}</div>}
+                                </div>)}
+                            </div>
                             {form.side && <SettlePanel {...sp} form={{ ...form, _settleContext: form.side === "expense" ? "pl_expense" : "pl_income" }} setForm={setForm} />}
                             <button style={{ ...BTNP(), width: "100%" }} onClick={applyPL}>Save</button>
                         </div>}
@@ -3998,7 +4213,18 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
                                 </select>
                             )}
                             <input style={INP} placeholder="Description *" value={form.description || ""} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} />
-                            <input type="number" style={INP} placeholder="Amount (₹) *" value={form.amount || ""} onChange={e => setForm(f => ({ ...f, amount: e.target.value }))} />
+                            <div style={{ background: "#0a0f1e", borderRadius: 8, padding: 12, marginBottom: 9, border: "1px solid " + C.border }}>
+                                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                                    <span style={{ fontSize: 11, color: "#94a3b8", fontWeight: 700 }}>Enable GST on this entry?</span>
+                                    <input type="checkbox" checked={form.enableGst === "yes"} onChange={e => setForm(f => ({ ...f, enableGst: e.target.checked ? "yes" : "no", gstRate: "18" }))} />
+                                </div>
+                                {form.enableGst === "yes" && (<div style={{ marginTop: 8 }}>
+                                    <label style={{ fontSize: 9, color: C.muted, fontWeight: 700 }}>GST Rate (%)</label>
+                                    <select style={{ ...INP, marginBottom: 0 }} value={form.gstRate || "18"} onChange={e => setForm(f => ({ ...f, gstRate: e.target.value }))}>{[0, 5, 12, 18, 28].map(r => <option key={r} value={r}>{r}%</option>)}</select>
+                                    {form.amount && <div style={{ fontSize: 11, color: C.amber, marginTop: 6 }}>GST ({form.gstRate || 18}%): {fc(Number(form.amount) * Number(form.gstRate || 18) / 100)} | Total: {fc(Number(form.amount) * (1 + Number(form.gstRate || 18) / 100))}</div>}
+                                </div>)}
+                            </div>
+                            <input type="number" style={INP} placeholder="Amount (Base, ex-GST) ₹" value={form.amount || ""} onChange={e => setForm(f => ({ ...f, amount: e.target.value }))} />
                             <button style={{ ...BTNP(form.dir === "in" ? "linear-gradient(90deg,#22c55e,#16a34a)" : "linear-gradient(90deg,#ef4444,#dc2626)"), width: "100%" }} onClick={applyCash}>Save</button>
                         </div>}
 
