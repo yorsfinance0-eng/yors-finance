@@ -1008,9 +1008,79 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
                 }); closeM();
             };
             const applyBS = () => {
-                if (!form.side || !form.category || !form.subCategory || !form.description || !form.amount || !form.settleMode) { alert("Fill all fields"); return; }
+                if (!form.side || !form.category || !form.subCategory || !form.description || !form.amount) { alert("Fill all fields"); return; }
                 if (Number(form.amount) <= 0) { alert("Amount must be > 0"); return; }
-                const amt = Number(form.amount), id = gid(), isAsset = form.side === "assets", direction = isAsset ? "out" : "in", res = resolveSettle(form, amt, form.date || today(), form.description, id, direction);
+                const isAsset = form.side === "assets";
+                // For loan-settled assets, settlement mode can be omitted (it's via loan)
+                const isLoanSettled = isAsset && form.assetSettleType === "loan";
+                if (!isLoanSettled && !form.settleMode) { alert("Fill all fields"); return; }
+                const amt = Number(form.amount), id = gid();
+                const direction = isAsset ? "out" : "in";
+
+                if (isLoanSettled) {
+                    // Asset financed via loan
+                    const loanAmt = amt - Number(form.downPayment || 0);
+                    const downPmt = Number(form.downPayment || 0);
+                    if (loanAmt <= 0) { alert("Loan amount must be > 0 after down payment"); return; }
+                    if (!form.loanDescription) { alert("Please enter a loan/lender name"); return; }
+                    if (!form.loanInterestRate && Number(form.loanInterestRate) < 0) { alert("Enter a valid interest rate"); return; }
+                    const loanId = gid();
+                    const assetEntry = {
+                        id, side: form.side, category: form.category, subCategory: form.subCategory,
+                        description: form.description, date: form.date || today(), amount: amt,
+                        settleMode: "loan", linkedLoanId: loanId, downPayment: downPmt
+                    };
+                    const loanEntry = {
+                        id: loanId, side: "liabilities",
+                        category: "Non-Current Liabilities", subCategory: "Long Term Borrowings",
+                        description: form.loanDescription || `Loan for ${form.description}`,
+                        date: form.date || today(), amount: loanAmt,
+                        settleMode: form.loanSettleMode || "none",
+                        linkedPartyId: null, linkedPartyName: "",
+                        interestRate: Number(form.loanInterestRate || 0),
+                        loanTenureMonths: Number(form.loanTenureMonths || 0),
+                        repaymentType: form.repaymentType || "EMI",
+                        gracePeriodMonths: Number(form.gracePeriodMonths || 0),
+                        loanType: form.loanType || "Term Loan",
+                        isLoan: true, linkedAssetId: id
+                    };
+                    upd(p => {
+                        let np = {
+                            ...p,
+                            balanceSheet: {
+                                ...p.balanceSheet,
+                                assets: { ...p.balanceSheet.assets, [id]: assetEntry },
+                                liabilities: { ...p.balanceSheet.liabilities, [loanId]: loanEntry }
+                            }
+                        };
+                        // Down payment goes out as cash
+                        if (downPmt > 0) {
+                            np.cashEntries = [...np.cashEntries, {
+                                id: gid(), dir: "out", payType: "Other Payment",
+                                description: `Down Payment for ${form.description}`,
+                                amount: downPmt, date: form.date || today(), sourceId: id, linkedId: null
+                            }];
+                        }
+                        // Loan received goes in as cash
+                        np.cashEntries = [...np.cashEntries, {
+                            id: gid(), dir: "in", payType: "Loan Received",
+                            description: `Loan Received: ${loanEntry.description}`,
+                            amount: loanAmt, date: form.date || today(), sourceId: loanId, linkedId: null
+                        }];
+                        // Asset purchase goes out as cash
+                        np.cashEntries = [...np.cashEntries, {
+                            id: gid(), dir: "out", payType: "Other Payment",
+                            description: `Purchase of Asset: ${form.description}`,
+                            amount: amt, date: form.date || today(), sourceId: id, linkedId: null
+                        }];
+                        np = withLog(np, "CREATE", "balanceSheet.assets", id, `Added Asset: ${form.description} (Loan-financed, Down ₹${downPmt})`);
+                        np = withLog(np, "CREATE", "balanceSheet.liabilities", loanId, `Auto-created Loan: ${loanEntry.description}`);
+                        return np;
+                    }); closeM();
+                    return;
+                }
+
+                const res = resolveSettle(form, amt, form.date || today(), form.description, id, direction);
                 const entry = { 
                     id, 
                     side: form.side, 
@@ -1026,6 +1096,10 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
                     createdDebtorId: res.createdDebtorId,
                     ...(form.subCategory === "Long Term Borrowings" ? {
                         interestRate: Number(form.interestRate || 0),
+                        loanTenureMonths: Number(form.loanTenureMonths || 0),
+                        repaymentType: form.repaymentType || "EMI",
+                        gracePeriodMonths: Number(form.gracePeriodMonths || 0),
+                        loanType: form.loanType || "Term Loan",
                         isLoan: true
                     } : {})
                 };
@@ -1126,6 +1200,14 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
                     let np = { ...p, openingStock: { amount: Number(form.amount || 0), date: form.date || today() } };
                     return withLog(np, "UPDATE", "openingStock", null, `Set Opening Stock to ${form.amount}`);
                 }); closeM(); 
+            };
+            const deleteOpeningStock = () => {
+                if (!isAdmin) { alert("Locked 🔒: Switch to Admin Mode to delete entries."); return; }
+                if (!window.confirm("Delete Opening Stock entry? This will reset it to ₹0.")) return;
+                upd(p => {
+                    let np = { ...p, openingStock: { amount: 0, date: "" } };
+                    return withLog(np, "DELETE", "openingStock", null, "Deleted Opening Stock");
+                });
             };
 
             const sp = { form, setForm, creds, debs };
@@ -1245,14 +1327,19 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
                             </div>
                         </div>
                         <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
-                            {[["Opening Stock", fc(openingStockAmt), "#64748b,#475569"], ["Purchases (Net)", fc(totalPurchases), "#6366f1,#8b5cf6"], ["Purch. Returns", fc(purchaseReturnsAmt), "#f59e0b,#b45309"], ["Sales (Net)", fc(totalSales), "#22c55e,#16a34a"], ["Sales Returns", fc(salesReturnsAmt), "#ef4444,#b91c1c"], ["Closing Stock", fc(fifoClosing), "#8b5cf6,#7c3aed"], ["Gross P&L", fabs(grossProfit) + (grossProfit >= 0 ? "▲" : "▼"), grossProfit >= 0 ? "#0891b2,#0ea5e9" : "#ef4444,#dc2626"]].map(([l, v, g]) => (
-                                <div key={l} style={CARD(g)}><div style={{ fontSize: 9 }}>{l}</div><div style={{ fontSize: 14, fontWeight: 900 }}>{v}</div></div>
-                            ))}
+                            <div style={CARD("#64748b,#475569")}><div style={{ fontSize: 9 }}>Opening Stock</div><div style={{ fontSize: 14, fontWeight: 900 }}>{fc(openingStockAmt)}</div></div>
+                            <div style={CARD("#6366f1,#8b5cf6")}><div style={{ fontSize: 9 }}>Purchases (Net)</div><div style={{ fontSize: 14, fontWeight: 900 }}>{fc(totalPurchases)}</div></div>
+                            <div style={CARD("#f59e0b,#b45309")}><div style={{ fontSize: 9 }}>Purch. Returns</div><div style={{ fontSize: 14, fontWeight: 900 }}>{fc(purchaseReturnsAmt)}</div></div>
+                            <div style={CARD("#22c55e,#16a34a")}><div style={{ fontSize: 9 }}>Sales (Net)</div><div style={{ fontSize: 14, fontWeight: 900 }}>{fc(totalSales)}</div></div>
+                            <div style={CARD("#ef4444,#b91c1c")}><div style={{ fontSize: 9 }}>Sales Returns</div><div style={{ fontSize: 14, fontWeight: 900 }}>{fc(salesReturnsAmt)}</div></div>
+                            <div style={CARD("#8b5cf6,#7c3aed")}><div style={{ fontSize: 9 }}>Closing Stock</div><div style={{ fontSize: 14, fontWeight: 900 }}>{fc(fifoClosing)}</div></div>
+                            <div style={CARD(grossProfit >= 0 ? "#0891b2,#0ea5e9" : "#ef4444,#dc2626")}><div style={{ fontSize: 9 }}>Gross P&L</div><div style={{ fontSize: 14, fontWeight: 900 }}>{fabs(grossProfit) + (grossProfit >= 0 ? "▲" : "▼")}</div></div>
                         </div>
                         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                             <div style={{ background: C.mid, borderRadius: 12, padding: 16 }}>
                                 <div style={{ fontWeight: 800, color: C.red, fontSize: 12, marginBottom: 6, borderBottom: "1px solid #334155", paddingBottom: 4 }}>Dr — Costs</div>
-                                {[["Opening Stock", openingStockAmt], ["Purchases (Gross)", grossPurchases]].map(([l, v]) => <div key={l} style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 3 }}><span style={{ color: C.muted }}>{l}</span><span style={{ color: C.red, fontWeight: 600 }}>{fc(v)}</span></div>)}
+                                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 3, alignItems: "center" }}><span style={{ color: C.muted }}>Opening Stock</span><span style={{ display: "flex", gap: 5, alignItems: "center" }}><span style={{ color: C.red, fontWeight: 600 }}>{fc(openingStockAmt)}</span>{openingStockAmt > 0 && isAdmin && <button style={BTND} onClick={deleteOpeningStock} title="Delete Opening Stock">✕</button>}</span></div>
+                                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 3 }}><span style={{ color: C.muted }}>Purchases (Gross)</span><span style={{ color: C.red, fontWeight: 600 }}>{fc(grossPurchases)}</span></div>
                                 {purchaseReturnsAmt > 0 && <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 3 }}><span style={{ color: C.amber }}>Less: Purchase Returns</span><span style={{ color: C.green, fontWeight: 600 }}>({fc(purchaseReturnsAmt)})</span></div>}
                                 {te.filter(e => e.side === "dr").map(e => <div key={e.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 11, marginBottom: 3, alignItems: "center" }}><span style={{ color: C.muted }}>{e.description}</span><span style={{ display: "flex", gap: 5 }}>{fc(e.amount)}<button style={BTND} onClick={() => cascadeDelete("tradingEntries", e.id)}>✕</button></span></div>)}
                                 <div style={{ borderTop: "1px solid #334155", paddingTop: 6, fontWeight: 800, color: C.red, textAlign: "right" }}>Total Dr: {fc(tradingDr)}</div>
@@ -3682,7 +3769,7 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
 
                         {modal === "bs" && <div>
                             <div style={{ fontWeight: 800, fontSize: 15, color: C.blue, marginBottom: 12 }}>🏛️ Balance Sheet Entry</div>
-                            <select style={INP} value={form.side || ""} onChange={e => setForm(f => ({ ...f, side: e.target.value, category: "", subCategory: "", settleMode: "" }))}>
+                            <select style={INP} value={form.side || ""} onChange={e => setForm(f => ({ ...f, side: e.target.value, category: "", subCategory: "", settleMode: "", assetSettleType: "" }))}>
                                 <option value="">Assets / Liabilities *</option><option value="assets">Assets</option><option value="liabilities">Liabilities & Equity</option>
                             </select>
                             {form.side && <select style={INP} value={form.category || ""} onChange={e => setForm(f => ({ ...f, category: e.target.value, subCategory: "" }))}>
@@ -3690,7 +3777,7 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
                             </select>}
                             {form.category && <select style={INP} value={form.subCategory || ""} onChange={e => {
                                 const val = e.target.value;
-                                setForm(f => ({ ...f, subCategory: val }));
+                                setForm(f => ({ ...f, subCategory: val, assetSettleType: "" }));
                                 if (val === "Long Term Borrowings") {
                                     setLoanPopup(true);
                                 }
@@ -3699,13 +3786,14 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
                             </select>}
                             <input style={INP} placeholder="Description *" value={form.description || ""} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} />
                             <DateInput value={form.date} onChange={v => setForm(f => ({ ...f, date: v }))} />
-                            <input type="number" style={INP} placeholder="Amount (₹) *" value={form.amount || ""} onChange={e => setForm(f => ({ ...f, amount: e.target.value }))} />
+                            <input type="number" style={INP} placeholder="Asset Cost / Amount (₹) *" value={form.amount || ""} onChange={e => setForm(f => ({ ...f, amount: e.target.value }))} />
                             
+                            {/* Loan configuration for liability entries */}
                             {form.subCategory === "Long Term Borrowings" && (
                                 <div style={{ background: "#1e293b", border: "1px solid #334155", borderRadius: 8, padding: 10, marginBottom: 9 }}>
                                     <div style={{ fontSize: 11, fontWeight: 700, color: C.blue, marginBottom: 4 }}>🏦 Loan Configuration</div>
                                     <div style={{ fontSize: 11, color: C.text }}>
-                                        Rate: <strong>{form.interestRate || 0}% p.a.</strong> | Date: <strong>{form.date || today()}</strong>
+                                        Rate: <strong>{form.interestRate || 0}% p.a.</strong> | Type: <strong>{form.loanType || "Term Loan"}</strong> | Tenure: <strong>{form.loanTenureMonths || "—"} mo</strong>
                                     </div>
                                     <button 
                                         type="button" 
@@ -3717,7 +3805,93 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
                                 </div>
                             )}
 
-                            {form.side && <SettlePanel {...sp} form={{ ...form, _settleContext: form.side === "assets" ? "bs_asset_increase" : "bs_liability_reduce" }} setForm={setForm} />}
+                            {/* Settlement mode for asset entries — Cash / Creditor / Loan */}
+                            {form.side === "assets" && (
+                                <div style={{ background: "#0a0f1e", borderRadius: 8, padding: 12, marginBottom: 9, border: "1px solid " + C.border }}>
+                                    <div style={{ fontSize: 11, color: "#94a3b8", fontWeight: 700, marginBottom: 7 }}>💳 How was this asset acquired?</div>
+                                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
+                                        {[["cash", "💵 Cash/Cheque", C.green], ["creditor", "🏦 On Credit", C.amber], ["loan", "🏦 Via Loan", C.blue]].map(([v, l, c]) =>
+                                            <button key={v} onClick={() => setForm(f => ({ ...f, assetSettleType: v, settleMode: v === "loan" ? "" : v, linkedPartyId: "", newPartyName: "", downPayment: "", loanDescription: "", loanInterestRate: "", loanTenureMonths: "", repaymentType: "EMI", gracePeriodMonths: "" }))}
+                                                style={{ flex: 1, minWidth: 90, padding: "7px 4px", border: "2px solid " + (form.assetSettleType === v ? c : C.border), borderRadius: 7, background: form.assetSettleType === v ? c + "18" : C.mid, color: form.assetSettleType === v ? c : C.muted, fontWeight: 700, fontSize: 11, cursor: "pointer" }}>
+                                                {l}
+                                            </button>
+                                        )}
+                                    </div>
+
+                                    {/* Loan settlement details */}
+                                    {form.assetSettleType === "loan" && (
+                                        <div style={{ border: "1px solid " + C.blue, borderRadius: 8, padding: 12, marginTop: 4, background: "#070d1c" }}>
+                                            <div style={{ fontSize: 11, color: C.blue, fontWeight: 800, marginBottom: 8 }}>🏦 Loan Settlement Details</div>
+                                            
+                                            <label style={{ fontSize: 9, color: C.muted, fontWeight: 700, display: "block", marginBottom: 3 }}>LENDER / LOAN NAME *</label>
+                                            <input style={INP} placeholder="e.g. SBI Home Loan, HDFC Auto Loan" value={form.loanDescription || ""} onChange={e => setForm(f => ({ ...f, loanDescription: e.target.value }))} />
+
+                                            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                                                <div>
+                                                    <label style={{ fontSize: 9, color: C.muted, fontWeight: 700, display: "block", marginBottom: 3 }}>LOAN TYPE</label>
+                                                    <select style={{ ...INP, marginBottom: 0 }} value={form.loanType || "Term Loan"} onChange={e => setForm(f => ({ ...f, loanType: e.target.value }))}>
+                                                        {["Term Loan", "Vehicle Loan", "Home Loan", "Business Loan", "Machinery Loan", "Equipment Finance", "Overdraft", "Other"].map(t => <option key={t}>{t}</option>)}
+                                                    </select>
+                                                </div>
+                                                <div>
+                                                    <label style={{ fontSize: 9, color: C.muted, fontWeight: 700, display: "block", marginBottom: 3 }}>REPAYMENT TYPE</label>
+                                                    <select style={{ ...INP, marginBottom: 0 }} value={form.repaymentType || "EMI"} onChange={e => setForm(f => ({ ...f, repaymentType: e.target.value }))}>
+                                                        {["EMI", "Bullet (Lump-Sum)", "Interest Only", "Reducing Balance", "Flexible"].map(t => <option key={t}>{t}</option>)}
+                                                    </select>
+                                                </div>
+                                                <div>
+                                                    <label style={{ fontSize: 9, color: C.muted, fontWeight: 700, display: "block", marginBottom: 3 }}>INTEREST RATE (% p.a.) *</label>
+                                                    <input type="number" step="0.01" style={{ ...INP, marginBottom: 0 }} placeholder="e.g. 10.5" value={form.loanInterestRate || ""} onChange={e => setForm(f => ({ ...f, loanInterestRate: e.target.value }))} />
+                                                </div>
+                                                <div>
+                                                    <label style={{ fontSize: 9, color: C.muted, fontWeight: 700, display: "block", marginBottom: 3 }}>TENURE (MONTHS)</label>
+                                                    <input type="number" style={{ ...INP, marginBottom: 0 }} placeholder="e.g. 60" value={form.loanTenureMonths || ""} onChange={e => setForm(f => ({ ...f, loanTenureMonths: e.target.value }))} />
+                                                </div>
+                                                <div>
+                                                    <label style={{ fontSize: 9, color: C.muted, fontWeight: 700, display: "block", marginBottom: 3 }}>DOWN PAYMENT (₹)</label>
+                                                    <input type="number" style={{ ...INP, marginBottom: 0 }} placeholder="e.g. 50000" value={form.downPayment || ""} onChange={e => setForm(f => ({ ...f, downPayment: e.target.value }))} />
+                                                </div>
+                                                <div>
+                                                    <label style={{ fontSize: 9, color: C.muted, fontWeight: 700, display: "block", marginBottom: 3 }}>GRACE PERIOD (MONTHS)</label>
+                                                    <input type="number" style={{ ...INP, marginBottom: 0 }} placeholder="e.g. 3" value={form.gracePeriodMonths || ""} onChange={e => setForm(f => ({ ...f, gracePeriodMonths: e.target.value }))} />
+                                                </div>
+                                            </div>
+
+                                            {/* Live summary */}
+                                            {form.amount && (() => {
+                                                const total = Number(form.amount || 0);
+                                                const dp = Number(form.downPayment || 0);
+                                                const loanAmt = total - dp;
+                                                const rate = Number(form.loanInterestRate || 0);
+                                                const months = Number(form.loanTenureMonths || 0);
+                                                const emi = (rate && months) ? (loanAmt * (rate/1200) * Math.pow(1 + rate/1200, months)) / (Math.pow(1 + rate/1200, months) - 1) : 0;
+                                                return (
+                                                    <div style={{ background: "#0c1a2d", borderRadius: 7, padding: 10, marginTop: 10, border: "1px solid #1e3a5f" }}>
+                                                        <div style={{ fontSize: 10, fontWeight: 800, color: C.blue, marginBottom: 6 }}>📊 Loan Summary</div>
+                                                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4, fontSize: 11 }}>
+                                                            <span style={{ color: C.muted }}>Asset Cost</span><span style={{ color: C.text, fontWeight: 700 }}>{fc(total)}</span>
+                                                            <span style={{ color: C.muted }}>Down Payment</span><span style={{ color: C.amber, fontWeight: 700 }}>{fc(dp)}</span>
+                                                            <span style={{ color: C.muted }}>Loan Amount</span><span style={{ color: C.blue, fontWeight: 700 }}>{fc(loanAmt)}</span>
+                                                            {emi > 0 && <><span style={{ color: C.muted }}>Monthly EMI</span><span style={{ color: C.green, fontWeight: 700 }}>{fc(emi)}</span></>}
+                                                        </div>
+                                                    </div>
+                                                );
+                                            })()}
+                                        </div>
+                                    )}
+
+                                    {/* Cash / Creditor settlement */}
+                                    {(form.assetSettleType === "cash" || form.assetSettleType === "creditor") && (
+                                        <SettlePanel {...sp} form={{ ...form, settleMode: form.assetSettleType, _settleContext: "bs_asset_increase" }} setForm={f => setForm(prev => ({ ...prev, ...f(prev), assetSettleType: prev.assetSettleType }))} />
+                                    )}
+                                </div>
+                            )}
+
+                            {/* Settlement for liability entries */}
+                            {form.side === "liabilities" && (
+                                <SettlePanel {...sp} form={{ ...form, _settleContext: "bs_liability_reduce" }} setForm={setForm} />
+                            )}
+
                             <button style={{ ...BTNP(), width: "100%" }} onClick={applyBS}>Save</button>
                         </div>}
 
@@ -3878,41 +4052,80 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
                     <div onClick={() => {
                         setForm(f => ({ ...f, subCategory: "", isLoan: false, interestRate: "" }));
                         setLoanPopup(false);
-                    }} style={{ position: "fixed", inset: 0, background: "#000000d0", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 300 }}>
-                        <div onClick={e => e.stopPropagation()} style={{ background: C.mid, border: "1.5px solid " + C.blue, borderRadius: 16, padding: 22, width: 340, boxShadow: "0 10px 30px rgba(0,0,0,0.5)" }}>
-                            <div style={{ fontWeight: 800, fontSize: 15, color: C.blue, marginBottom: 12, display: "flex", alignItems: "center", gap: 6 }}>
+                    }} style={{ position: "fixed", inset: 0, background: "#000000d0", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 300, overflowY: "auto" }}>
+                        <div onClick={e => e.stopPropagation()} style={{ background: C.mid, border: "1.5px solid " + C.blue, borderRadius: 16, padding: 24, width: 400, maxWidth: "95vw", boxShadow: "0 10px 30px rgba(0,0,0,0.6)", margin: "20px auto" }}>
+                            <div style={{ fontWeight: 800, fontSize: 15, color: C.blue, marginBottom: 6, display: "flex", alignItems: "center", gap: 6 }}>
                                 🏦 Configure Loan Details
                             </div>
-                            <div style={{ fontSize: 11, color: C.muted, marginBottom: 12 }}>
-                                Please specify the loan details. Interest expense will be calculated monthly from the start date.
+                            <div style={{ fontSize: 11, color: C.muted, marginBottom: 14, borderBottom: "1px solid #334155", paddingBottom: 10 }}>
+                                Fill in all loan parameters. Interest expense will be auto-accrued monthly from the start date in P&amp;L.
                             </div>
-                            
-                            <label style={{ fontSize: 11, color: "#94a3b8", fontWeight: 700, display: "block", marginBottom: 4 }}>Loan Amount (₹) *</label>
-                            <input 
-                                type="number" 
-                                style={INP} 
-                                placeholder="Principal Amount" 
-                                value={form.amount || ""} 
-                                onChange={e => setForm(f => ({ ...f, amount: e.target.value }))} 
-                            />
-                            
-                            <label style={{ fontSize: 11, color: "#94a3b8", fontWeight: 700, display: "block", marginBottom: 4 }}>Interest Rate (% per annum) *</label>
-                            <input 
-                                type="number" 
-                                step="0.01" 
-                                style={INP} 
-                                placeholder="e.g. 10.5" 
-                                value={form.interestRate || ""} 
-                                onChange={e => setForm(f => ({ ...f, interestRate: e.target.value }))} 
-                            />
-                            
-                            <label style={{ fontSize: 11, color: "#94a3b8", fontWeight: 700, display: "block", marginBottom: 4 }}>Loan Start Date *</label>
-                            <DateInput 
-                                value={form.date} 
-                                onChange={v => setForm(f => ({ ...f, date: v }))} 
-                            />
 
-                            <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+                            {/* Row 1: Loan Amount */}
+                            <label style={{ fontSize: 10, color: "#94a3b8", fontWeight: 700, display: "block", marginBottom: 3, textTransform: "uppercase" }}>Loan / Principal Amount (₹) *</label>
+                            <input type="number" style={INP} placeholder="e.g. 500000" value={form.amount || ""} onChange={e => setForm(f => ({ ...f, amount: e.target.value }))} />
+
+                            {/* Row 2: Loan Type */}
+                            <label style={{ fontSize: 10, color: "#94a3b8", fontWeight: 700, display: "block", marginBottom: 3, textTransform: "uppercase" }}>Loan Type</label>
+                            <select style={INP} value={form.loanType || "Term Loan"} onChange={e => setForm(f => ({ ...f, loanType: e.target.value }))}>
+                                {["Term Loan", "Vehicle Loan", "Home Loan", "Business Loan", "Machinery Loan", "Equipment Finance", "Overdraft", "Personal Loan", "Other"].map(t => <option key={t}>{t}</option>)}
+                            </select>
+
+                            {/* Row 3: Interest Rate & Tenure side-by-side */}
+                            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                                <div>
+                                    <label style={{ fontSize: 10, color: "#94a3b8", fontWeight: 700, display: "block", marginBottom: 3, textTransform: "uppercase" }}>Interest Rate (% p.a.) *</label>
+                                    <input type="number" step="0.01" style={{ ...INP, marginBottom: 0 }} placeholder="e.g. 10.5" value={form.interestRate || ""} onChange={e => setForm(f => ({ ...f, interestRate: e.target.value }))} />
+                                </div>
+                                <div>
+                                    <label style={{ fontSize: 10, color: "#94a3b8", fontWeight: 700, display: "block", marginBottom: 3, textTransform: "uppercase" }}>Tenure (Months)</label>
+                                    <input type="number" style={{ ...INP, marginBottom: 0 }} placeholder="e.g. 60" value={form.loanTenureMonths || ""} onChange={e => setForm(f => ({ ...f, loanTenureMonths: e.target.value }))} />
+                                </div>
+                            </div>
+                            <div style={{ height: 9 }} />
+
+                            {/* Row 4: Repayment Type & Grace Period */}
+                            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                                <div>
+                                    <label style={{ fontSize: 10, color: "#94a3b8", fontWeight: 700, display: "block", marginBottom: 3, textTransform: "uppercase" }}>Repayment Schedule</label>
+                                    <select style={{ ...INP, marginBottom: 0 }} value={form.repaymentType || "EMI"} onChange={e => setForm(f => ({ ...f, repaymentType: e.target.value }))}>
+                                        {["EMI", "Bullet (Lump-Sum)", "Interest Only", "Reducing Balance", "Flexible"].map(t => <option key={t}>{t}</option>)}
+                                    </select>
+                                </div>
+                                <div>
+                                    <label style={{ fontSize: 10, color: "#94a3b8", fontWeight: 700, display: "block", marginBottom: 3, textTransform: "uppercase" }}>Grace Period (Months)</label>
+                                    <input type="number" style={{ ...INP, marginBottom: 0 }} placeholder="e.g. 3" value={form.gracePeriodMonths || ""} onChange={e => setForm(f => ({ ...f, gracePeriodMonths: e.target.value }))} />
+                                </div>
+                            </div>
+                            <div style={{ height: 9 }} />
+
+                            {/* Loan Start Date */}
+                            <label style={{ fontSize: 10, color: "#94a3b8", fontWeight: 700, display: "block", marginBottom: 3, textTransform: "uppercase" }}>Loan Start Date *</label>
+                            <DateInput value={form.date} onChange={v => setForm(f => ({ ...f, date: v }))} />
+
+                            {/* Live EMI Preview */}
+                            {(() => {
+                                const p = Number(form.amount || 0);
+                                const r = Number(form.interestRate || 0) / 1200;
+                                const n = Number(form.loanTenureMonths || 0);
+                                const emi = (p && r && n) ? (p * r * Math.pow(1 + r, n)) / (Math.pow(1 + r, n) - 1) : 0;
+                                const totalPay = emi * n;
+                                const totalInt = totalPay - p;
+                                if (!p || !r || !n) return null;
+                                return (
+                                    <div style={{ background: "#0a0f1e", borderRadius: 8, padding: 12, marginBottom: 12, border: "1px solid #1e3a5f" }}>
+                                        <div style={{ fontSize: 10, fontWeight: 800, color: C.blue, marginBottom: 8 }}>📊 Loan Preview ({form.repaymentType || "EMI"})</div>
+                                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, fontSize: 11 }}>
+                                            <span style={{ color: C.muted }}>Principal</span><span style={{ color: C.text, fontWeight: 700 }}>{fc(p)}</span>
+                                            {emi > 0 && <><span style={{ color: C.muted }}>Monthly EMI</span><span style={{ color: C.green, fontWeight: 700 }}>{fc(emi)}</span></>}
+                                            <span style={{ color: C.muted }}>Total Interest</span><span style={{ color: C.amber, fontWeight: 700 }}>{fc(totalInt)}</span>
+                                            <span style={{ color: C.muted }}>Total Repayment</span><span style={{ color: C.red, fontWeight: 700 }}>{fc(totalPay)}</span>
+                                        </div>
+                                    </div>
+                                );
+                            })()}
+
+                            <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
                                 <button 
                                     style={{ ...BTNP(), flex: 1 }} 
                                     onClick={() => {
@@ -3923,7 +4136,7 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
                                         setLoanPopup(false);
                                     }}
                                 >
-                                    Confirm Loan
+                                    ✓ Confirm Loan
                                 </button>
                                 <button 
                                     style={{ ...BTNP("transparent"), border: "1px solid #475569", color: "#94a3b8", flex: 1 }} 
