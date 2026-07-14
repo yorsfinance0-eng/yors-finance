@@ -1,0 +1,92 @@
+﻿{
+    "name":  "projects/yors-finance/databases/(default)/documents/companies/0wCxJrFjYSPCHOE1w7BbGHcPLB72",
+    "fields":  {
+                   "balanceSheet":  {
+                                        "mapValue":  {
+                                                         "fields":  {
+                                                                        "liabilities":  {
+                                                                                            "mapValue":  {
+
+                                                                                                         }
+                                                                                        },
+                                                                        "assets":  {
+                                                                                       "mapValue":  {
+
+                                                                                                    }
+                                                                                   }
+                                                                    }
+                                                     }
+                                    },
+                   "openingStock":  {
+                                        "mapValue":  {
+
+                                                     }
+                                    },
+                   "stockIn":  {
+                                   "arrayValue":  {
+
+                                                  }
+                               },
+                   "cashEntries":  {
+                                       "arrayValue":  {
+
+                                                      }
+                                   },
+                   "debtors":  {
+                                   "arrayValue":  {
+
+                                                  }
+                               },
+                   "settings":  {
+                                    "mapValue":  {
+                                                     "fields":  {
+                                                                    "adminPin":  {
+                                                                                     "stringValue":  "0000"
+                                                                                 }
+                                                                }
+                                                 }
+                                },
+                   "auditLog":  {
+                                    "arrayValue":  {
+
+                                                   }
+                                },
+                   "gstInvoices":  {
+                                       "arrayValue":  {
+
+                                                      }
+                                   },
+                   "plEntries":  {
+                                     "arrayValue":  {
+
+                                                    }
+                                 },
+                   "tradingEntries":  {
+                                          "arrayValue":  {
+
+                                                         }
+                                      },
+                   "stockOut":  {
+                                    "arrayValue":  {
+
+                                                   }
+                                },
+                   "creditors":  {
+                                     "arrayValue":  {
+
+                                                    }
+                                 },
+                   "depreciationAssets":  {
+                                              "arrayValue":  {
+
+                                                             }
+                                          },
+                   "clients":  {
+                                   "arrayValue":  {
+
+                                                  }
+                               }
+               },
+    "createTime":  "2026-07-03T11:48:56.456277Z",
+    "updateTime":  "2026-07-11T20:18:53.193300Z"
+}
