@@ -301,7 +301,7 @@
             const canCreditor = ["purchase", "trading_dr", "bs_asset_increase", "pl_expense", "bs_liability_reduce"].includes(mode);
             const canDebtor = ["sale", "trading_cr", "pl_income", "pl_expense"].includes(mode);
             const canNone = ["bs_asset_increase", "bs_liability_reduce", "trading_dr", "trading_cr", "pl_expense", "pl_income"].includes(mode);
-            const canRawMat = mode === "purchase";
+            const canRawMat = mode === "purchase"; // Only for Stock In (purchase) — total-based pool
             const options = ["cash", canCreditor && "creditor", canDebtor && "debtor", canRawMat && "rawMaterial", canNone && "none"].filter(Boolean);
             const mColors = { cash: C.green, creditor: C.amber, debtor: C.violet, none: C.muted, rawMaterial: C.teal };
             const mLabels = { cash: isIn ? "💵 Cash In" : "💵 Cash Out", creditor: "🏦 Creditor", debtor: "📋 Debtor", none: "📝 Journal Only", rawMaterial: "🏭 Raw Material" };
@@ -330,7 +330,7 @@
             };
             const totalVal = getTransactionTotal();
             const paidVal = Number(form.paidAmount || 0);
-            const availableRawMats = (rawMats || []).filter(r => (r.amount - (r.usedForStockIn || 0)) > 0);
+            const availableRawMats = (rawMats || []).filter(r => ((Number(r.totalAmount) || Number(r.amount)) - (r.usedForStockIn || 0)) > 0.001);
 
             return (<div style={{ background: "#0a0f1e", borderRadius: 8, padding: 12, marginBottom: 9, border: "1px solid #334155" }}>
                 <div style={{ fontSize: 11, color: "#94a3b8", fontWeight: 700, marginBottom: 7 }}>💳 Settlement Mode</div>
@@ -338,24 +338,26 @@
                     {options.map(opt => <button key={opt} onClick={() => setForm(f => ({ ...f, settleMode: opt, linkedPartyId: "", newPartyName: "", newPartyCredit: "", paidAmount: "", linkedRawMaterialId: "" }))} style={{ flex: 1, minWidth: 70, padding: "7px 4px", border: "2px solid " + (form.settleMode === opt ? mColors[opt] : C.border), borderRadius: 7, background: form.settleMode === opt ? mColors[opt] + "18" : C.mid, color: form.settleMode === opt ? mColors[opt] : C.muted, fontWeight: 700, fontSize: 11, cursor: "pointer" }}>{mLabels[opt]}</button>)}
                 </div>
                 {form.settleMode === "rawMaterial" && (<div>
-                    <label style={{ fontSize: 10, color: "#94a3b8", fontWeight: 700, display: "block", marginBottom: 3 }}>Select Raw Material Pool</label>
+                    <label style={{ fontSize: 10, color: "#94a3b8", fontWeight: 700, display: "block", marginBottom: 3 }}>Select Raw Material Pool (Total-Based)</label>
                     {availableRawMats.length === 0 ? (
                         <div style={{ fontSize: 11, color: C.red, padding: "8px 0" }}>No raw material payments with available balance. Add one from the Raw Materials tab first.</div>
                     ) : (
                         <select style={INP} value={form.linkedRawMaterialId || ""} onChange={e => setForm(f => ({ ...f, linkedRawMaterialId: e.target.value }))}>
                             <option value="">Select raw material pool…</option>
                             {availableRawMats.map(r => {
-                                const rem = r.amount - (r.usedForStockIn || 0);
-                                return <option key={r.id} value={r.id}>{r.rawMatType} — {r.description} (Available: ₹{rem.toFixed(2)})</option>;
+                                const poolTotal = Number(r.totalAmount) || Number(r.amount);
+                                const rem = poolTotal - (r.usedForStockIn || 0);
+                                return <option key={r.id} value={r.id}>{r.rawMatType} — {r.description} (Available: ₹{rem.toFixed(2)} incl. GST)</option>;
                             })}
                         </select>
                     )}
                     {form.linkedRawMaterialId && (() => {
                         const sel = availableRawMats.find(r => r.id === form.linkedRawMaterialId);
                         if (!sel) return null;
-                        const rem = sel.amount - (sel.usedForStockIn || 0);
+                        const poolTotal = Number(sel.totalAmount) || Number(sel.amount);
+                        const rem = poolTotal - (sel.usedForStockIn || 0);
                         return (<div style={{ fontSize: 10, color: totalVal > rem ? C.red : C.teal, marginTop: 4 }}>
-                            Pool balance: <strong>{fc(rem)}</strong>{totalVal > 0 && (totalVal <= rem
+                            Pool balance (incl. GST): <strong>{fc(rem)}</strong>{totalVal > 0 && (totalVal <= rem
                                 ? <span> → After deduction: <strong>{fc(rem - totalVal)}</strong></span>
                                 : <span> — ⚠️ Insufficient! Need {fc(totalVal)} but only {fc(rem)} available.</span>
                             )}
@@ -633,7 +635,8 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
             const fifoCOGS = Object.values(fifo).reduce((a, b) => a + b.cogs, 0);
             const fifoClosing = Object.values(fifo).reduce((a, b) => a + b.closingValue, 0);
             const openingStockAmt = Number(state.openingStock?.amount || 0);
-            const rawMaterialCosts = (state.rawMaterialPayments || []).reduce((sum, r) => sum + (Number(r.amount) - Number(r.usedForStockInBase !== undefined ? r.usedForStockInBase : (r.usedForStockIn || 0))), 0);
+            // rawMaterialCosts: remaining RM cost not yet allocated to stock-in (total-based: base+GST)
+            const rawMaterialCosts = (state.rawMaterialPayments || []).reduce((sum, r) => sum + Math.max(0, (Number(r.totalAmount) || Number(r.amount)) - (r.usedForStockIn || 0)), 0);
             const tradingDr = totalPurchases + openingStockAmt + rawMaterialCosts + te.filter(e => e.side === "dr" && e.sourceType !== "rawMaterial").reduce((a, b) => a + Number(b.amount), 0);
             const tradingCr = totalSales + fifoClosing + te.filter(e => e.side === "cr").reduce((a, b) => a + Number(b.amount), 0);
             const grossProfit = tradingCr - tradingDr;
@@ -693,8 +696,9 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
                 let sum = 0;
                 te.forEach(x => {
                     if (x.settleMode === "creditor" && x.linkedPartyId === id) {
-                        if (x.side === "dr") sum += Number(x.amount || 0);
-                        else if (x.side === "cr") sum -= Number(x.amount || 0);
+                        const xAmt = Number(x.totalAmount || x.amount || 0);
+                        if (x.side === "dr") sum += xAmt;
+                        else if (x.side === "cr") sum -= xAmt;
                     }
                 });
                 ple.forEach(x => {
@@ -711,7 +715,7 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
                     if (x.settleMode === "creditor" && x.linkedPartyId === id) sum += Number(x.amount || 0);
                 });
                 (state.rawMaterialPayments || []).forEach(x => {
-                    if (x.settleMode === "creditor" && x.linkedPartyId === id) sum += Number(x.amount || 0);
+                    if (x.settleMode === "creditor" && x.linkedPartyId === id) sum += Number(x.totalAmount || x.amount || 0);
                 });
                 return sum;
             };
@@ -722,8 +726,9 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
                 let sum = 0;
                 te.forEach(x => {
                     if (x.settleMode === "debtor" && x.linkedPartyId === id) {
-                        if (x.side === "cr") sum += Number(x.amount || 0);
-                        else if (x.side === "dr") sum -= Number(x.amount || 0);
+                        const xAmt = Number(x.totalAmount || x.amount || 0);
+                        if (x.side === "cr") sum += xAmt;
+                        else if (x.side === "dr") sum -= xAmt;
                     }
                 });
                 ple.forEach(x => {
@@ -760,9 +765,11 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
             const bsManualLiab = bsManualLiabRaw.reduce((a, b) => a + Number(b.amount), 0);
             // Auto assets: cash balance + closing stock + debtors - accumulated depreciation
             // Cash balance is from cash book (receipts & payments), kept separate from BS manual entries.
-            const bsAutoAssets = cashBal + (fifoClosing > 0 ? fifoClosing : 0) + (totalDebtors > 0 ? totalDebtors : 0) - totalDepreciation;
-            // Auto liabilities: creditors + net P&L (net profit is carried to retained earnings / equity) + outstanding interest + GST payable
-            const bsAutoLiab = (totalCreditors > 0 ? totalCreditors : 0) + netPL + (outstandingInterestLiab > 0 ? outstandingInterestLiab : 0) + totalGstPayable;
+            // When GST ITC > Output GST (totalGstPayable < 0), the excess ITC is an asset (receivable from govt), not a negative liability.
+            const gstItcReceivable = totalGstPayable < 0 ? Math.abs(totalGstPayable) : 0;
+            const bsAutoAssets = cashBal + (fifoClosing > 0 ? fifoClosing : 0) + (totalDebtors > 0 ? totalDebtors : 0) - totalDepreciation + gstItcReceivable;
+            // Auto liabilities: creditors + net P&L (net profit is carried to retained earnings / equity) + outstanding interest + GST payable (only when positive)
+            const bsAutoLiab = (totalCreditors > 0 ? totalCreditors : 0) + netPL + (outstandingInterestLiab > 0 ? outstandingInterestLiab : 0) + (totalGstPayable > 0 ? totalGstPayable : 0);
             const bsTotalAssets = bsManualAssets + bsAutoAssets, bsTotalLiab = bsManualLiab + bsAutoLiab, bsDiff = bsTotalAssets - bsTotalLiab;
 
             const upd = fn => setState(p => fn(p));
@@ -893,16 +900,11 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
                     if (entry.createdDebtorId) np.debtors = (np.debtors || []).filter(d => d.id !== entry.createdDebtorId);
                     if (key === "creditors") np.cashEntries = (np.cashEntries || []).filter(e => !(e.dir === "out" && e.linkedId === id));
                     if (key === "debtors") np.cashEntries = (np.cashEntries || []).filter(e => !(e.dir === "in" && e.linkedId === id));
-                    // Stock In paid from raw material: restore pool balance
+                    // Stock In paid from raw material: restore pool balance (total-based tracking)
                     if (key === "stockIn" && entry.settleMode === "rawMaterial" && entry.linkedRawMaterialId) {
-                        const taxable = Number(entry.totalAmount) - Number(entry.gstAmount || 0);
                         np.rawMaterialPayments = (np.rawMaterialPayments || []).map(r =>
                             r.id === entry.linkedRawMaterialId
-                                ? { 
-                                    ...r, 
-                                    usedForStockIn: Math.max(0, (r.usedForStockIn || 0) - Number(entry.totalAmount)),
-                                    usedForStockInBase: Math.max(0, (r.usedForStockInBase || 0) - taxable)
-                                  }
+                                ? { ...r, usedForStockIn: Math.max(0, (r.usedForStockIn || 0) - Number(entry.totalAmount)) }
                                 : r
                         );
                     }
@@ -1053,7 +1055,7 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
                     upd(p => {
                         let np = { ...p,
                             stockIn: [...p.stockIn, { id, date, godown, bottleType, category, batchNo, qty: qtyVal, ratePerUnit: rateVal, totalAmount: total, gstAmount, gstRate, hsnCode, supplierGstin, supplierStateCode, settleMode: "rawMaterial", linkedPartyId: null, linkedPartyName: rawMat.rawMatType + " Pool", linkedRawMaterialId: rawMat.id, isReturn: false, paidAmount: 0, gstType, cgstAmount, sgstAmount, igstAmount }],
-                            rawMaterialPayments: (p.rawMaterialPayments || []).map(r => r.id === rawMat.id ? { ...r, usedForStockIn: (r.usedForStockIn || 0) + total, usedForStockInBase: (r.usedForStockInBase || 0) + taxable } : r)
+                            rawMaterialPayments: (p.rawMaterialPayments || []).map(r => r.id === rawMat.id ? { ...r, usedForStockIn: (r.usedForStockIn || 0) + total } : r)
                         };
                         np = withLog(np, "CREATE", "stockIn", id, `Added Stock In of ${qty} ${bottleType} (paid from Raw Material: ${rawMat.rawMatType})`);
                         return np;
@@ -3841,7 +3843,7 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
                             <strong style={{ color: "#94a3b8" }}>ℹ️ Auto-populated items (read-only):</strong> Cash Balance, Closing Stock (FIFO), Trade Debtors, Accum. Depreciation, Trade Creditors, Net Profit/Loss — these are derived from other modules and <em>cannot be entered here</em>. Use <strong style={{ color: "#94a3b8" }}>+ Manual Entry</strong> for items like Fixed Assets, Share Capital, Long-term Loans, etc. Balance Sheet entries do <em>not</em> affect P&amp;L.
                         </div>
                         {Math.abs(bsDiff) > 0.01
-                            ? <div style={{ background: "#450a0a", borderRadius: 10, padding: 12, marginBottom: 12, border: "1.5px solid #ef4444" }}><div style={{ fontWeight: 800, color: C.red, fontSize: 12 }}>⚠️ Balance Sheet Mismatch — Difference: {fabs(bsDiff)}</div><div style={{ fontSize: 10, color: "#fca5a5", marginTop: 4 }}>Assets do not equal Liabilities + Equity. Common fix: Add Share Capital or Proprietor's Capital under Liabilities → Equity and Reserves. The difference usually represents capital not yet recorded.</div></div>
+                            ? <div style={{ background: "#450a0a", borderRadius: 10, padding: 12, marginBottom: 12, border: "1.5px solid #ef4444" }}><div style={{ fontWeight: 800, color: C.red, fontSize: 12 }}>⚠️ Balance Sheet Mismatch — Difference: {fabs(bsDiff)}</div><div style={{ fontSize: 10, color: "#fca5a5", marginTop: 4, lineHeight: "1.4" }}>Assets do not equal Liabilities + Equity. Common causes: <br/>1. <strong>Unbalanced "Journal Only" Entries</strong>: If you created manual entries in Trading/P&L/BS using "📝 Journal Only" without entering the corresponding opposite entry manually.<br/>2. <strong>Historical Raw Material Pool Usage</strong>: Past Stock In payments settled via Raw Material Pool double-counted GST ITC.<br/>3. <strong>Missing Capital</strong>: Add Share Capital under Liabilities to balance opening cash/assets.</div></div>
                             : <div style={{ background: "#052e16", borderRadius: 8, padding: "8px 14px", marginBottom: 10, color: "#86efac", fontWeight: 700, textAlign: "center", fontSize: 12 }}>✅ Balance Sheet BALANCED — Assets = Liabilities + Equity</div>}
                         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                             {["liabilities", "assets"].map(side => {
@@ -3853,10 +3855,13 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
                                     if (fifoClosing > 0) autoItems.push({ sub: "Inventories", label: "Closing Stock (FIFO)", val: fifoClosing, c: C.violet });
                                     if (totalDebtors > 0) autoItems.push({ sub: "Trade Receivables", label: "Trade Debtors", val: totalDebtors, c: C.violet });
                                     if (totalDepreciation > 0) autoItems.push({ sub: "Fixed Assets", label: "Less: Accum. Depr", val: -totalDepreciation, c: C.red });
+                                    // ITC Receivable: when Input GST > Output GST, excess ITC is a current asset (claim from govt)
+                                    if (gstItcReceivable > 0) autoItems.push({ sub: "Other Current Assets", label: "GST Input Tax Credit (ITC Receivable)", val: gstItcReceivable, c: C.teal });
                                 } else {
                                     if (totalCreditors > 0) autoItems.push({ sub: "Trade Payables", label: "Trade Creditors", val: totalCreditors, c: C.amber });
                                     if (outstandingInterestLiab > 0) autoItems.push({ sub: "Other Current Liabilities", label: "Interest Outstanding on Loans", val: outstandingInterestLiab, c: C.amber });
-                                    if (totalGstPayable !== 0) autoItems.push({ sub: "Other Current Liabilities", label: "GST Duties & Taxes (Payable)", val: totalGstPayable, c: C.amber });
+                                    // GST payable only shown as liability when positive (output > input)
+                                    if (totalGstPayable > 0) autoItems.push({ sub: "Other Current Liabilities", label: "GST Duties & Taxes (Payable)", val: totalGstPayable, c: C.amber });
                                     autoItems.push({ sub: "Retained Earnings / Net Profit", label: netPL >= 0 ? "Net Profit (auto)" : "Net Loss (auto)", val: netPL, c: netPL >= 0 ? C.green : C.red });
                                 }
                                 const groupTotals = {};
@@ -3968,8 +3973,9 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
                             { name: "Trading Dr (Direct Exp)", dr: te.filter(x => x.side === "dr" && x.sourceType !== "rawMaterial").reduce((s, e) => s + e.amount, 0), cr: 0 },
                             { name: "Raw Material Costs", dr: rawMaterialCosts, cr: 0 },
                             { name: "Trading Cr (Direct Inc)", dr: 0, cr: te.filter(x => x.side === "cr").reduce((s, e) => s + e.amount, 0) },
-                            { name: "P&L Expenses", dr: ple.filter(x => x.side === "expense").reduce((s, e) => s + e.amount, 0), cr: 0 },
-                            { name: "P&L Income", dr: 0, cr: ple.filter(x => x.side === "income").reduce((s, e) => s + e.amount, 0) },
+                            // P&L Expenses: use totalAmount (base+GST) so GST ITC claimed is accounted for in Dr side
+                            { name: "P&L Expenses (incl. GST)", dr: ple.filter(x => x.side === "expense").reduce((s, e) => s + Number(e.totalAmount || e.amount), 0), cr: 0 },
+                            { name: "P&L Income (incl. GST)", dr: 0, cr: ple.filter(x => x.side === "income").reduce((s, e) => s + Number(e.totalAmount || e.amount), 0) },
                             { name: "Depreciation (Expense)", dr: totalDepreciation, cr: 0 },
                             { name: "Trade Debtors", dr: totalDebtors, cr: 0 },
                             { name: "Trade Creditors", dr: 0, cr: totalCreditors },
@@ -3978,7 +3984,11 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
                             { name: "Manual BS Liab & Equity", dr: 0, cr: bsManualLiabRaw.reduce((s, e) => s + Number(e.amount), 0) },
                             { name: "Loan Interest (Expense)", dr: totalLoanInterest, cr: 0 },
                             { name: "Interest Outstanding on Loans", dr: 0, cr: outstandingInterestLiab },
-                            { name: "GST Duties & Taxes (Payable)", dr: totalGstPayable < 0 ? Math.abs(totalGstPayable) : 0, cr: totalGstPayable >= 0 ? totalGstPayable : 0 }
+                            // GST ITC Receivable when Input > Output; GST Payable when Output > Input
+                            { name: "GST ITC Receivable (Asset)", dr: gstItcReceivable > 0 ? gstItcReceivable : 0, cr: 0 },
+                            { name: "GST Duties & Taxes (Payable)", dr: 0, cr: totalGstPayable > 0 ? totalGstPayable : 0 },
+                             // Net P&L: mandatory closing equity entry (balances Journal Only entries too)
+                             { name: "Net Profit / (Loss) - Equity", dr: netPL < 0 ? Math.abs(netPL) : 0, cr: netPL >= 0 ? netPL : 0 }
                         ];
                         const totalDr = rows.reduce((acc, r) => acc + r.dr, 0);
                         const totalCr = rows.reduce((acc, r) => acc + r.cr, 0);
@@ -4461,6 +4471,28 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
                                     );
                                 })()}
                                 
+                                {/* Raw Material Pool info-only: show total raw material payments available */}
+                                {(() => {
+                                    const rms = state.rawMaterialPayments || [];
+                                    const totalRmBase = rms.reduce((s, r) => s + Number(r.amount || 0), 0);
+                                    const totalRmGst = rms.reduce((s, r) => s + Number(r.gstAmount || 0), 0);
+                                    const totalRmUsed = rms.reduce((s, r) => s + Number(r.usedForStockIn || 0), 0);
+                                    const totalRmAvail = rms.reduce((s, r) => s + (Number(r.totalAmount || r.amount) - Number(r.usedForStockIn || 0)), 0);
+                                    if (rms.length === 0 || form.isReturn === "true") return null;
+                                    return (
+                                        <div style={{ background: "#0a1e1a", border: "1px solid #0d9488", borderRadius: 8, padding: "8px 12px", marginBottom: 9 }}>
+                                            <div style={{ fontSize: 10, color: C.teal, fontWeight: 800, marginBottom: 5 }}>🏭 Raw Materials Summary (for reference)</div>
+                                            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "3px 10px", fontSize: 10 }}>
+                                                <span style={{ color: "#94a3b8" }}>Total RM Base Cost:</span><span style={{ color: C.text, fontWeight: 700 }}>{fc(totalRmBase)}</span>
+                                                <span style={{ color: "#94a3b8" }}>Total RM GST (ITC):</span><span style={{ color: C.green, fontWeight: 700 }}>{fc(totalRmGst)}</span>
+                                                <span style={{ color: "#94a3b8" }}>Used in prev. Stock In:</span><span style={{ color: C.amber, fontWeight: 700 }}>{fc(totalRmUsed)}</span>
+                                                <span style={{ color: "#94a3b8" }}>Available Balance:</span><span style={{ color: totalRmAvail > 0 ? C.teal : C.muted, fontWeight: 700 }}>{fc(Math.max(0, totalRmAvail))}</span>
+                                            </div>
+                                            <div style={{ fontSize: 9, color: "#64748b", marginTop: 4 }}>ℹ️ Raw Material Pool cannot be used as direct Stock In payment. Please record Stock In via Cash / Creditor and track RM separately.</div>
+                                        </div>
+                                    );
+                                })()}
+
                                 {form.isReturn === "true" ? (
                                     <div style={{ background: "#0a0f1e", borderRadius: 8, padding: 12, marginBottom: 9, border: "2px solid " + C.amber }}>
                                         <div style={{ fontSize: 11, color: C.amber, fontWeight: 700, marginBottom: 7 }}>↩️ Purchase Return Settlement</div>
