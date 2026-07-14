@@ -48,6 +48,16 @@
             opacity: .5;
         }
 
+        /* Prevent accidental scroll-wheel changes on number inputs */
+        input[type=number] {
+            -moz-appearance: textfield;
+        }
+        input[type=number]::-webkit-outer-spin-button,
+        input[type=number]::-webkit-inner-spin-button {
+            -webkit-appearance: none;
+            margin: 0;
+        }
+
         /* ─── PRINT: Show only the invoice, hide the entire app shell ─── */
         @media print {
             body {
@@ -129,6 +139,15 @@
 </head>
 
 <body>
+
+    <!-- Prevent mousewheel from changing number input values globally -->
+    <script>
+        document.addEventListener('wheel', function(e) {
+            if (document.activeElement && document.activeElement.type === 'number') {
+                document.activeElement.blur();
+            }
+        }, { passive: false });
+    </script>
     <div id="root">
         <div
             style="min-height:100vh;display:flex;align-items:center;justify-content:center;background:#0f172a;color:#a855f7;font-size:16px;font-weight:700">
@@ -284,10 +303,31 @@
             const options = ["cash", canCreditor && "creditor", canDebtor && "debtor", canNone && "none"].filter(Boolean);
             const mColors = { cash: C.green, creditor: C.amber, debtor: C.violet, none: C.muted };
             const mLabels = { cash: isIn ? "💵 Cash In" : "💵 Cash Out", creditor: "🏦 Creditor", debtor: "📋 Debtor", none: "📝 Journal Only" };
+
+            const getTransactionTotal = () => {
+                const qty = Number(form.qty || 0);
+                const rate = Number(form.ratePerUnit || 0);
+                const hasGst = form.enableGst === "yes";
+                const gstRate = hasGst ? Number(form.gstRate || 18) : 0;
+                if (["purchase", "sale"].includes(mode)) {
+                    const taxable = qty * rate;
+                    const gstAmount = hasGst ? Math.round(taxable * gstRate) / 100 : 0;
+                    return taxable + gstAmount;
+                } else if (["trading_dr", "trading_cr", "pl_expense", "pl_income"].includes(mode)) {
+                    const base = Number(form.amount || 0);
+                    const gstAmount = hasGst ? Math.round(base * gstRate) / 100 : 0;
+                    return base + gstAmount;
+                } else {
+                    return Number(form.amount || 0);
+                }
+            };
+            const totalVal = getTransactionTotal();
+            const paidVal = Number(form.paidAmount || 0);
+
             return (<div style={{ background: "#0a0f1e", borderRadius: 8, padding: 12, marginBottom: 9, border: "1px solid #334155" }}>
                 <div style={{ fontSize: 11, color: "#94a3b8", fontWeight: 700, marginBottom: 7 }}>💳 Settlement Mode</div>
                 <div style={{ display: "flex", gap: 6, marginBottom: 8, flexWrap: "wrap" }}>
-                    {options.map(opt => <button key={opt} onClick={() => setForm(f => ({ ...f, settleMode: opt, linkedPartyId: "", newPartyName: "", newPartyCredit: "" }))} style={{ flex: 1, minWidth: 70, padding: "7px 4px", border: "2px solid " + (form.settleMode === opt ? mColors[opt] : C.border), borderRadius: 7, background: form.settleMode === opt ? mColors[opt] + "18" : C.mid, color: form.settleMode === opt ? mColors[opt] : C.muted, fontWeight: 700, fontSize: 11, cursor: "pointer" }}>{mLabels[opt]}</button>)}
+                    {options.map(opt => <button key={opt} onClick={() => setForm(f => ({ ...f, settleMode: opt, linkedPartyId: "", newPartyName: "", newPartyCredit: "", paidAmount: "" }))} style={{ flex: 1, minWidth: 70, padding: "7px 4px", border: "2px solid " + (form.settleMode === opt ? mColors[opt] : C.border), borderRadius: 7, background: form.settleMode === opt ? mColors[opt] + "18" : C.mid, color: form.settleMode === opt ? mColors[opt] : C.muted, fontWeight: 700, fontSize: 11, cursor: "pointer" }}>{mLabels[opt]}</button>)}
                 </div>
                 {(form.settleMode === "creditor" || form.settleMode === "debtor") && (<div>
                     <select style={INP} value={form.linkedPartyId || ""} onChange={e => setForm(f => ({ ...f, linkedPartyId: e.target.value, newPartyName: "", newPartyCredit: "" }))}>
@@ -299,6 +339,28 @@
                         <input style={INP} placeholder="Name *" value={form.newPartyName || ""} onChange={e => setForm(f => ({ ...f, newPartyName: e.target.value }))} />
                         <input type="number" style={INP} placeholder="Credit Period (days) *" value={form.newPartyCredit || ""} onChange={e => setForm(f => ({ ...f, newPartyCredit: e.target.value }))} />
                     </div>}
+                    <div style={{ marginTop: 8 }}>
+                        <label style={{ fontSize: 10, color: "#94a3b8", fontWeight: 700, display: "block", marginBottom: 3 }}>
+                            {isIn ? "Immediate Cash Received (₹)" : "Immediate Cash Paid (₹)"}
+                        </label>
+                        <input 
+                            type="number" 
+                            style={INP} 
+                            placeholder="e.g. 0 for full credit" 
+                            value={form.paidAmount || ""} 
+                            onChange={e => setForm(f => ({ ...f, paidAmount: e.target.value }))} 
+                        />
+                        {form.paidAmount && paidVal > 0 && paidVal <= totalVal && (
+                            <div style={{ fontSize: 10, color: C.amber, marginTop: 4 }}>
+                                Remaining <strong>{fc(totalVal - paidVal)}</strong> will be added on credit.
+                            </div>
+                        )}
+                        {form.paidAmount && paidVal > totalVal && (
+                            <div style={{ fontSize: 10, color: C.red, marginTop: 4 }}>
+                                ⚠️ Paid/Received amount cannot exceed total amount of {fc(totalVal)}.
+                            </div>
+                        )}
+                    </div>
                 </div>)}
             </div>);
         }
@@ -660,12 +722,57 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
             const buildTSD = (entries, amtField) => { const m = {}; entries.forEach(e => { const d = new Date(e.date), k = d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0"); m[k] = (m[k] || 0) + Number(e[amtField] || 0); }); return Object.entries(m).sort((a, b) => a[0].localeCompare(b[0])).map(([l, v]) => ({ l, v })); };
 
             const resolveSettle = (frm, amount, date, description, entryId, direction) => {
-                const { settleMode, linkedPartyId, newPartyName, newPartyCredit } = frm;
+                const { settleMode, linkedPartyId, newPartyName, newPartyCredit, paidAmount } = frm;
                 let partyId = null, partyName = "", createdCreditorId = null, createdDebtorId = null;
                 const cashEffects = [];
-                if (settleMode === "cash") { partyName = "Cash"; cashEffects.push({ id: gid(), dir: direction, payType: direction === "in" ? "Other Income Receipt" : "Expense Payment", description, amount, date, sourceId: entryId, linkedId: null }); }
-                else if (settleMode === "creditor") { if (linkedPartyId === "__new__") { createdCreditorId = gid(); partyId = createdCreditorId; partyName = newPartyName || "New Creditor"; } else { partyId = linkedPartyId; partyName = creds.find(c => c.id === linkedPartyId)?.name || ""; } }
-                else if (settleMode === "debtor") { if (linkedPartyId === "__new__") { createdDebtorId = gid(); partyId = createdDebtorId; partyName = newPartyName || "New Debtor"; } else { partyId = linkedPartyId; partyName = debs.find(d => d.id === linkedPartyId)?.name || ""; } }
+                const paidVal = Number(paidAmount || 0);
+
+                if (settleMode === "cash") {
+                    partyName = "Cash";
+                    cashEffects.push({ id: gid(), dir: direction, payType: direction === "in" ? "Other Income Receipt" : "Expense Payment", description, amount, date, sourceId: entryId, linkedId: null });
+                } else if (settleMode === "creditor") {
+                    if (linkedPartyId === "__new__") {
+                        createdCreditorId = gid();
+                        partyId = createdCreditorId;
+                        partyName = newPartyName || "New Creditor";
+                    } else {
+                        partyId = linkedPartyId;
+                        partyName = creds.find(c => c.id === linkedPartyId)?.name || "";
+                    }
+                    if (paidVal > 0) {
+                        cashEffects.push({
+                            id: gid(),
+                            dir: direction,
+                            payType: direction === "in" ? "Debtor Payment" : "Creditor Payment",
+                            description: `Partial payment for ${description}`,
+                            amount: paidVal,
+                            date,
+                            sourceId: entryId,
+                            linkedId: partyId
+                        });
+                    }
+                } else if (settleMode === "debtor") {
+                    if (linkedPartyId === "__new__") {
+                        createdDebtorId = gid();
+                        partyId = createdDebtorId;
+                        partyName = newPartyName || "New Debtor";
+                    } else {
+                        partyId = linkedPartyId;
+                        partyName = debs.find(d => d.id === linkedPartyId)?.name || "";
+                    }
+                    if (paidVal > 0) {
+                        cashEffects.push({
+                            id: gid(),
+                            dir: direction,
+                            payType: direction === "in" ? "Debtor Payment" : "Creditor Payment",
+                            description: `Partial receipt for ${description}`,
+                            amount: paidVal,
+                            date,
+                            sourceId: entryId,
+                            linkedId: partyId
+                        });
+                    }
+                }
                 return { partyId, partyName, createdCreditorId, createdDebtorId, cashEffects };
             };
 
@@ -818,6 +925,13 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
                 }
                 if (!date || !godown || !bottleType || !category || !batchNo || !qty || !ratePerUnit || !form.settleMode) { alert("Fill all fields & select payment mode"); return; }
                 if (qtyVal <= 0 || rateVal <= 0) { alert("Qty and Rate must be > 0"); return; }
+                
+                const paidVal = Number(form.paidAmount || 0);
+                if (paidVal < 0 || (form.settleMode !== "cash" && paidVal > total)) {
+                    alert(`Immediate cash paid must be between 0 and the grand total amount of ₹${total.toFixed(2)}`);
+                    return;
+                }
+
                 const id = gid();
                 const direction = "out";
                 const res = resolveSettle(form, total, date, "Stock In: " + bottleType + " Batch " + batchNo, id, direction);
@@ -826,7 +940,7 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
                 if (isDup && !window.confirm("Possible duplicate entry detected (same amount and party on this date). Save anyway?")) return;
 
                 upd(p => {
-                    let np = { ...p, stockIn: [...p.stockIn, { id, date, godown, bottleType, category, batchNo, qty: qtyVal, ratePerUnit: rateVal, totalAmount: total, gstAmount, gstRate, hsnCode, supplierGstin, supplierStateCode, settleMode: form.settleMode, linkedPartyId: res.partyId, linkedPartyName: res.partyName, createdCreditorId: res.createdCreditorId, isReturn: false }] };
+                    let np = { ...p, stockIn: [...p.stockIn, { id, date, godown, bottleType, category, batchNo, qty: qtyVal, ratePerUnit: rateVal, totalAmount: total, gstAmount, gstRate, hsnCode, supplierGstin, supplierStateCode, settleMode: form.settleMode, linkedPartyId: res.partyId, linkedPartyName: res.partyName, createdCreditorId: res.createdCreditorId, isReturn: false, paidAmount: paidVal }] };
                     if (res.createdCreditorId) np.creditors = [...np.creditors, { id: res.createdCreditorId, name: form.newPartyName, date, amount: 0, creditPeriod: form.newPartyCredit || "", notified: false, checked: false }];
                     res.cashEffects.forEach(e => { np.cashEntries = [...np.cashEntries, { ...e, payType: "Stock Purchase Payment" }]; }); 
                     np = withLog(np, "CREATE", "stockIn", id, `Added Stock In of ${qty} ${bottleType}`);
@@ -884,6 +998,13 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
                 }
                 if (!date || !godown || !bottleType || !category || !qty || !ratePerUnit || !form.settleMode) { alert("Fill all fields & select receipt mode"); return; }
                 if (qtyVal <= 0 || rateVal <= 0) { alert("Qty and Rate must be > 0"); return; }
+                
+                const paidVal = Number(form.paidAmount || 0);
+                if (paidVal < 0 || (form.settleMode !== "cash" && paidVal > total)) {
+                    alert(`Immediate cash received must be between 0 and the grand total amount of ₹${total.toFixed(2)}`);
+                    return;
+                }
+
                 if (form.linkClient === "yes" && !form.clientId) { alert("Please select or create a client"); return; }
                 if (form.linkClient === "yes" && form.clientId === "__new__" && !form.newClientName) { alert("Enter client name"); return; }
                 const id = gid();
@@ -897,7 +1018,7 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
                 if (isDup && !window.confirm("Possible duplicate entry detected (same amount and party on this date). Save anyway?")) return;
 
                 upd(p => {
-                    let np = { ...p, stockOut: [...p.stockOut, { id, date, godown, bottleType, category, qty: qtyVal, ratePerUnit: rateVal, totalAmount: total, gstAmount, gstRate, hsnCode, clientGstin, clientStateCode, settleMode: form.settleMode, linkedPartyId: res.partyId, linkedPartyName: res.partyName, createdDebtorId: res.createdDebtorId, clientId, clientName, billNo: form.billNo, isReturn: false }] };
+                    let np = { ...p, stockOut: [...p.stockOut, { id, date, godown, bottleType, category, qty: qtyVal, ratePerUnit: rateVal, totalAmount: total, gstAmount, gstRate, hsnCode, clientGstin, clientStateCode, settleMode: form.settleMode, linkedPartyId: res.partyId, linkedPartyName: res.partyName, createdDebtorId: res.createdDebtorId, clientId, clientName, billNo: form.billNo, isReturn: false, paidAmount: paidVal }] };
                     if (res.createdDebtorId) { const debtorEntry = { id: res.createdDebtorId, name: form.newPartyName, date, amount: 0, creditPeriod: form.newPartyCredit || "", notified: false, checked: false }; if (clientId) debtorEntry.clientId = clientId; np.debtors = [...np.debtors, debtorEntry]; }
                     if (clientId && form.clientId === "__new__") np.clients = [...(np.clients || []), { id: clientId, name: form.newClientName, type: form.newClientType || "Retailer", date, phone: form.newClientPhone || "", address: form.newClientAddress || "", gstin: form.newClientGstin || "", stateCode: form.newClientStateCode || "" }];
                     res.cashEffects.forEach(e => { np.cashEntries = [...np.cashEntries, { ...e, payType: "Sales Receipt" }]; }); 
@@ -910,6 +1031,12 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
                 
                 if (!invoiceNo || !date || !godown || !settleMode || !items || items.length === 0) {
                     alert("Please fill all required invoice fields.");
+                    return false;
+                }
+
+                const paidVal = Number(inv.paidAmount || 0);
+                if (paidVal < 0 || (settleMode !== "cash" && paidVal > grandTotal)) {
+                    alert(`Immediate cash received must be between 0 and the grand total amount of ₹${grandTotal.toFixed(2)}`);
                     return false;
                 }
 
@@ -962,6 +1089,20 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
                         partyId = createdDebtorId;
                         partyName = clientName;
                     }
+
+                    if (paidVal > 0) {
+                        cashEffects.push({
+                            id: gid(),
+                            dir: "in",
+                            payType: "Sales Receipt",
+                            description: `Partial cash receipt for GST Invoice ${invoiceNo} — ${clientName}`,
+                            amount: paidVal,
+                            date,
+                            sourceId: invoiceId,
+                            linkedId: partyId,
+                            billNo: invoiceNo
+                        });
+                    }
                 }
 
                 // 2. Prepare stockOut entries for each item
@@ -986,7 +1127,8 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
                         clientName,
                         billNo: invoiceNo,
                         gstInvoiceId: invoiceId,
-                        isReturn: false
+                        isReturn: false,
+                        paidAmount: index === 0 ? paidVal : 0
                     };
                 });
 
@@ -1013,7 +1155,8 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
                             cgstTotal,
                             sgstTotal,
                             igstTotal,
-                            grandTotal
+                            grandTotal,
+                            paidAmount: paidVal
                         }],
                         stockOut: [...(p.stockOut || []), ...newStockOutEntries]
                     };
@@ -1054,25 +1197,33 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
                 const gstRateV = hasGst ? Number(form.gstRate || 18) : 0;
                 const gstAmtV = hasGst ? Math.round(baseAmt * gstRateV) / 100 : 0;
                 const totalAmtV = baseAmt + gstAmtV;
+
+                const paidVal = Number(form.paidAmount || 0);
+                if (paidVal < 0 || (form.settleMode !== "cash" && paidVal > totalAmtV)) {
+                    alert(`Immediate cash amount must be between 0 and the grand total amount of ₹${totalAmtV.toFixed(2)}`);
+                    return;
+                }
+
                 const id = gid(), direction = form.side === "dr" ? "out" : "in", res = resolveSettle(form, totalAmtV, form.date, "Trading: " + form.description, id, direction);
                 upd(p => {
                     const descLower = form.description.toLowerCase().trim();
                     const existing = p.tradingEntries.find(e => e.description.toLowerCase().trim() === descLower && e.side === form.side);
                     let np = { ...p };
                     if (existing) {
-                        np.tradingEntries = np.tradingEntries.map(e => e.id === existing.id ? { ...e, amount: e.amount + baseAmt, gstAmount: (e.gstAmount || 0) + gstAmtV, totalAmount: (e.totalAmount || e.amount) + totalAmtV } : e);
+                        np.tradingEntries = np.tradingEntries.map(e => e.id === existing.id ? { ...e, amount: e.amount + baseAmt, gstAmount: (e.gstAmount || 0) + gstAmtV, totalAmount: (e.totalAmount || e.amount) + totalAmtV, paidAmount: (e.paidAmount || 0) + paidVal } : e);
                     } else {
-                        np.tradingEntries = [...np.tradingEntries, { id, date: form.date, side: form.side, description: form.description, amount: baseAmt, gstRate: gstRateV, gstAmount: gstAmtV, totalAmount: totalAmtV, settleMode: form.settleMode, linkedPartyId: res.partyId, linkedPartyName: res.partyName, createdCreditorId: res.createdCreditorId, createdDebtorId: res.createdDebtorId }];
+                        np.tradingEntries = [...np.tradingEntries, { id, date: form.date, side: form.side, description: form.description, amount: baseAmt, gstRate: gstRateV, gstAmount: gstAmtV, totalAmount: totalAmtV, settleMode: form.settleMode, linkedPartyId: res.partyId, linkedPartyName: res.partyName, createdCreditorId: res.createdCreditorId, createdDebtorId: res.createdDebtorId, paidAmount: paidVal }];
                     }
                     if (res.createdCreditorId) np.creditors = [...np.creditors, { id: res.createdCreditorId, name: form.newPartyName, date: form.date, amount: 0, creditPeriod: form.newPartyCredit || "", notified: false, checked: false }];
                     if (res.createdDebtorId) np.debtors = [...np.debtors, { id: res.createdDebtorId, name: form.newPartyName, date: form.date, amount: 0, creditPeriod: form.newPartyCredit || "", notified: false, checked: false }];
                     if (!existing) {
                         res.cashEffects.forEach(e => { np.cashEntries = [...np.cashEntries, e]; });
-                        if (form.settleMode === "creditor" && form.side === "dr") {
-                            np.cashEntries = [...np.cashEntries, { id: gid(), dir: "out", payType: "Expense Payment", description: "[PENDING] " + form.description, amount: totalAmtV, date: form.date, sourceId: id, linkedId: res.partyId, isPending: true }];
+                        const remaining = totalAmtV - paidVal;
+                        if (form.settleMode === "creditor" && form.side === "dr" && remaining > 0) {
+                            np.cashEntries = [...np.cashEntries, { id: gid(), dir: "out", payType: "Expense Payment", description: "[PENDING] " + form.description, amount: remaining, date: form.date, sourceId: id, linkedId: res.partyId, isPending: true }];
                         }
-                        if (form.settleMode === "debtor" && form.side === "cr") {
-                            np.cashEntries = [...np.cashEntries, { id: gid(), dir: "in", payType: "Other Income Receipt", description: "[PENDING] " + form.description, amount: totalAmtV, date: form.date, sourceId: id, linkedId: res.partyId, isPending: true }];
+                        if (form.settleMode === "debtor" && form.side === "cr" && remaining > 0) {
+                            np.cashEntries = [...np.cashEntries, { id: gid(), dir: "in", payType: "Other Income Receipt", description: "[PENDING] " + form.description, amount: remaining, date: form.date, sourceId: id, linkedId: res.partyId, isPending: true }];
                         }
                     }
                     np = withLog(np, existing ? "UPDATE" : "CREATE", "tradingEntries", existing ? existing.id : id, `${existing ? "Aggregated" : "Added"} Trading Entry: ${form.description}`);
@@ -1091,6 +1242,13 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
                 const gstRateV = hasGst ? Number(form.gstRate || 18) : 0;
                 const gstAmtV = hasGst ? Math.round(baseAmt * gstRateV) / 100 : 0;
                 const totalAmtV = baseAmt + gstAmtV;
+
+                const paidVal = Number(form.paidAmount || 0);
+                if (paidVal < 0 || (form.settleMode !== "cash" && paidVal > totalAmtV)) {
+                    alert(`Immediate cash amount must be between 0 and the grand total amount of ₹${totalAmtV.toFixed(2)}`);
+                    return;
+                }
+
                 const id = gid(), isExpense = form.side === "expense", direction = isExpense ? "out" : "in";
                 const res = resolveSettle(form, totalAmtV, form.date, form.description, id, direction);
 
@@ -1099,19 +1257,20 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
                     const existing = p.plEntries.find(e => e.description.toLowerCase().trim() === descLower && e.category === form.category && e.side === form.side);
                     let np = { ...p };
                     if (existing) {
-                        np.plEntries = np.plEntries.map(e => e.id === existing.id ? { ...e, amount: e.amount + baseAmt, gstAmount: (e.gstAmount || 0) + gstAmtV, totalAmount: (e.totalAmount || e.amount) + totalAmtV } : e);
+                        np.plEntries = np.plEntries.map(e => e.id === existing.id ? { ...e, amount: e.amount + baseAmt, gstAmount: (e.gstAmount || 0) + gstAmtV, totalAmount: (e.totalAmount || e.amount) + totalAmtV, paidAmount: (e.paidAmount || 0) + paidVal } : e);
                     } else {
-                        np.plEntries = [...np.plEntries, { id, date: form.date, side: form.side, category: form.category, description: form.description, amount: baseAmt, gstRate: gstRateV, gstAmount: gstAmtV, totalAmount: totalAmtV, settleMode: form.settleMode, linkedPartyId: res.partyId, linkedPartyName: res.partyName, createdCreditorId: res.createdCreditorId, createdDebtorId: res.createdDebtorId }];
+                        np.plEntries = [...np.plEntries, { id, date: form.date, side: form.side, category: form.category, description: form.description, amount: baseAmt, gstRate: gstRateV, gstAmount: gstAmtV, totalAmount: totalAmtV, settleMode: form.settleMode, linkedPartyId: res.partyId, linkedPartyName: res.partyName, createdCreditorId: res.createdCreditorId, createdDebtorId: res.createdDebtorId, paidAmount: paidVal }];
                     }
                     if (res.createdCreditorId) np.creditors = [...np.creditors, { id: res.createdCreditorId, name: form.newPartyName, date: form.date, amount: 0, creditPeriod: form.newPartyCredit || "", notified: false, checked: false }];
                     if (res.createdDebtorId) np.debtors = [...np.debtors, { id: res.createdDebtorId, name: form.newPartyName, date: form.date, amount: 0, creditPeriod: form.newPartyCredit || "", notified: false, checked: false }];
                     if (!existing) {
                         res.cashEffects.forEach(e => { np.cashEntries = [...np.cashEntries, { ...e, payType: isExpense ? "Expense Payment" : "Other Income Receipt" }]; });
-                        if (form.settleMode === "creditor" && isExpense) {
-                            np.cashEntries = [...np.cashEntries, { id: gid(), dir: "out", payType: "Expense Payment", description: "[PENDING] " + form.description, amount: totalAmtV, date: form.date, sourceId: id, linkedId: res.partyId, isPending: true }];
+                        const remaining = totalAmtV - paidVal;
+                        if (form.settleMode === "creditor" && isExpense && remaining > 0) {
+                            np.cashEntries = [...np.cashEntries, { id: gid(), dir: "out", payType: "Expense Payment", description: "[PENDING] " + form.description, amount: remaining, date: form.date, sourceId: id, linkedId: res.partyId, isPending: true }];
                         }
-                        if (form.settleMode === "debtor" && !isExpense) {
-                            np.cashEntries = [...np.cashEntries, { id: gid(), dir: "in", payType: "Other Income Receipt", description: "[PENDING] " + form.description, amount: totalAmtV, date: form.date, sourceId: id, linkedId: res.partyId, isPending: true }];
+                        if (form.settleMode === "debtor" && !isExpense && remaining > 0) {
+                            np.cashEntries = [...np.cashEntries, { id: gid(), dir: "in", payType: "Other Income Receipt", description: "[PENDING] " + form.description, amount: remaining, date: form.date, sourceId: id, linkedId: res.partyId, isPending: true }];
                         }
                     }
                     np = withLog(np, existing ? "UPDATE" : "CREATE", "plEntries", existing ? existing.id : id, `${existing ? "Aggregated" : "Added"} P&L Entry: ${form.description}`);
@@ -1186,6 +1345,12 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
                     return;
                 }
 
+                const paidVal = Number(form.paidAmount || 0);
+                if (paidVal < 0 || (form.settleMode !== "cash" && paidVal > amt)) {
+                    alert(`Immediate cash amount must be between 0 and the total amount of ₹${amt.toFixed(2)}`);
+                    return;
+                }
+
                 const res = resolveSettle(form, amt, form.date || today(), form.description, id, direction);
                 const entry = { 
                     id, 
@@ -1200,6 +1365,7 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
                     linkedPartyName: res.partyName, 
                     createdCreditorId: res.createdCreditorId, 
                     createdDebtorId: res.createdDebtorId,
+                    paidAmount: paidVal,
                     ...(form.subCategory === "Long Term Borrowings" ? {
                         interestRate: Number(form.interestRate || 0),
                         loanTenureMonths: Number(form.loanTenureMonths || 0),
@@ -1559,7 +1725,7 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
                                 <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 3, alignItems: "center" }}><span style={{ color: C.muted }}>Opening Stock</span><span style={{ display: "flex", gap: 5, alignItems: "center" }}><span style={{ color: C.red, fontWeight: 600 }}>{fc(openingStockAmt)}</span>{openingStockAmt > 0 && isAdmin && <button style={BTND} onClick={deleteOpeningStock} title="Delete Opening Stock">✕</button>}</span></div>
                                 <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 3 }}><span style={{ color: C.muted }}>Purchases (Gross)</span><span style={{ color: C.red, fontWeight: 600 }}>{fc(grossPurchases)}</span></div>
                                 {purchaseReturnsAmt > 0 && <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 3 }}><span style={{ color: C.amber }}>Less: Purchase Returns</span><span style={{ color: C.green, fontWeight: 600 }}>({fc(purchaseReturnsAmt)})</span></div>}
-                                {te.filter(e => e.side === "dr").map(e => <div key={e.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 11, marginBottom: 3, alignItems: "center" }}><span style={{ color: C.muted }}>{e.description}</span><span style={{ display: "flex", gap: 5 }}>{fc(e.amount)}<button style={BTND} onClick={() => cascadeDelete("tradingEntries", e.id)}>✕</button></span></div>)}
+                                {te.filter(e => e.side === "dr").map(e => <div key={e.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 11, marginBottom: 3, alignItems: "center" }}><span style={{ color: C.muted }}>{e.description}{e.paidAmount > 0 && <span style={{ fontSize: 9, color: C.amber, marginLeft: 4, fontWeight: 700 }}>(Partial Cash: {fc(e.paidAmount)})</span>}</span><span style={{ display: "flex", gap: 5 }}>{fc(e.amount)}<button style={BTND} onClick={() => cascadeDelete("tradingEntries", e.id)}>✕</button></span></div>)}
                                 <div style={{ borderTop: "1px solid #334155", paddingTop: 6, fontWeight: 800, color: C.red, textAlign: "right" }}>Total Dr: {fc(tradingDr)}</div>
                                 {grossProfit >= 0 && <div style={{ color: C.green, fontWeight: 800, textAlign: "right", fontSize: 11, marginTop: 4 }}>Gross Profit c/d: {fc(grossProfit)}</div>}
                             </div>
@@ -1567,7 +1733,7 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
                                 <div style={{ fontWeight: 800, color: C.green, fontSize: 12, marginBottom: 6, borderBottom: "1px solid #334155", paddingBottom: 4 }}>Cr — Revenue</div>
                                 {[["Sales (Gross)", grossSales], ["Closing Stock (FIFO)", fifoClosing]].map(([l, v]) => <div key={l} style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 3 }}><span style={{ color: C.muted }}>{l}</span><span style={{ color: C.green, fontWeight: 600 }}>{fc(v)}</span></div>)}
                                 {salesReturnsAmt > 0 && <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 3 }}><span style={{ color: C.amber }}>Less: Sales Returns</span><span style={{ color: C.red, fontWeight: 600 }}>({fc(salesReturnsAmt)})</span></div>}
-                                {te.filter(e => e.side === "cr").map(e => <div key={e.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 11, marginBottom: 3, alignItems: "center" }}><span style={{ color: C.muted }}>{e.description}</span><span style={{ display: "flex", gap: 5 }}>{fc(e.amount)}<button style={BTND} onClick={() => cascadeDelete("tradingEntries", e.id)}>✕</button></span></div>)}
+                                {te.filter(e => e.side === "cr").map(e => <div key={e.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 11, marginBottom: 3, alignItems: "center" }}><span style={{ color: C.muted }}>{e.description}{e.paidAmount > 0 && <span style={{ fontSize: 9, color: C.amber, marginLeft: 4, fontWeight: 700 }}>(Partial Cash: {fc(e.paidAmount)})</span>}</span><span style={{ display: "flex", gap: 5 }}>{fc(e.amount)}<button style={BTND} onClick={() => cascadeDelete("tradingEntries", e.id)}>✕</button></span></div>)}
                                 <div style={{ borderTop: "1px solid #334155", paddingTop: 6, fontWeight: 800, color: C.green, textAlign: "right" }}>Total Cr: {fc(tradingCr)}</div>
                                 {grossProfit < 0 && <div style={{ color: C.red, fontWeight: 800, textAlign: "right", fontSize: 11, marginTop: 4 }}>Gross Loss c/d: {fabs(grossProfit)}</div>}
                             </div>
@@ -1741,13 +1907,25 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
                                                 <td style={TDS}>{fc(e.ratePerUnit)}</td>
                                                 <td style={{ ...TDS, fontWeight: 800, color: C.green }}>
                                                     {fc(e.totalAmount)}
+                                                    {e.paidAmount > 0 && (
+                                                        <span style={{ display: "block", fontSize: 9, color: C.muted, fontWeight: 500 }}>
+                                                            Paid Cash: {fc(e.paidAmount)}
+                                                        </span>
+                                                    )}
                                                     {!e.isReturn && remQty !== null && remQty !== e.qty && (
                                                         <span style={{ display: "block", fontSize: 10, color: remQty === 0 ? C.muted : C.violet, fontWeight: 500 }}>
                                                             Rem: {fc(remQty * e.ratePerUnit)}
                                                         </span>
                                                     )}
                                                 </td>
-                                                <td style={TDS}><Badge label={e.settleMode === "cash" ? "Cash" : e.settleMode === "creditor" ? "Creditor" : "Journal"} color={e.settleMode === "cash" ? C.green : C.amber} /></td>
+                                                <td style={TDS}>
+                                                    <Badge label={e.settleMode === "cash" ? "Cash" : e.settleMode === "creditor" ? "Creditor" : "Journal"} color={e.settleMode === "cash" ? C.green : C.amber} />
+                                                    {e.paidAmount > 0 && e.settleMode === "creditor" && (
+                                                        <span style={{ display: "block", fontSize: 9, color: C.amber, marginTop: 2, fontWeight: 700 }}>
+                                                            Partial Cash
+                                                        </span>
+                                                    )}
+                                                </td>
                                                 <td style={TDS}>{e.linkedPartyName || "—"}</td>
                                                 <td style={TDS}><button style={BTND} onClick={() => cascadeDelete("stockIn", e.id)}>Del</button></td>
                                             </tr>;
@@ -1790,7 +1968,7 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
                                             (filterGodown === '' || i.godown === filterGodown) &&
                                             (filterBottleType === '' || i.bottleType === filterBottleType) &&
                                             (filterReturn === null || i.isReturn === filterReturn)
-                                        )).map(e => { const cName = e.clientName || (e.clientId ? (clients.find(c => c.id === e.clientId) || {}).name : ""); return <tr key={e.id}><td style={TDS}>{e.date}</td><td style={TDS}><Badge label={e.isReturn ? "Return" : "Normal"} color={e.isReturn ? C.amber : C.teal} /></td><td style={TDS}><Badge label={e.godown} color="#7c3aed" /></td><td style={TDS}><Badge label={e.bottleType} color="#6366f1" /></td><td style={TDS}><Badge label={e.category} color={e.category === "normal" ? "#0ea5e9" : C.amber} /></td><td style={{ ...TDS, fontWeight: 700 }}>{e.qty}</td><td style={TDS}>{fc(e.ratePerUnit)}</td><td style={{ ...TDS, fontWeight: 800, color: C.red }}>{fc(e.totalAmount)}</td><td style={TDS}><Badge label={e.settleMode === "cash" ? "Cash" : e.settleMode === "debtor" ? "Debtor" : "Journal"} color={e.settleMode === "cash" ? C.green : C.violet} /></td><td style={TDS}>{e.linkedPartyName || "—"}</td><td style={TDS}>{cName ? <span style={{ color: C.teal, cursor: "pointer", fontWeight: 600 }} onClick={() => { setSelectedClient(e.clientId); setTab("Clients"); }}>{cName}</span> : "—"}</td><td style={TDS}><button style={BTND} onClick={() => cascadeDelete("stockOut", e.id)}>Del</button></td></tr>; })
+                                        )).map(e => { const cName = e.clientName || (e.clientId ? (clients.find(c => c.id === e.clientId) || {}).name : ""); return <tr key={e.id}><td style={TDS}>{e.date}</td><td style={TDS}><Badge label={e.isReturn ? "Return" : "Normal"} color={e.isReturn ? C.amber : C.teal} /></td><td style={TDS}><Badge label={e.godown} color="#7c3aed" /></td><td style={TDS}><Badge label={e.bottleType} color="#6366f1" /></td><td style={TDS}><Badge label={e.category} color={e.category === "normal" ? "#0ea5e9" : C.amber} /></td><td style={{ ...TDS, fontWeight: 700 }}>{e.qty}</td><td style={TDS}>{fc(e.ratePerUnit)}</td><td style={{ ...TDS, fontWeight: 800, color: C.red }}>{fc(e.totalAmount)}{e.paidAmount > 0 && <span style={{ display: "block", fontSize: 9, color: C.muted, fontWeight: 500 }}>Paid Cash: {fc(e.paidAmount)}</span>}</td><td style={TDS}><Badge label={e.settleMode === "cash" ? "Cash" : e.settleMode === "debtor" ? "Debtor" : "Journal"} color={e.settleMode === "cash" ? C.green : C.violet} />{e.paidAmount > 0 && e.settleMode === "debtor" && <span style={{ display: "block", fontSize: 9, color: C.violet, marginTop: 2, fontWeight: 700 }}>Partial Cash</span>}</td><td style={TDS}>{e.linkedPartyName || "—"}</td><td style={TDS}>{cName ? <span style={{ color: C.teal, cursor: "pointer", fontWeight: 600 }} onClick={() => { setSelectedClient(e.clientId); setTab("Clients"); }}>{cName}</span> : "—"}</td><td style={TDS}><button style={BTND} onClick={() => cascadeDelete("stockOut", e.id)}>Del</button></td></tr>; })
                                     }
                                 </tbody>
                             </table>
@@ -2372,7 +2550,7 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
                                         <div style={{ fontWeight: 800, fontSize: 13, color: C.amber, margin: "14px 0 12px 0", borderBottom: "1px solid #334155", paddingBottom: 6 }}>🏛️ Payment Method</div>
                                         <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
                                             {["debtor", "cash"].map(mode => (
-                                                <button key={mode} onClick={() => setGstInvForm(prev => ({ ...prev, settleMode: mode }))} style={{ flex: 1, padding: "8px 4px", border: "2px solid " + (gstInvForm.settleMode === mode ? (mode === "cash" ? C.green : C.violet) : C.border), borderRadius: 7, background: gstInvForm.settleMode === mode ? (mode === "cash" ? C.green + "18" : C.violet + "18") : C.mid, color: gstInvForm.settleMode === mode ? (mode === "cash" ? C.green : C.violet) : C.muted, fontWeight: 700, fontSize: 11, cursor: "pointer" }}>
+                                                <button key={mode} onClick={() => setGstInvForm(prev => ({ ...prev, settleMode: mode, paidAmount: "" }))} style={{ flex: 1, padding: "8px 4px", border: "2px solid " + (gstInvForm.settleMode === mode ? (mode === "cash" ? C.green : C.violet) : C.border), borderRadius: 7, background: gstInvForm.settleMode === mode ? (mode === "cash" ? C.green + "18" : C.violet + "18") : C.mid, color: gstInvForm.settleMode === mode ? (mode === "cash" ? C.green : C.violet) : C.muted, fontWeight: 700, fontSize: 11, cursor: "pointer" }}>
                                                     {mode === "cash" ? "💵 Cash Receipt" : "📋 Debtor Book"}
                                                 </button>
                                             ))}
@@ -2381,6 +2559,18 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
                                             <div>
                                                 <label style={{ fontSize: 11, color: "#94a3b8", fontWeight: 700, display: "block", marginBottom: 3 }}>Credit Period (days) *</label>
                                                 <input type="number" style={INP} placeholder="Credit Period (days)" value={gstInvForm.clientCreditPeriod || "30"} onChange={e => setGstInvForm(prev => ({ ...prev, clientCreditPeriod: e.target.value }))} />
+                                                <label style={{ fontSize: 11, color: "#94a3b8", fontWeight: 700, display: "block", marginBottom: 3, marginTop: 8 }}>Immediate Cash Received (₹)</label>
+                                                <input type="number" style={INP} placeholder="e.g. 0 for full credit" value={gstInvForm.paidAmount || ""} onChange={e => setGstInvForm(prev => ({ ...prev, paidAmount: e.target.value }))} />
+                                                {gstInvForm.paidAmount && Number(gstInvForm.paidAmount) > 0 && Number(gstInvForm.paidAmount) <= gstInvForm.grandTotal && (
+                                                    <div style={{ fontSize: 10, color: C.amber, marginTop: 4 }}>
+                                                        Remaining <strong>{fc(gstInvForm.grandTotal - Number(gstInvForm.paidAmount))}</strong> will be added on credit.
+                                                    </div>
+                                                )}
+                                                {gstInvForm.paidAmount && Number(gstInvForm.paidAmount) > gstInvForm.grandTotal && (
+                                                    <div style={{ fontSize: 10, color: C.red, marginTop: 4 }}>
+                                                        ⚠️ Received amount cannot exceed grand total of {fc(gstInvForm.grandTotal)}.
+                                                    </div>
+                                                )}
                                             </div>
                                         )}
                                     </div>
@@ -2539,9 +2729,21 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
                                                     <td style={{ ...TDS, color: C.amber }}>{inv.cgstTotal > 0 ? fc(inv.cgstTotal) : "—"}</td>
                                                     <td style={{ ...TDS, color: C.amber }}>{inv.sgstTotal > 0 ? fc(inv.sgstTotal) : "—"}</td>
                                                     <td style={{ ...TDS, color: C.red }}>{inv.igstTotal > 0 ? fc(inv.igstTotal) : "—"}</td>
-                                                    <td style={{ ...TDS, fontWeight: 800, color: C.green }}>{fc(inv.grandTotal)}</td>
+                                                    <td style={{ ...TDS, fontWeight: 800, color: C.green }}>
+                                                        {fc(inv.grandTotal)}
+                                                        {inv.paidAmount > 0 && inv.settleMode === "debtor" && (
+                                                            <span style={{ display: "block", fontSize: 9, color: C.muted, fontWeight: 500 }}>
+                                                                Paid Cash: {fc(inv.paidAmount)}
+                                                            </span>
+                                                        )}
+                                                    </td>
                                                     <td style={TDS}>
                                                         <Badge label={inv.settleMode === "cash" ? "Cash" : "Debtor"} color={inv.settleMode === "cash" ? C.green : C.violet} />
+                                                        {inv.paidAmount > 0 && inv.settleMode === "debtor" && (
+                                                            <span style={{ display: "block", fontSize: 9, color: C.violet, marginTop: 2, fontWeight: 700 }}>
+                                                                Partial Cash
+                                                            </span>
+                                                        )}
                                                     </td>
                                                     <td style={TDS}>
                                                         <div style={{ display: "flex", gap: 6 }}>
@@ -2788,7 +2990,7 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
                                         }
                                     </div>
                                 )}
-                                {PL_CATS.expenses.map(cat => { const ents = ple.filter(e => e.side === "expense" && e.category === cat); return ents.length ? <div key={cat} style={{ marginBottom: 6 }}><div style={{ color: "#94a3b8", fontSize: 10, fontWeight: 700, marginBottom: 2 }}>{cat}</div>{ents.map(e => <div key={e.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 11, paddingLeft: 8, alignItems: "center", marginBottom: 2 }}><span>{e.description}</span><span style={{ display: "flex", gap: 5 }}>{fc(e.amount)}<button style={BTND} onClick={() => cascadeDelete("plEntries", e.id)}>✕</button></span></div>)}</div> : null; })}
+                                {PL_CATS.expenses.map(cat => { const ents = ple.filter(e => e.side === "expense" && e.category === cat); return ents.length ? <div key={cat} style={{ marginBottom: 6 }}><div style={{ color: "#94a3b8", fontSize: 10, fontWeight: 700, marginBottom: 2 }}>{cat}</div>{ents.map(e => <div key={e.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 11, paddingLeft: 8, alignItems: "center", marginBottom: 2 }}><span>{e.description}{e.paidAmount > 0 && <span style={{ fontSize: 9, color: C.amber, marginLeft: 4, fontWeight: 700 }}>(Partial Cash: {fc(e.paidAmount)})</span>}</span><span style={{ display: "flex", gap: 5 }}>{fc(e.amount)}<button style={BTND} onClick={() => cascadeDelete("plEntries", e.id)}>✕</button></span></div>)}</div> : null; })}
                                 {plExpense === 0 && <div style={{ color: C.muted, fontSize: 11, textAlign: "center", padding: "8px 0" }}>No expenses recorded</div>}
                                 <div style={{ borderTop: "2px solid #334155", paddingTop: 6, fontWeight: 900, color: C.red, textAlign: "right" }}>Total Dr: {fc(plExpense)}</div>
                                 {netPL >= 0 && <div style={{ color: C.green, fontWeight: 800, textAlign: "right", marginTop: 4, fontSize: 11 }}>Net Profit c/d: {fc(netPL)}</div>}
@@ -2796,7 +2998,7 @@ const [invFilter, setInvFilter] = useState({ bt: "All", cat: "All", godown: "All
                             <div style={{ background: C.mid, borderRadius: 12, padding: 16 }}>
                                 <div style={{ fontWeight: 800, color: C.green, fontSize: 12, marginBottom: 6, borderBottom: "1px solid #334155", paddingBottom: 4 }}>Cr — Income</div>
                                 {grossProfit >= 0 && <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: C.green, marginBottom: 4 }}><span>Gross Profit b/d</span><span style={{ fontWeight: 700 }}>{fc(grossProfit)}</span></div>}
-                                {PL_CATS.income.map(cat => { const ents = ple.filter(e => e.side === "income" && e.category === cat); return ents.length ? <div key={cat} style={{ marginBottom: 6 }}><div style={{ color: "#94a3b8", fontSize: 10, fontWeight: 700, marginBottom: 2 }}>{cat}</div>{ents.map(e => <div key={e.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 11, paddingLeft: 8, alignItems: "center", marginBottom: 2 }}><span>{e.description}</span><span style={{ display: "flex", gap: 5 }}>{fc(e.amount)}<button style={BTND} onClick={() => cascadeDelete("plEntries", e.id)}>✕</button></span></div>)}</div> : null; })}
+                                {PL_CATS.income.map(cat => { const ents = ple.filter(e => e.side === "income" && e.category === cat); return ents.length ? <div key={cat} style={{ marginBottom: 6 }}><div style={{ color: "#94a3b8", fontSize: 10, fontWeight: 700, marginBottom: 2 }}>{cat}</div>{ents.map(e => <div key={e.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 11, paddingLeft: 8, alignItems: "center", marginBottom: 2 }}><span>{e.description}{e.paidAmount > 0 && <span style={{ fontSize: 9, color: C.amber, marginLeft: 4, fontWeight: 700 }}>(Partial Cash: {fc(e.paidAmount)})</span>}</span><span style={{ display: "flex", gap: 5 }}>{fc(e.amount)}<button style={BTND} onClick={() => cascadeDelete("plEntries", e.id)}>✕</button></span></div>)}</div> : null; })}
                                 {plIncome === 0 && <div style={{ color: C.muted, fontSize: 11, textAlign: "center", padding: "8px 0" }}>No income recorded</div>}
                                 <div style={{ borderTop: "2px solid #334155", paddingTop: 6, fontWeight: 900, color: C.green, textAlign: "right" }}>Total Cr: {fc(plIncome)}</div>
                                 {netPL < 0 && <div style={{ color: C.red, fontWeight: 800, textAlign: "right", marginTop: 4, fontSize: 11 }}>Net Loss c/d: {fabs(netPL)}</div>}
