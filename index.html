@@ -361,33 +361,23 @@
                 <div style={{ display: "flex", gap: 6, marginBottom: 8, flexWrap: "wrap" }}>
                     {options.map(opt => <button key={opt} onClick={() => setForm(f => ({ ...f, settleMode: opt, linkedPartyId: "", newPartyName: "", newPartyCredit: "", paidAmount: "", linkedRawMaterialId: "" }))} style={{ flex: 1, minWidth: 70, padding: "7px 4px", border: "2px solid " + (form.settleMode === opt ? mColors[opt] : C.border), borderRadius: 7, background: form.settleMode === opt ? mColors[opt] + "18" : C.mid, color: form.settleMode === opt ? mColors[opt] : C.muted, fontWeight: 700, fontSize: 11, cursor: "pointer" }}>{mLabels[opt]}</button>)}
                 </div>
-                {form.settleMode === "rawMaterial" && (<div>
-                    <label style={{ fontSize: 10, color: "#94a3b8", fontWeight: 700, display: "block", marginBottom: 3 }}>Select Raw Material Pool (Base-Based)</label>
-                    {availableRawMats.length === 0 ? (
-                        <div style={{ fontSize: 11, color: C.red, padding: "8px 0" }}>No raw material payments with available balance. Add one from the Raw Materials tab first.</div>
-                    ) : (
-                        <select style={INP} value={form.linkedRawMaterialId || ""} onChange={e => setForm(f => ({ ...f, linkedRawMaterialId: e.target.value }))}>
-                            <option value="">Select raw material pool…</option>
-                            {availableRawMats.map(r => {
-                                const poolBase = Number(r.amount);
-                                const rem = poolBase - (r.usedForStockIn || 0);
-                                return <option key={r.id} value={r.id}>{r.rawMatType} — {r.description} (Available: ₹{rem.toFixed(2)} excl. GST)</option>;
-                            })}
-                        </select>
-                    )}
-                    {form.linkedRawMaterialId && (() => {
-                        const sel = availableRawMats.find(r => r.id === form.linkedRawMaterialId);
-                        if (!sel) return null;
-                        const poolBase = Number(sel.amount);
-                        const rem = poolBase - (sel.usedForStockIn || 0);
-                        return (<div style={{ fontSize: 10, color: baseVal > rem ? C.red : C.teal, marginTop: 4 }}>
-                            Pool balance (excl. GST): <strong>{fc(rem)}</strong>{baseVal > 0 && (baseVal <= rem
-                                ? <span> → After deduction: <strong>{fc(rem - baseVal)}</strong></span>
-                                : <span> — ⚠️ Insufficient! Need {fc(baseVal)} but only {fc(rem)} available.</span>
-                            )}
-                        </div>);
-                    })()}
-                </div>)}
+                {form.settleMode === "rawMaterial" && (() => {
+                    const totalRmAvail = availableRawMats.reduce((sum, r) => sum + (Number(r.amount) - (r.usedForStockIn || 0)), 0);
+                    return (<div style={{ marginTop: 4 }}>
+                        <div style={{ fontSize: 11, fontWeight: 700, color: baseVal > totalRmAvail ? C.red : C.teal }}>
+                            Total Available Raw Material Pool (excl. GST): <strong>{fc(totalRmAvail)}</strong>
+                        </div>
+                        {baseVal > 0 && (baseVal <= totalRmAvail ? (
+                            <div style={{ fontSize: 10, color: C.teal, marginTop: 2 }}>
+                                Deduction: <strong>{fc(baseVal)}</strong> | Remaining after deduction: <strong>{fc(totalRmAvail - baseVal)}</strong>
+                            </div>
+                        ) : (
+                            <div style={{ fontSize: 10, color: C.red, marginTop: 2 }}>
+                                ⚠️ Insufficient balance! Need {fc(baseVal)} but only {fc(totalRmAvail)} available.
+                            </div>
+                        ))}
+                    </div>);
+                })()}
                 {(form.settleMode === "creditor" || form.settleMode === "debtor") && (<div>
                     <select style={INP} value={form.linkedPartyId || ""} onChange={e => setForm(f => ({ ...f, linkedPartyId: e.target.value, newPartyName: "", newPartyCredit: "" }))}>
                         <option value="">{form.settleMode === "creditor" ? "Select Creditor" : "Select Debtor"}</option>
@@ -929,12 +919,23 @@
                     if (key === "creditors") np.cashEntries = (np.cashEntries || []).filter(e => !(e.dir === "out" && e.linkedId === id));
                     if (key === "debtors") np.cashEntries = (np.cashEntries || []).filter(e => !(e.dir === "in" && e.linkedId === id));
                     // Stock In paid from raw material: restore pool balance (total-based tracking)
-                    if (key === "stockIn" && entry.settleMode === "rawMaterial" && entry.linkedRawMaterialId) {
-                        np.rawMaterialPayments = (np.rawMaterialPayments || []).map(r =>
-                            r.id === entry.linkedRawMaterialId
-                                ? { ...r, usedForStockIn: Math.max(0, (r.usedForStockIn || 0) - Number(entry.totalAmount)) }
-                                : r
-                        );
+                    if (key === "stockIn" && entry.settleMode === "rawMaterial") {
+                        if (entry.linkedRawMaterials && entry.linkedRawMaterials.length > 0) {
+                            np.rawMaterialPayments = (np.rawMaterialPayments || []).map(r => {
+                                const deduction = entry.linkedRawMaterials.find(d => d.id === r.id);
+                                return deduction
+                                    ? { ...r, usedForStockIn: Math.max(0, (r.usedForStockIn || 0) - Number(deduction.amount)) }
+                                    : r;
+                            });
+                        } else if (entry.linkedRawMaterialId) {
+                            // Fallback for older entries using base cost (qty * ratePerUnit) instead of totalAmount
+                            const baseCost = Number(entry.qty || 0) * Number(entry.ratePerUnit || 0);
+                            np.rawMaterialPayments = (np.rawMaterialPayments || []).map(r =>
+                                r.id === entry.linkedRawMaterialId
+                                    ? { ...r, usedForStockIn: Math.max(0, (r.usedForStockIn || 0) - baseCost) }
+                                    : r
+                            );
+                        }
                     }
                     if (key === "depreciationAssets" && entry.bsAssetId) {
                         const na = { ...np.balanceSheet.assets };
@@ -1073,22 +1074,63 @@
 
                 // Handle Raw Material Pool settlement
                 if (form.settleMode === "rawMaterial") {
-                    if (!form.linkedRawMaterialId) { alert("Please select a raw material pool"); return; }
-                    const rawMat = (state.rawMaterialPayments || []).find(r => r.id === form.linkedRawMaterialId);
-                    if (!rawMat) { alert("Selected raw material pool not found"); return; }
-                    // Use base amount (excl. GST) for pool tracking to avoid double-counting GST
-                    const poolBase = Number(rawMat.amount);
                     const taxable = qtyVal * rateVal; // base cost excl. GST
-                    const remaining = poolBase - (rawMat.usedForStockIn || 0);
-                    if (taxable > remaining) { alert(`Insufficient raw material pool balance. Available: ₹${remaining.toFixed(2)} (excl. GST), Required: ₹${taxable.toFixed(2)}`); return; }
+                    const availableRawMats = (state.rawMaterialPayments || []).filter(r => (Number(r.amount) - (r.usedForStockIn || 0)) > 0.001);
+                    const totalRmAvail = availableRawMats.reduce((sum, r) => sum + (Number(r.amount) - (r.usedForStockIn || 0)), 0);
+                    if (taxable > totalRmAvail + 0.001) {
+                        alert(`Insufficient raw material pool balance. Available: ₹${totalRmAvail.toFixed(2)} (excl. GST), Required: ₹${taxable.toFixed(2)}`);
+                        return;
+                    }
+
+                    // Deduct from raw material payments using FIFO
+                    let needed = taxable;
+                    const deductions = [];
+                    const updatedRawMaterialPayments = (state.rawMaterialPayments || []).map(r => {
+                        const avail = Number(r.amount) - (r.usedForStockIn || 0);
+                        if (needed <= 0 || avail <= 0) return r;
+                        const take = Math.min(needed, avail);
+                        needed -= take;
+                        deductions.push({ id: r.id, amount: take, rawMatType: r.rawMatType });
+                        return {
+                            ...r,
+                            usedForStockIn: (r.usedForStockIn || 0) + take
+                        };
+                    });
+
                     const id = gid();
                     upd(p => {
                         let np = {
                             ...p,
-                            stockIn: [...p.stockIn, { id, date, godown, bottleType, category, batchNo, qty: qtyVal, ratePerUnit: rateVal, totalAmount: total, gstAmount, gstRate, hsnCode, supplierGstin, supplierStateCode, settleMode: "rawMaterial", linkedPartyId: null, linkedPartyName: rawMat.rawMatType + " Pool", linkedRawMaterialId: rawMat.id, isReturn: false, paidAmount: 0, gstType, cgstAmount, sgstAmount, igstAmount }],
-                            rawMaterialPayments: (p.rawMaterialPayments || []).map(r => r.id === rawMat.id ? { ...r, usedForStockIn: (r.usedForStockIn || 0) + taxable } : r)
+                            stockIn: [...p.stockIn, { 
+                                id, 
+                                date, 
+                                godown, 
+                                bottleType, 
+                                category, 
+                                batchNo, 
+                                qty: qtyVal, 
+                                ratePerUnit: rateVal, 
+                                totalAmount: total, 
+                                gstAmount, 
+                                gstRate, 
+                                hsnCode, 
+                                supplierGstin, 
+                                supplierStateCode, 
+                                settleMode: "rawMaterial", 
+                                linkedPartyId: null, 
+                                linkedPartyName: "Raw Material Pool", 
+                                linkedRawMaterials: deductions,
+                                linkedRawMaterialId: deductions[0] ? deductions[0].id : null,
+                                isReturn: false, 
+                                paidAmount: 0, 
+                                gstType, 
+                                cgstAmount, 
+                                sgstAmount, 
+                                igstAmount 
+                            }],
+                            rawMaterialPayments: updatedRawMaterialPayments
                         };
-                        np = withLog(np, "CREATE", "stockIn", id, `Added Stock In of ${qty} ${bottleType} (paid from Raw Material: ${rawMat.rawMatType})`);
+                        np = withLog(np, "CREATE", "stockIn", id, `Added Stock In of ${qty} ${bottleType} (paid from Raw Material Pool: ${fc(taxable)})`);
                         return np;
                     }); closeM();
                     return;
@@ -2252,6 +2294,11 @@
                                                     {e.paidAmount > 0 && e.settleMode === "creditor" && (
                                                         <span style={{ display: "block", fontSize: 9, color: C.amber, marginTop: 2, fontWeight: 700 }}>
                                                             Partial Cash
+                                                        </span>
+                                                    )}
+                                                    {e.settleMode === "rawMaterial" && (
+                                                        <span style={{ display: "block", fontSize: 9, color: C.teal, marginTop: 2, fontWeight: 700 }}>
+                                                            Total: {fc(e.qty * e.ratePerUnit)}
                                                         </span>
                                                     )}
                                                 </td>
@@ -4524,7 +4571,7 @@
                                                 <span style={{ color: "#94a3b8" }}>Used in prev. Stock In:</span><span style={{ color: C.amber, fontWeight: 700 }}>{fc(totalRmUsed)}</span>
                                                 <span style={{ color: "#94a3b8" }}>Available Balance:</span><span style={{ color: totalRmAvail > 0 ? C.teal : C.muted, fontWeight: 700 }}>{fc(Math.max(0, totalRmAvail))}</span>
                                             </div>
-                                            <div style={{ fontSize: 9, color: "#64748b", marginTop: 4 }}>ℹ️ Raw Material Pool cannot be used as direct Stock In payment. Please record Stock In via Cash / Creditor and track RM separately.</div>
+                                            <div style={{ fontSize: 9, color: "#64748b", marginTop: 4 }}>ℹ️ Select 'Raw Material' under Settle Mode below to pay using the available raw material pool balance (base cost excl. GST).</div>
                                         </div>
                                     );
                                 })()}
