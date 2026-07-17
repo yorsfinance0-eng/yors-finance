@@ -1198,11 +1198,16 @@
                     closeM();
                     return;
                 }
+                if (!bottleType || !category || !godown) { alert("Select Godown, Bottle Type and Category first."); return; }
                 const fifo = computeFIFO(si, so);
                 const inv = fifo[bottleType + "_" + category] || { batches: [] };
                 const availableStock = inv.batches.filter(b => b.godown === godown).reduce((a, b) => a + b.remQty, 0);
                 if (availableStock <= 0) {
-                    alert("No stock available in selected godown – operation not allowed.");
+                    alert(`⛔ No stock available in ${godown} godown for ${bottleType} (${category}).\nPlease check your inventory before adding a Stock Out entry.`);
+                    return;
+                }
+                if (availableStock < qtyVal) {
+                    alert(`⛔ Insufficient stock in ${godown} godown for ${bottleType} (${category}).\nAvailable: ${availableStock} units\nRequested: ${qtyVal} units\n\nPlease reduce the quantity or select a different godown.`);
                     return;
                 }
                 if (!date || !godown || !bottleType || !category || !qty || !ratePerUnit || !form.settleMode) { alert("Fill all fields & select receipt mode"); return; }
@@ -1226,8 +1231,63 @@
                 const isDup = (state.stockOut || []).some(e => e.date === date && e.totalAmount === total && e.linkedPartyId === res.partyId && !e.isReturn);
                 if (isDup && !window.confirm("Possible duplicate entry detected (same amount and party on this date). Save anyway?")) return;
 
+                // Auto-generate GST Invoice when GST is enabled
+                const autoInvoiceId = hasGst ? gid() : null;
+                const autoInvoiceNo = hasGst
+                    ? "GST-" + new Date().getFullYear() + "-" + String((state.gstInvoices || []).length + 1).padStart(3, "0")
+                    : null;
+
                 upd(p => {
-                    let np = { ...p, stockOut: [...p.stockOut, { id, date, godown, bottleType, category, qty: qtyVal, ratePerUnit: rateVal, totalAmount: total, gstAmount, gstRate, hsnCode, clientGstin, clientStateCode, settleMode: form.settleMode, linkedPartyId: res.partyId, linkedPartyName: res.partyName, createdDebtorId: res.createdDebtorId, clientId, clientName, billNo: form.billNo, isReturn: false, paidAmount: paidVal, gstType, cgstAmount, sgstAmount, igstAmount }] };
+                    // Build stock out entry — link to auto-generated invoice if GST enabled
+                    const soEntry = { id, date, godown, bottleType, category, qty: qtyVal, ratePerUnit: rateVal, totalAmount: total, gstAmount, gstRate, hsnCode, clientGstin, clientStateCode, settleMode: form.settleMode, linkedPartyId: res.partyId, linkedPartyName: res.partyName, createdDebtorId: res.createdDebtorId, clientId, clientName, billNo: hasGst ? autoInvoiceNo : (form.billNo || ""), isReturn: false, paidAmount: paidVal, gstType, cgstAmount, sgstAmount, igstAmount, ...(hasGst ? { gstInvoiceId: autoInvoiceId } : {}) };
+                    let np = { ...p, stockOut: [...p.stockOut, soEntry] };
+
+                    // Auto-create GST Invoice record
+                    if (hasGst && autoInvoiceId) {
+                        const invoiceItem = {
+                            bottleType,
+                            category,
+                            hsnCode,
+                            qty: qtyVal,
+                            ratePerUnit: rateVal,
+                            taxableValue: taxable,
+                            gstRate,
+                            cgstRate: gstType === "cgst_sgst" ? gstRate / 2 : 0,
+                            cgstAmount,
+                            sgstRate: gstType === "cgst_sgst" ? gstRate / 2 : 0,
+                            sgstAmount,
+                            igstRate: gstType === "igst" ? gstRate : 0,
+                            igstAmount,
+                            totalAmount: total
+                        };
+                        const gstInvoiceRecord = {
+                            id: autoInvoiceId,
+                            invoiceNo: autoInvoiceNo,
+                            date,
+                            clientId: clientId || null,
+                            clientName: clientName || res.partyName || "",
+                            clientGstin: clientGstin || "",
+                            clientStateCode: clientStateCode || "",
+                            clientAddress: (state.clients || []).find(c => c.id === clientId)?.address || "",
+                            clientPhone: (state.clients || []).find(c => c.id === clientId)?.phone || "",
+                            godown,
+                            settleMode: form.settleMode,
+                            linkedPartyId: res.partyId,
+                            createdDebtorId: res.createdDebtorId || null,
+                            items: [invoiceItem],
+                            taxableTotal: taxable,
+                            cgstTotal: cgstAmount,
+                            sgstTotal: sgstAmount,
+                            igstTotal: igstAmount,
+                            grandTotal: total,
+                            paidAmount: paidVal,
+                            autoCreatedFromStockOut: true,
+                            stockOutId: id
+                        };
+                        np.gstInvoices = [...(np.gstInvoices || []), gstInvoiceRecord];
+                        np = withLog(np, "CREATE", "gstInvoices", autoInvoiceId, `Auto-created GST Invoice ${autoInvoiceNo} from Stock Out`);
+                    }
+
                     if (res.createdDebtorId) { const debtorEntry = { id: res.createdDebtorId, name: form.newPartyName, date, amount: 0, creditPeriod: form.newPartyCredit || "", notified: false, checked: false }; if (clientId) debtorEntry.clientId = clientId; np.debtors = [...np.debtors, debtorEntry]; }
                     if (clientId && form.clientId === "__new__") np.clients = [...(np.clients || []), { id: clientId, name: form.newClientName, type: form.newClientType || "Retailer", date, phone: form.newClientPhone || "", address: form.newClientAddress || "", gstin: form.newClientGstin || "", stateCode: form.newClientStateCode || "" }];
                     res.cashEffects.forEach(e => { np.cashEntries = [...np.cashEntries, { ...e, payType: "Sales Receipt" }]; });
@@ -3924,9 +3984,43 @@
                         <div style={{ background: "#0a1628", borderRadius: 10, padding: "10px 14px", marginBottom: 12, border: "1px solid #334155", fontSize: 10, color: "#64748b" }}>
                             <strong style={{ color: "#94a3b8" }}>ℹ️ Auto-populated items (read-only):</strong> Cash Balance, Closing Stock (FIFO), Trade Debtors, Accum. Depreciation, Trade Creditors, Net Profit/Loss — these are derived from other modules and <em>cannot be entered here</em>. Use <strong style={{ color: "#94a3b8" }}>+ Manual Entry</strong> for items like Fixed Assets, Share Capital, Long-term Loans, etc. Balance Sheet entries do <em>not</em> affect P&amp;L.
                         </div>
-                        {Math.abs(bsDiff) > 0.01
-                            ? <div style={{ background: "#450a0a", borderRadius: 10, padding: 12, marginBottom: 12, border: "1.5px solid #ef4444" }}><div style={{ fontWeight: 800, color: C.red, fontSize: 12 }}>⚠️ Balance Sheet Mismatch — Difference: {fabs(bsDiff)}</div><div style={{ fontSize: 10, color: "#fca5a5", marginTop: 4, lineHeight: "1.4" }}>Assets do not equal Liabilities + Equity. Common causes: <br />1. <strong>Unbalanced "Journal Only" Entries</strong>: If you created manual entries in Trading/P&L/BS using "📝 Journal Only" without entering the corresponding opposite entry manually.<br />2. <strong>Historical Raw Material Pool Usage</strong>: Past Stock In payments settled via Raw Material Pool double-counted GST ITC.<br />3. <strong>Missing Capital</strong>: Add Share Capital under Liabilities to balance opening cash/assets.</div></div>
-                            : <div style={{ background: "#052e16", borderRadius: 8, padding: "8px 14px", marginBottom: 10, color: "#86efac", fontWeight: 700, textAlign: "center", fontSize: 12 }}>✅ Balance Sheet BALANCED — Assets = Liabilities + Equity</div>}
+                        {(() => {
+                            // Detect creditors with non-zero opening balance (creates liability without matching asset)
+                            const credsWithOpening = creds.filter(c => Number(c.amount || 0) > 0);
+                            // Detect dangling cash entries — linkedId points to a party that no longer exists
+                            const allPartyIds = new Set([...creds.map(c => c.id), ...debs.map(d => d.id)]);
+                            const danglingCash = cash.filter(e => e.linkedId && !allPartyIds.has(e.linkedId));
+                            return (<>
+                                {Math.abs(bsDiff) > 0.01
+                                    ? <div style={{ background: "#450a0a", borderRadius: 10, padding: 12, marginBottom: 12, border: "1.5px solid #ef4444" }}>
+                                        <div style={{ fontWeight: 800, color: C.red, fontSize: 12 }}>⚠️ Balance Sheet Mismatch — Difference: {fabs(bsDiff)}</div>
+                                        <div style={{ fontSize: 10, color: "#fca5a5", marginTop: 6, lineHeight: "1.6" }}>
+                                            Assets do not equal Liabilities + Equity. Most common causes:<br />
+                                            <strong>1. Missing Opening Capital / Bank Balance</strong>: If a Creditor has a pre-existing opening balance (money owed before you started using this system), or if you had cash/assets at the start, you must add a matching <em>Share Capital</em> or <em>Opening Bank Balance</em> entry under <strong>Liabilities &amp; Equity → Equity</strong> via <strong>+ Manual Entry</strong>. This is the most frequent reason for a mismatch.<br />
+                                            <strong>2. Unbalanced "Journal Only" Entries</strong>: Manual entries in Trading/P&amp;L/BS using "📝 Journal Only" without a matching opposite entry.<br />
+                                            <strong>3. Raw Material Pool</strong>: Past Stock In payments via Raw Material Pool may have double-counted GST ITC.<br />
+                                            <strong>4. Deleted Creditor/Debtor with remaining cash entries</strong>: If you deleted a party after recording cash transactions against them, orphaned cash entries remain.
+                                        </div>
+                                      </div>
+                                    : <div style={{ background: "#052e16", borderRadius: 8, padding: "8px 14px", marginBottom: 10, color: "#86efac", fontWeight: 700, textAlign: "center", fontSize: 12 }}>✅ Balance Sheet BALANCED — Assets = Liabilities + Equity</div>}
+                                {credsWithOpening.length > 0 && (
+                                    <div style={{ background: "#1c1000", border: "1px solid #b45309", borderRadius: 8, padding: "10px 14px", marginBottom: 10, fontSize: 10, color: "#fcd34d", lineHeight: "1.6" }}>
+                                        <strong style={{ color: "#fbbf24" }}>💡 Creditor Opening Balance Advisory</strong><br />
+                                        The following creditor(s) have a non-zero <strong>opening balance</strong> (money owed before this system started):
+                                        {credsWithOpening.map(c => <span key={c.id} style={{ display: "block", paddingLeft: 8, color: "#fde68a" }}>• {c.name}: {fc(Number(c.amount))}</span>)}
+                                        <span style={{ color: "#fed7aa", display: "block", marginTop: 4 }}>These create automatic <em>Liabilities</em> without a matching <em>Asset</em>. To balance the sheet, go to <strong>+ Manual Entry</strong> → Liabilities &amp; Equity → Equity → add <em>"Opening Capital / Proprietor's Capital"</em> for the same total amount ({fc(credsWithOpening.reduce((s, c) => s + Number(c.amount), 0))}).</span>
+                                    </div>
+                                )}
+                                {danglingCash.length > 0 && (
+                                    <div style={{ background: "#1a0f00", border: "1px solid #ef4444", borderRadius: 8, padding: "10px 14px", marginBottom: 10, fontSize: 10, color: "#fca5a5", lineHeight: "1.6" }}>
+                                        <strong style={{ color: "#f87171" }}>⚠️ Orphaned Cash Entries Detected</strong><br />
+                                        {danglingCash.length} cash book entry/entries reference a Creditor or Debtor that has been deleted. This distorts the Cash Balance on the Balance Sheet.<br />
+                                        <span style={{ color: "#fda4af", display: "block", marginTop: 4 }}>Entries: {danglingCash.map(e => `"${e.description}" (${fc(e.amount)}, ${e.date})`).join(" | ")}</span>
+                                        <span style={{ color: "#fda4af", display: "block", marginTop: 4 }}>Fix: Go to <strong>Cash Book</strong> tab and delete these entries, or re-add the missing Creditor/Debtor in their respective tabs.</span>
+                                    </div>
+                                )}
+                            </>);
+                        })()}
                         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
                             {["liabilities", "assets"].map(side => {
                                 const color = side === "assets" ? C.blue : C.amber;
@@ -4661,6 +4755,12 @@
                                             <label style={{ fontSize: 9, color: C.muted, fontWeight: 700 }}>Client State Code (Optional)</label>
                                             <input style={{ ...INP, marginBottom: 0 }} placeholder="State Code (e.g. 19)" value={form.clientStateCode || ""} onChange={e => setForm(f => ({ ...f, clientStateCode: e.target.value }))} />
                                         </div>
+                                    </div>
+                                )}
+                                {form.enableGst === "yes" && (
+                                    <div style={{ marginTop: 10, background: "#052e16", border: "1px solid #22c55e", borderRadius: 7, padding: "8px 12px", fontSize: 10, color: "#86efac", lineHeight: "1.5" }}>
+                                        <strong style={{ color: "#4ade80" }}>✅ GST Invoice will be auto-created!</strong><br />
+                                        Saving this entry will automatically generate a <strong>Tax Invoice</strong> (e.g. GST-2026-001) and it will appear in the <strong>GST Invoices</strong> tab for viewing and printing. The invoice number is assigned sequentially.
                                     </div>
                                 )}
                             </div>
