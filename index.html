@@ -63,59 +63,26 @@
         @media print {
             body {
                 background: white !important;
-                color: black !important;
                 margin: 0 !important;
                 padding: 0 !important;
             }
 
-            /* Hide everything on the page */
-            body>* {
-                display: none !important;
+            /* Step 1: Make everything invisible (visibility can be overridden by children, unlike display:none) */
+            body * {
+                visibility: hidden !important;
             }
 
-            /* Then un-hide only the root where React renders */
-            body>#root {
-                display: block !important;
+            /* Step 2: Make only the invoice and all its children visible */
+            #print-area,
+            #print-area * {
+                visibility: visible !important;
             }
 
-            /* Inside root, hide everything */
-            #root>* {
-                display: none !important;
-            }
-
-            /* Show the print wrapper that contains #print-area */
-            #root>div {
-                display: block !important;
-                background: white !important;
-            }
-
-            /* Hide app header, tabs, sidebar, modal overlay, banners */
-            #app-header,
-            #app-tabs,
-            #no-print-header,
-            #no-print-banner,
-            #no-print-actions,
-            [id^="no-print"] {
-                display: none !important;
-            }
-
-            /* Hide everything inside the app except the print area wrapper */
-            #app-body>*:not(#print-area-wrapper) {
-                display: none !important;
-            }
-
-            /* Make the print area fill the whole page */
-            #print-area-wrapper {
-                display: block !important;
-                position: static !important;
-                margin: 0 !important;
-                padding: 0 !important;
-                background: white !important;
-            }
-
+            /* Step 3: Pull the invoice to the top-left of the page */
             #print-area {
-                display: block !important;
-                position: static !important;
+                position: absolute !important;
+                left: 0 !important;
+                top: 0 !important;
                 width: 100% !important;
                 max-width: 100% !important;
                 margin: 0 !important;
@@ -1947,7 +1914,7 @@
 
             if (loading) return <div style={{ minHeight: "100vh", background: "#0f172a", display: "flex", alignItems: "center", justifyContent: "center", color: "#a855f7", fontSize: 16, fontWeight: 700 }}>💧 Loading your data…</div>;
 
-            return (<div style={{ minHeight: "100vh", background: "linear-gradient(135deg,#0f172a 60%,#1e1b4b)", color: C.text }}>
+            return (<div id="app-root" style={{ minHeight: "100vh", background: "linear-gradient(135deg,#0f172a 60%,#1e1b4b)", color: C.text }}>
                 {/* Header */}
                 <div id="app-header" style={{ background: "linear-gradient(90deg,#4f46e5,#7c3aed,#9333ea)", position: "sticky", top: 0, zIndex: 50 }}>
                     <div style={{ maxWidth: 1400, margin: "0 auto", padding: "10px 20px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
