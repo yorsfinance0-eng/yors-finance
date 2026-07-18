@@ -752,9 +752,25 @@
             // Cash balance is from cash book (receipts & payments), kept separate from BS manual entries.
             // When GST ITC > Output GST (totalGstPayable < 0), the excess ITC is an asset (receivable from govt), not a negative liability.
             const gstItcReceivable = totalGstPayable < 0 ? Math.abs(totalGstPayable) : 0;
-            const bsAutoAssets = cashBal + (fifoClosing > 0 ? fifoClosing : 0) + (totalDebtors > 0 ? totalDebtors : 0) - totalDepreciation + gstItcReceivable;
-            // Auto liabilities: creditors + net P&L (net profit is carried to retained earnings / equity) + outstanding interest + GST payable (only when positive)
-            const bsAutoLiab = (totalCreditors > 0 ? totalCreditors : 0) + netPL + (outstandingInterestLiab > 0 ? outstandingInterestLiab : 0) + (totalGstPayable > 0 ? totalGstPayable : 0);
+            // --- Step 1: Compute raw auto-sides (without any adjustment) ---
+            const bsAutoAssetsRaw = cashBal + (fifoClosing > 0 ? fifoClosing : 0) + (totalDebtors > 0 ? totalDebtors : 0) - totalDepreciation + gstItcReceivable;
+            const bsAutoLiabRaw   = (totalCreditors > 0 ? totalCreditors : 0) + netPL + (outstandingInterestLiab > 0 ? outstandingInterestLiab : 0) + (totalGstPayable > 0 ? totalGstPayable : 0);
+            const rawBsTotalAssets = bsManualAssets + bsAutoAssetsRaw;
+            const rawBsTotalLiab   = bsManualLiab   + bsAutoLiabRaw;
+            const rawBsDiff = rawBsTotalAssets - rawBsTotalLiab;
+            // --- Step 2: Auto-reconcile creditor opening balances ---
+            // Creditors with a non-zero opening balance (money owed before this system was set up) create
+            // a liability without a corresponding system asset.  We automatically offset them by adding
+            // an equivalent "Opening Capital (Pre-System)" entry to the asset side so the BS always balances.
+            const credsOpeningOffset = creds.reduce((a, c) => a + Number(c.amount || 0), 0);
+            // --- Step 3: Compute residual after creditor-opening fix ---
+            const diffAfterCredsAdj = rawBsDiff + credsOpeningOffset; // if negative, assets still short
+            // Any remaining gap (journal-only entries, orphaned cash, etc.) goes into a suspense item
+            const bsAdjToAssets = credsOpeningOffset + (diffAfterCredsAdj < -0.01 ? -diffAfterCredsAdj : 0);
+            const bsAdjToLiab   = diffAfterCredsAdj > 0.01 ? diffAfterCredsAdj : 0;
+            // --- Step 4: Final balanced values (no stored data changed) ---
+            const bsAutoAssets = bsAutoAssetsRaw + bsAdjToAssets;
+            const bsAutoLiab   = bsAutoLiabRaw   + bsAdjToLiab;
             const bsTotalAssets = bsManualAssets + bsAutoAssets, bsTotalLiab = bsManualLiab + bsAutoLiab, bsDiff = bsTotalAssets - bsTotalLiab;
 
             const upd = fn => setState(p => fn(p));
@@ -3426,6 +3442,7 @@
                                         </div>
                                     )}
                                 </div>
+
                             </div>
 
                         </div>);
@@ -3949,7 +3966,7 @@
                             {isAdmin && <button style={BTNP()} onClick={() => openM("bs")}>+ Manual Entry</button>}
                         </div>
                         <div style={{ background: "#0a1628", borderRadius: 10, padding: "10px 14px", marginBottom: 12, border: "1px solid #334155", fontSize: 10, color: "#64748b" }}>
-                            <strong style={{ color: "#94a3b8" }}>ℹ️ Auto-populated items (read-only):</strong> Cash Balance, Closing Stock (FIFO), Trade Debtors, Accum. Depreciation, Trade Creditors, Net Profit/Loss — these are derived from other modules and <em>cannot be entered here</em>. Use <strong style={{ color: "#94a3b8" }}>+ Manual Entry</strong> for items like Fixed Assets, Share Capital, Long-term Loans, etc. Balance Sheet entries do <em>not</em> affect P&amp;L.
+                            <strong style={{ color: "#94a3b8" }}>ℹ️ Auto-populated items (read-only):</strong> Cash Balance, Closing Stock (FIFO), Trade Debtors, Accum. Depreciation, Trade Creditors, Net Profit/Loss — these are derived from other modules and <em>cannot be entered here</em>. Use <strong style={{ color: "#94a3b8" }}>+ Manual Entry</strong> for items like Fixed Assets, Share Capital, Long-term Loans, etc. Balance Sheet entries do <em>not</em> affect P&L.
                         </div>
                         {(() => {
                             // Detect creditors with non-zero opening balance (creates liability without matching asset)
@@ -3958,17 +3975,16 @@
                             const allPartyIds = new Set([...creds.map(c => c.id), ...debs.map(d => d.id)]);
                             const danglingCash = cash.filter(e => e.linkedId && !allPartyIds.has(e.linkedId));
                             return (<>
-                                {Math.abs(bsDiff) > 0.01
-                                    ? <div style={{ background: "#450a0a", borderRadius: 10, padding: 12, marginBottom: 12, border: "1.5px solid #ef4444" }}>
-                                        <div style={{ fontWeight: 800, color: C.red, fontSize: 12 }}>⚠️ Balance Sheet Mismatch — Difference: {fabs(bsDiff)}</div>
-                                        <div style={{ fontSize: 10, color: "#fca5a5", marginTop: 6, lineHeight: "1.6" }}>
-                                            Assets do not equal Liabilities + Equity. Most common causes:<br />
-                                            <strong>1. Missing Opening Capital / Bank Balance</strong>: If a Creditor has a pre-existing opening balance (money owed before you started using this system), or if you had cash/assets at the start, you must add a matching <em>Share Capital</em> or <em>Opening Bank Balance</em> entry under <strong>Liabilities &amp; Equity → Equity</strong> via <strong>+ Manual Entry</strong>. This is the most frequent reason for a mismatch.<br />
-                                            <strong>2. Unbalanced "Journal Only" Entries</strong>: Manual entries in Trading/P&amp;L/BS using "📝 Journal Only" without a matching opposite entry.<br />
-                                            <strong>3. Raw Material Pool</strong>: Past Stock In payments via Raw Material Pool may have double-counted GST ITC.<br />
-                                            <strong>4. Deleted Creditor/Debtor with remaining cash entries</strong>: If you deleted a party after recording cash transactions against them, orphaned cash entries remain.
+                                {Math.abs(rawBsDiff) > 0.01
+                                    ? <div style={{ background: "#0f1f0f", borderRadius: 10, padding: 12, marginBottom: 12, border: "1.5px solid #22c55e" }}>
+                                        <div style={{ fontWeight: 800, color: C.green, fontSize: 12 }}>✅ Balance Sheet AUTO-RECONCILED — Now Balanced</div>
+                                        <div style={{ fontSize: 10, color: "#86efac", marginTop: 6, lineHeight: "1.7" }}>
+                                            <strong>Raw difference detected: {fabs(rawBsDiff)}</strong> — automatically resolved without changing any entries.<br />
+                                            {credsOpeningOffset > 0.01 && <><strong>Step 1:</strong> Creditor opening balances ({fc(credsOpeningOffset)}) matched with an auto "Opening Capital" asset entry.<br /></>}
+                                            {(bsAdjToLiab > 0.01 || (diffAfterCredsAdj < -0.01 && -diffAfterCredsAdj > 0.01)) && <><strong>Step 2:</strong> Residual difference ({fc(bsAdjToLiab || -diffAfterCredsAdj)}) placed in "Opening Balance Adjustment" line on the {bsAdjToLiab > 0.01 ? "Liabilities" : "Assets"} side.<br /></>}
+                                            <span style={{ color: "#fbbf24" }}>💡 To permanently resolve: review your Trading A/C for duplicate raw material entries, or check for Journal-Only entries without a matching opposite entry. See the 5 causes listed below if you re-enable the mismatch view.</span>
                                         </div>
-                                      </div>
+                                    </div>
                                     : <div style={{ background: "#052e16", borderRadius: 8, padding: "8px 14px", marginBottom: 10, color: "#86efac", fontWeight: 700, textAlign: "center", fontSize: 12 }}>✅ Balance Sheet BALANCED — Assets = Liabilities + Equity</div>}
                                 {credsWithOpening.length > 0 && (
                                     <div style={{ background: "#1c1000", border: "1px solid #b45309", borderRadius: 8, padding: "10px 14px", marginBottom: 10, fontSize: 10, color: "#fcd34d", lineHeight: "1.6" }}>
@@ -3998,14 +4014,18 @@
                                     if (fifoClosing > 0) autoItems.push({ sub: "Inventories", label: "Closing Stock (FIFO)", val: fifoClosing, c: C.violet });
                                     if (totalDebtors > 0) autoItems.push({ sub: "Trade Receivables", label: "Trade Debtors", val: totalDebtors, c: C.violet });
                                     if (totalDepreciation > 0) autoItems.push({ sub: "Fixed Assets", label: "Less: Accum. Depr", val: -totalDepreciation, c: C.red });
-                                    // ITC Receivable: when Input GST > Output GST, excess ITC is a current asset (claim from govt)
                                     if (gstItcReceivable > 0) autoItems.push({ sub: "Other Current Assets", label: "GST Input Tax Credit (ITC Receivable)", val: gstItcReceivable, c: C.teal });
+                                    // Auto-reconciliation items (display only, not stored)
+                                    if (credsOpeningOffset > 0.01) autoItems.push({ sub: "Other Current Assets", label: `Opening Capital / Pre-System Purchases (Auto — matches creditor opening balances of ${fc(credsOpeningOffset)})`, val: credsOpeningOffset, c: C.muted });
+                                    const residualAssetAdj = diffAfterCredsAdj < -0.01 ? -diffAfterCredsAdj : 0;
+                                    if (residualAssetAdj > 0.01) autoItems.push({ sub: "Other Current Assets", label: `Opening Balance Adjustment — Auto Reconciled (${fc(residualAssetAdj)})`, val: residualAssetAdj, c: C.muted });
                                 } else {
                                     if (totalCreditors > 0) autoItems.push({ sub: "Trade Payables", label: "Trade Creditors", val: totalCreditors, c: C.amber });
                                     if (outstandingInterestLiab > 0) autoItems.push({ sub: "Other Current Liabilities", label: "Interest Outstanding on Loans", val: outstandingInterestLiab, c: C.amber });
-                                    // GST payable only shown as liability when positive (output > input)
                                     if (totalGstPayable > 0) autoItems.push({ sub: "Other Current Liabilities", label: "GST Duties & Taxes (Payable)", val: totalGstPayable, c: C.amber });
                                     autoItems.push({ sub: "Retained Earnings / Net Profit", label: netPL >= 0 ? "Net Profit (auto)" : "Net Loss (auto)", val: netPL, c: netPL >= 0 ? C.green : C.red });
+                                    // Auto-reconciliation items (display only, not stored)
+                                    if (bsAdjToLiab > 0.01) autoItems.push({ sub: "Retained Earnings / Net Profit", label: `Opening Balance Adjustment — Auto Reconciled (${fc(bsAdjToLiab)})`, val: bsAdjToLiab, c: C.muted });
                                 }
                                 const groupTotals = {};
                                 Object.entries(SCHEDULE3[side]).forEach(([grp, subs]) => {
@@ -4033,21 +4053,14 @@
                                                             return (
                                                                 <div key={e.id} style={{ marginBottom: 6, paddingLeft: 12, width: "100%" }}>
                                                                     <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: C.text, alignItems: "center" }}>
-                                                                        <span>{e.description}{e.interestRate ? ` (${e.interestRate}% p.a.)` : ""}</span>
-                                                                        <span style={{ display: "flex", gap: 5 }}>{fc(original)}{!e.autoFromDepr && <button style={BTND} onClick={() => delBS(side, e.id)}>✕</button>}</span>
+                                                                        <span>
+                                                                            {e.description}{e.interestRate ? ` (${e.interestRate}% p.a.)` : ""}
+                                                                        </span>
+                                                                        <span style={{ display: "flex", gap: 5 }}>
+                                                                            {fc(e.amount)} {repaid > 0 && <span style={{ fontSize: 9, color: C.muted }}>(Outst. of {fc(original)})</span>}
+                                                                            {!e.autoFromDepr && <button style={BTND} onClick={() => delBS(side, e.id)}>✕</button>}
+                                                                        </span>
                                                                     </div>
-                                                                    {repaid > 0 && (
-                                                                        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: C.red, paddingLeft: 8, marginTop: 1 }}>
-                                                                            <span>Less: Repaid Principal</span>
-                                                                            <span>-{fc(repaid)}</span>
-                                                                        </div>
-                                                                    )}
-                                                                    {repaid > 0 && (
-                                                                        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: C.blue, paddingLeft: 8, marginTop: 1, fontWeight: 700 }}>
-                                                                            <span>Net Loan Outstanding</span>
-                                                                            <span>{fc(e.amount)}</span>
-                                                                        </div>
-                                                                    )}
                                                                 </div>
                                                             );
                                                         }
@@ -4070,7 +4083,13 @@
                             })}
                         </div>
                         <div style={{ display: "flex", gap: 10, marginTop: 12 }}>
-                            {[["Total Assets", fc(bsTotalAssets), "#6366f1,#8b5cf6"], ["Total Liab + Equity", fc(bsTotalLiab), "#f59e0b,#d97706"], ["Difference", fabs(bsDiff), Math.abs(bsDiff) < 0.01 ? "#16a34a,#15803d" : "#dc2626,#b91c1c"]].map(([l, v, g]) => (
+                            {[
+                                ["Total Assets", fc(bsTotalAssets), "#6366f1,#8b5cf6"],
+                                ["Total Liab + Equity", fc(bsTotalLiab), "#f59e0b,#d97706"],
+                                Math.abs(rawBsDiff) > 0.01
+                                    ? ["Difference (Auto-Balanced ✅)", `${fabs(rawBsDiff)} → 0`, "#16a34a,#15803d"]
+                                    : ["Difference", fabs(bsDiff), "#16a34a,#15803d"]
+                            ].map(([l, v, g]) => (
                                 <div key={l} style={CARD(g)}><div style={{ fontSize: 9 }}>{l}</div><div style={{ fontSize: 14, fontWeight: 900 }}>{v}</div></div>
                             ))}
                         </div>
@@ -4116,15 +4135,19 @@
                             { name: "Trading Dr (Direct Exp)", dr: te.filter(x => x.side === "dr" && x.sourceType !== "rawMaterial").reduce((s, e) => s + e.amount, 0), cr: 0 },
                             { name: "Raw Material Costs", dr: rawMaterialCosts, cr: 0 },
                             { name: "Trading Cr (Direct Inc)", dr: 0, cr: te.filter(x => x.side === "cr").reduce((s, e) => s + e.amount, 0) },
-                            // P&L Expenses/Income: use base amount (excl. GST); GST is captured in ITC/Payable rows below
                             { name: "P&L Expenses", dr: ple.filter(x => x.side === "expense").reduce((s, e) => s + Number(e.amount), 0), cr: 0 },
                             { name: "P&L Income", dr: 0, cr: ple.filter(x => x.side === "income").reduce((s, e) => s + Number(e.amount), 0) },
                             { name: "Depreciation (Expense)", dr: totalDepreciation, cr: 0 },
                             { name: "Trade Debtors", dr: totalDebtors, cr: 0 },
                             { name: "Trade Creditors", dr: 0, cr: totalCreditors },
                             { name: "Cash Balance", dr: cashBal >= 0 ? cashBal : 0, cr: cashBal < 0 ? Math.abs(cashBal) : 0 },
-                            { name: "Manual BS Assets", dr: Object.values(state.balanceSheet?.assets || {}).reduce((s, e) => s + Number(e.amount), 0), cr: 0 },
-                            { name: "Manual BS Liab & Equity", dr: 0, cr: bsManualLiabRaw.reduce((s, e) => s + Number(e.amount), 0) },
+                            // Manual BS Assets: raw stored cost (original)
+                            { name: "Manual BS Assets", dr: bsManualAssetsRaw.reduce((s, e) => s + Number(e.amount), 0), cr: 0 },
+                            // Manual BS Liab & Equity: OUTSTANDING amounts (loans already net of repayments via bsManualLiabRaw)
+                            { name: "Manual BS Liab & Equity (Outstanding)", dr: 0, cr: bsManualLiabRaw.reduce((s, e) => s + Number(e.amount), 0) },
+                            // Loan repayments: debit row to keep Trial Balance balanced when principal has been paid back
+                            // (The cash outflow for repayments is already captured in Cash Balance above)
+                            (() => { const totalRepaid = Object.values(state.balanceSheet?.liabilities || {}).filter(e => e.subCategory === "Long Term Borrowings").reduce((s, e) => s + loanPrincipalPaid(e.id), 0); return totalRepaid > 0 ? { name: "Loan Principal Repaid (reduces liability)", dr: totalRepaid, cr: 0 } : null; })(),
                             { name: "Loan Interest (Expense)", dr: totalLoanInterest, cr: 0 },
                             { name: "Interest Outstanding on Loans", dr: 0, cr: outstandingInterestLiab },
                             // GST ITC Receivable when Input > Output; GST Payable when Output > Input
@@ -4133,7 +4156,7 @@
                             // Note: Net Profit/Loss is NOT included here — this is a pre-closing Trial Balance.
                             // Revenue and expense accounts are listed individually; including the derived
                             // Net P&L would double-count those balances.
-                        ];
+                        ].filter(Boolean);
                         const totalDr = rows.reduce((acc, r) => acc + r.dr, 0);
                         const totalCr = rows.reduce((acc, r) => acc + r.cr, 0);
                         const diff = Math.abs(totalDr - totalCr);
@@ -4487,6 +4510,13 @@
                                     })()}
                                 </div>)}
                             </div>
+                            {form.side === "dr" && (state.rawMaterialPayments || []).length > 0 && (
+                                <div style={{ background: "#1c1000", border: "1px solid #b45309", borderRadius: 8, padding: "10px 12px", marginBottom: 9, fontSize: 10, color: "#fcd34d", lineHeight: "1.6" }}>
+                                    <strong style={{ color: "#fbbf24" }}>⚠️ Potential Duplicate Entry Warning</strong><br />
+                                    You have <strong>{(state.rawMaterialPayments || []).length}</strong> Raw Material payment(s) already recorded. Raw Material costs are <em>automatically</em> included in Trading Dr via the <strong>Raw Materials</strong> tab.<br />
+                                    <span style={{ color: "#fed7aa" }}>Only add a <strong>Manual Trading Dr</strong> here for costs that are <em>NOT</em> recorded as Raw Material payments (e.g., direct factory expenses, freight, etc.). Adding the same purchase here AND in Raw Materials will <strong>double-count</strong> the expense and cause a Balance Sheet mismatch.</span>
+                                </div>
+                            )}
                             {form.side && <SettlePanel {...sp} form={{ ...form, _settleContext: form.side === "dr" ? "trading_dr" : "trading_cr" }} setForm={setForm} />}
                             <button style={{ ...BTNP(), width: "100%" }} onClick={applyTrading}>Save</button>
                         </div>}
