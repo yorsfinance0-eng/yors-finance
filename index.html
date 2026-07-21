@@ -775,7 +775,7 @@
 
             const upd = fn => setState(p => fn(p));
             const toggleChk = (key, id) => upd(p => ({ ...p, [key]: p[key].map(e => e.id === id ? { ...e, checked: !e.checked, manualCheck: true } : e) }));
-            const openM = (t, preset) => { setModal(t); setForm({ date: today(), paidAmount: "", settleMode: "cash", linkedPartyId: "", newPartyName: "", newPartyCredit: "", ...(preset || {}) }); };
+            const openM = (t, preset) => { setModal(t); setForm({ date: today(), paidAmount: "", settleMode: "cash", linkedPartyId: "", newPartyName: "", newPartyCredit: "", siItems: [{ bottleType: "", category: "normal", batchNo: "", qty: "", ratePerUnit: "" }], soItems: [{ bottleType: "", category: "normal", qty: "", ratePerUnit: "" }], ...(preset || {}) }); };
             const closeM = () => { setModal(null); setForm({}); };
 
             const [isAdmin, setIsAdmin] = React.useState(false);
@@ -1006,26 +1006,24 @@
             };
 
             const applyStockIn = () => {
-                const { date, godown, bottleType, category, batchNo, qty, ratePerUnit, isReturn } = form;
-
+                const { date, godown, isReturn } = form;
                 const hasGst = form.enableGst === "yes";
                 const gstRate = hasGst ? Number(form.gstRate || 18) : 0;
                 const hsnCode = hasGst ? form.hsnCode || "2201" : "";
                 const supplierGstin = hasGst ? form.supplierGstin || "" : "";
                 const supplierStateCode = hasGst ? form.supplierStateCode || "" : "";
-
-                const qtyVal = Number(qty);
-                const rateVal = Number(ratePerUnit);
-                const taxable = qtyVal * rateVal;
-                const gstAmount = taxable * (gstRate / 100);
-                const total = taxable + gstAmount;
-
                 const gstType = hasGst ? (form.gstType || "cgst_sgst") : "";
-                const cgstAmount = hasGst && gstType === "cgst_sgst" ? Math.round(gstAmount / 2 * 100) / 100 : 0;
-                const sgstAmount = hasGst && gstType === "cgst_sgst" ? Math.round(gstAmount / 2 * 100) / 100 : 0;
-                const igstAmount = hasGst && gstType === "igst" ? gstAmount : 0;
 
+                // --- RETURN mode (single item, unchanged behaviour) ---
                 if (isReturn === "true") {
+                    const { bottleType, category, batchNo, qty, ratePerUnit } = form;
+                    const qtyVal = Number(qty), rateVal = Number(ratePerUnit);
+                    const taxable = qtyVal * rateVal;
+                    const gstAmount = taxable * (gstRate / 100);
+                    const total = taxable + gstAmount;
+                    const cgstAmount = hasGst && gstType === "cgst_sgst" ? Math.round(gstAmount / 2 * 100) / 100 : 0;
+                    const sgstAmount = hasGst && gstType === "cgst_sgst" ? Math.round(gstAmount / 2 * 100) / 100 : 0;
+                    const igstAmount = hasGst && gstType === "igst" ? gstAmount : 0;
                     if (!date || !godown || !bottleType || !category || !batchNo || !qty || !ratePerUnit) { alert("Fill all fields"); return; }
                     if (qtyVal <= 0 || rateVal <= 0) { alert("Qty and Rate must be > 0"); return; }
                     if (!form.returnSettleMode) { alert("Select a return settlement mode"); return; }
@@ -1046,27 +1044,40 @@
                     closeM();
                     return;
                 }
-                if (!date || !godown || !bottleType || !category || !batchNo || !qty || !ratePerUnit || !form.settleMode) { alert("Fill all fields & select payment mode"); return; }
-                if (qtyVal <= 0 || rateVal <= 0) { alert("Qty and Rate must be > 0"); return; }
+
+                // --- NORMAL multi-item mode ---
+                const siItems = form.siItems || [];
+                if (siItems.length === 0) { alert("Add at least one item"); return; }
+                if (!date || !godown) { alert("Select Date and Godown"); return; }
+                for (const it of siItems) {
+                    if (!it.bottleType || !it.category || !it.batchNo || !it.qty || !it.ratePerUnit) { alert("Fill all fields in every item row"); return; }
+                    if (Number(it.qty) <= 0 || Number(it.ratePerUnit) <= 0) { alert("Qty and Rate must be > 0 in every row"); return; }
+                }
+                if (!form.settleMode) { alert("Select a payment mode"); return; }
+
+                // Compute grand total across all items
+                const grandTotal = siItems.reduce((sum, it) => {
+                    const t = Number(it.qty) * Number(it.ratePerUnit);
+                    const g = t * (gstRate / 100);
+                    return sum + t + g;
+                }, 0);
+                const grandTaxable = siItems.reduce((sum, it) => sum + Number(it.qty) * Number(it.ratePerUnit), 0);
 
                 const paidVal = Number(form.paidAmount || 0);
-                if (paidVal < 0 || (form.settleMode !== "cash" && paidVal > total)) {
-                    alert(`Immediate cash paid must be between 0 and the grand total amount of ₹${total.toFixed(2)}`);
+                if (paidVal < 0 || (form.settleMode !== "cash" && paidVal > grandTotal)) {
+                    alert(`Immediate cash paid must be between 0 and the grand total amount of ₹${grandTotal.toFixed(2)}`);
                     return;
                 }
 
-                // Handle Raw Material Pool settlement
+                // Raw Material settlement: deduct from pool using combined taxable
                 if (form.settleMode === "rawMaterial") {
-                    const taxable = qtyVal * rateVal; // base cost excl. GST
                     const availableRawMats = (state.rawMaterialPayments || []).filter(r => (Number(r.amount) - (r.usedForStockIn || 0)) > 0.001);
                     const totalRmAvail = availableRawMats.reduce((sum, r) => sum + (Number(r.amount) - (r.usedForStockIn || 0)), 0);
-                    if (taxable > totalRmAvail + 0.001) {
-                        alert(`Insufficient raw material pool balance. Available: ₹${totalRmAvail.toFixed(2)} (excl. GST), Required: ₹${taxable.toFixed(2)}`);
+                    if (grandTaxable > totalRmAvail + 0.001) {
+                        alert(`Insufficient raw material pool balance. Available: ₹${totalRmAvail.toFixed(2)} (excl. GST), Required: ₹${grandTaxable.toFixed(2)}`);
                         return;
                     }
-
-                    // Deduct from raw material payments using FIFO
-                    let needed = taxable;
+                    let needed = grandTaxable;
                     const deductions = [];
                     const updatedRawMaterialPayments = (state.rawMaterialPayments || []).map(r => {
                         const avail = Number(r.amount) - (r.usedForStockIn || 0);
@@ -1074,87 +1085,70 @@
                         const take = Math.min(needed, avail);
                         needed -= take;
                         deductions.push({ id: r.id, amount: take, rawMatType: r.rawMatType });
-                        return {
-                            ...r,
-                            usedForStockIn: (r.usedForStockIn || 0) + take
-                        };
+                        return { ...r, usedForStockIn: (r.usedForStockIn || 0) + take };
                     });
-
-                    const id = gid();
                     upd(p => {
-                        let np = {
-                            ...p,
-                            stockIn: [...p.stockIn, { 
-                                id, 
-                                date, 
-                                godown, 
-                                bottleType, 
-                                category, 
-                                batchNo, 
-                                qty: qtyVal, 
-                                ratePerUnit: rateVal, 
-                                totalAmount: total, 
-                                gstAmount, 
-                                gstRate, 
-                                hsnCode, 
-                                supplierGstin, 
-                                supplierStateCode, 
-                                settleMode: "rawMaterial", 
-                                linkedPartyId: null, 
-                                linkedPartyName: "Raw Material Pool", 
-                                linkedRawMaterials: deductions,
-                                linkedRawMaterialId: deductions[0] ? deductions[0].id : null,
-                                isReturn: false, 
-                                paidAmount: 0, 
-                                gstType, 
-                                cgstAmount, 
-                                sgstAmount, 
-                                igstAmount 
-                            }],
-                            rawMaterialPayments: updatedRawMaterialPayments
-                        };
-                        np = withLog(np, "CREATE", "stockIn", id, `Added Stock In of ${qty} ${bottleType} (paid from Raw Material Pool: ${fc(taxable)})`);
+                        let np = { ...p, rawMaterialPayments: updatedRawMaterialPayments };
+                        siItems.forEach((it, idx) => {
+                            const itTaxable = Number(it.qty) * Number(it.ratePerUnit);
+                            const itGstAmt = itTaxable * (gstRate / 100);
+                            const itTotal = itTaxable + itGstAmt;
+                            const itCgst = hasGst && gstType === "cgst_sgst" ? Math.round(itGstAmt / 2 * 100) / 100 : 0;
+                            const itSgst = itCgst;
+                            const itIgst = hasGst && gstType === "igst" ? itGstAmt : 0;
+                            const itId = gid();
+                            np.stockIn = [...np.stockIn, { id: itId, date, godown, bottleType: it.bottleType, category: it.category, batchNo: it.batchNo, qty: Number(it.qty), ratePerUnit: Number(it.ratePerUnit), totalAmount: itTotal, gstAmount: itGstAmt, gstRate, hsnCode, supplierGstin, supplierStateCode, settleMode: "rawMaterial", linkedPartyId: null, linkedPartyName: "Raw Material Pool", linkedRawMaterials: idx === 0 ? deductions : [], linkedRawMaterialId: deductions[0] ? deductions[0].id : null, isReturn: false, paidAmount: 0, gstType, cgstAmount: itCgst, sgstAmount: itSgst, igstAmount: itIgst }];
+                            np = withLog(np, "CREATE", "stockIn", itId, `Added Stock In of ${it.qty} ${it.bottleType} (paid from Raw Material Pool)`);
+                        });
                         return np;
                     }); closeM();
                     return;
                 }
 
-                const id = gid();
-                const direction = "out";
-                const res = resolveSettle(form, total, date, "Stock In: " + bottleType + " Batch " + batchNo, id, direction);
+                // Cash / Creditor settlement — resolve once for combined total
+                const firstId = gid();
+                const res = resolveSettle(form, grandTotal, date, "Stock In: Batch " + (siItems[0]?.batchNo || ""), firstId, "out");
 
-                const isDup = (state.stockIn || []).some(e => e.date === date && e.totalAmount === total && e.linkedPartyId === res.partyId && !e.isReturn);
+                const isDup = (state.stockIn || []).some(e => e.date === date && e.totalAmount === grandTotal && e.linkedPartyId === res.partyId && !e.isReturn);
                 if (isDup && !window.confirm("Possible duplicate entry detected (same amount and party on this date). Save anyway?")) return;
 
                 upd(p => {
-                    let np = { ...p, stockIn: [...p.stockIn, { id, date, godown, bottleType, category, batchNo, qty: qtyVal, ratePerUnit: rateVal, totalAmount: total, gstAmount, gstRate, hsnCode, supplierGstin, supplierStateCode, settleMode: form.settleMode, linkedPartyId: res.partyId, linkedPartyName: res.partyName, createdCreditorId: res.createdCreditorId, isReturn: false, paidAmount: paidVal, gstType, cgstAmount, sgstAmount, igstAmount }] };
+                    let np = { ...p };
+                    siItems.forEach((it, idx) => {
+                        const itTaxable = Number(it.qty) * Number(it.ratePerUnit);
+                        const itGstAmt = itTaxable * (gstRate / 100);
+                        const itTotal = itTaxable + itGstAmt;
+                        const itCgst = hasGst && gstType === "cgst_sgst" ? Math.round(itGstAmt / 2 * 100) / 100 : 0;
+                        const itSgst = itCgst;
+                        const itIgst = hasGst && gstType === "igst" ? itGstAmt : 0;
+                        const itId = idx === 0 ? firstId : gid();
+                        np.stockIn = [...np.stockIn, { id: itId, date, godown, bottleType: it.bottleType, category: it.category, batchNo: it.batchNo, qty: Number(it.qty), ratePerUnit: Number(it.ratePerUnit), totalAmount: itTotal, gstAmount: itGstAmt, gstRate, hsnCode, supplierGstin, supplierStateCode, settleMode: form.settleMode, linkedPartyId: res.partyId, linkedPartyName: res.partyName, createdCreditorId: idx === 0 ? res.createdCreditorId : null, isReturn: false, paidAmount: idx === 0 ? paidVal : 0, gstType, cgstAmount: itCgst, sgstAmount: itSgst, igstAmount: itIgst }];
+                        np = withLog(np, "CREATE", "stockIn", itId, `Added Stock In of ${it.qty} ${it.bottleType}`);
+                    });
                     if (res.createdCreditorId) np.creditors = [...np.creditors, { id: res.createdCreditorId, name: form.newPartyName, date, amount: 0, creditPeriod: form.newPartyCredit || "", notified: false, checked: false }];
                     res.cashEffects.forEach(e => { np.cashEntries = [...np.cashEntries, { ...e, payType: "Stock Purchase Payment" }]; });
-                    np = withLog(np, "CREATE", "stockIn", id, `Added Stock In of ${qty} ${bottleType}`);
                     return np;
                 }); closeM();
             };
             const applyStockOut = () => {
-                const { date, godown, bottleType, category, qty, ratePerUnit, isReturn } = form;
-
+                const { date, godown, isReturn } = form;
                 const hasGst = form.enableGst === "yes";
                 const gstRate = hasGst ? Number(form.gstRate || 18) : 0;
                 const hsnCode = hasGst ? form.hsnCode || "2201" : "";
                 const clientGstin = hasGst ? form.clientGstin || "" : "";
                 const clientStateCode = hasGst ? form.clientStateCode || "" : "";
-
-                const qtyVal = Number(qty);
-                const rateVal = Number(ratePerUnit);
-                const taxable = qtyVal * rateVal;
-                const gstAmount = taxable * (gstRate / 100);
-                const total = taxable + gstAmount;
-
                 const gstType = hasGst ? (form.gstType || "cgst_sgst") : "";
-                const cgstAmount = hasGst && gstType === "cgst_sgst" ? Math.round(gstAmount / 2 * 100) / 100 : 0;
-                const sgstAmount = hasGst && gstType === "cgst_sgst" ? Math.round(gstAmount / 2 * 100) / 100 : 0;
-                const igstAmount = hasGst && gstType === "igst" ? gstAmount : 0;
 
+                // --- RETURN mode (single item) ---
                 if (isReturn === "true") {
+                    const { bottleType, category, qty, ratePerUnit } = form;
+                    const qtyVal = Number(qty), rateVal = Number(ratePerUnit);
+                    const taxable = qtyVal * rateVal;
+                    const gstAmount = taxable * (gstRate / 100);
+                    const total = taxable + gstAmount;
+                    const cgstAmount = hasGst && gstType === "cgst_sgst" ? Math.round(gstAmount / 2 * 100) / 100 : 0;
+                    const sgstAmount = hasGst && gstType === "cgst_sgst" ? Math.round(gstAmount / 2 * 100) / 100 : 0;
+                    const igstAmount = hasGst && gstType === "igst" ? gstAmount : 0;
                     if (!date || !godown || !bottleType || !category || !qty || !ratePerUnit) { alert("Fill all fields"); return; }
                     if (qtyVal <= 0 || rateVal <= 0) { alert("Qty and Rate must be > 0"); return; }
                     if (!form.returnSettleMode) { alert("Select a return settlement mode"); return; }
@@ -1169,112 +1163,88 @@
                     const linkedPartyName = settleMode === "debtor" && linkedDeb ? linkedDeb.name : clientName;
                     upd(p => {
                         let np = { ...p, stockOut: [...p.stockOut, { id, date, godown, bottleType, category, qty: qtyVal, ratePerUnit: rateVal, totalAmount: total, gstAmount, gstRate, hsnCode, clientGstin, clientStateCode, settleMode, linkedPartyId, linkedPartyName, clientId, clientName, billNo: form.billNo, isReturn: true, gstType, cgstAmount, sgstAmount, igstAmount }] };
-                        if (settleMode === "debtor" && linkedDeb && !linkedDeb.clientId) {
-                            np.debtors = np.debtors.map(d => d.id === linkedDeb.id ? { ...d, clientId } : d);
-                        }
-                        if (settleMode === "cash") {
-                            np.cashEntries = [...np.cashEntries, { id: gid(), dir: "out", payType: "Sales Return Refund", description: `Sales Return Refund: ${bottleType} (${category}) — ${clientName}${form.billNo ? " | Bill: " + form.billNo : ""}`, amount: total, date, sourceId: id, linkedId: null }];
-                        }
+                        if (settleMode === "debtor" && linkedDeb && !linkedDeb.clientId) { np.debtors = np.debtors.map(d => d.id === linkedDeb.id ? { ...d, clientId } : d); }
+                        if (settleMode === "cash") { np.cashEntries = [...np.cashEntries, { id: gid(), dir: "out", payType: "Sales Return Refund", description: `Sales Return Refund: ${bottleType} (${category}) — ${clientName}${form.billNo ? " | Bill: " + form.billNo : ""}`, amount: total, date, sourceId: id, linkedId: null }]; }
                         np = withLog(np, "CREATE", "stockOut", id, `Added Sales Return of ${qty} ${bottleType}`);
                         return np;
                     });
                     closeM();
                     return;
                 }
-                if (!bottleType || !category || !godown) { alert("Select Godown, Bottle Type and Category first."); return; }
-                const fifo = computeFIFO(si, so);
-                const inv = fifo[bottleType + "_" + category] || { batches: [] };
-                const availableStock = inv.batches.filter(b => b.godown === godown).reduce((a, b) => a + b.remQty, 0);
-                if (availableStock <= 0) {
-                    alert(`⛔ No stock available in ${godown} godown for ${bottleType} (${category}).\nPlease check your inventory before adding a Stock Out entry.`);
-                    return;
+
+                // --- NORMAL multi-item mode ---
+                const soItems = form.soItems || [];
+                if (soItems.length === 0) { alert("Add at least one item"); return; }
+                if (!date || !godown) { alert("Select Date and Godown"); return; }
+                for (const it of soItems) {
+                    if (!it.bottleType || !it.category || !it.qty || !it.ratePerUnit) { alert("Fill all fields in every item row"); return; }
+                    if (Number(it.qty) <= 0 || Number(it.ratePerUnit) <= 0) { alert("Qty and Rate must be > 0 in every row"); return; }
                 }
-                if (availableStock < qtyVal) {
-                    alert(`⛔ Insufficient stock in ${godown} godown for ${bottleType} (${category}).\nAvailable: ${availableStock} units\nRequested: ${qtyVal} units\n\nPlease reduce the quantity or select a different godown.`);
-                    return;
+                if (!form.settleMode) { alert("Select a receipt mode"); return; }
+
+                // Stock availability check per item
+                const currentFifo = computeFIFO(si, so);
+                for (const it of soItems) {
+                    const inv = currentFifo[it.bottleType + "_" + it.category] || { batches: [] };
+                    const avail = inv.batches.filter(b => b.godown === godown).reduce((a, b) => a + b.remQty, 0);
+                    if (avail <= 0) { alert(`⛔ No stock in ${godown} for ${it.bottleType} (${it.category}).`); return; }
+                    if (avail < Number(it.qty)) { alert(`⛔ Insufficient stock in ${godown} for ${it.bottleType} (${it.category}).\nAvailable: ${avail}, Requested: ${it.qty}`); return; }
                 }
-                if (!date || !godown || !bottleType || !category || !qty || !ratePerUnit || !form.settleMode) { alert("Fill all fields & select receipt mode"); return; }
-                if (qtyVal <= 0 || rateVal <= 0) { alert("Qty and Rate must be > 0"); return; }
+
+                const grandTotal = soItems.reduce((sum, it) => {
+                    const t = Number(it.qty) * Number(it.ratePerUnit);
+                    return sum + t + t * (gstRate / 100);
+                }, 0);
 
                 const paidVal = Number(form.paidAmount || 0);
-                if (paidVal < 0 || (form.settleMode !== "cash" && paidVal > total)) {
-                    alert(`Immediate cash received must be between 0 and the grand total amount of ₹${total.toFixed(2)}`);
+                if (paidVal < 0 || (form.settleMode !== "cash" && paidVal > grandTotal)) {
+                    alert(`Immediate cash received must be between 0 and the grand total amount of ₹${grandTotal.toFixed(2)}`);
                     return;
                 }
 
                 if (form.linkClient === "yes" && !form.clientId) { alert("Please select or create a client"); return; }
                 if (form.linkClient === "yes" && form.clientId === "__new__" && !form.newClientName) { alert("Enter client name"); return; }
-                const id = gid();
-                const direction = "in";
-                const res = resolveSettle(form, total, date, "Stock Out: " + bottleType + " " + date, id, direction);
+
                 let clientId = null, clientName = "";
                 if (form.linkClient === "yes" && form.clientId === "__new__") { clientId = gid(); clientName = form.newClientName; }
                 else if (form.linkClient === "yes" && form.clientId) { clientId = form.clientId; const cl = (state.clients || []).find(c => c.id === form.clientId); clientName = cl ? cl.name : ""; }
 
-                const isDup = (state.stockOut || []).some(e => e.date === date && e.totalAmount === total && e.linkedPartyId === res.partyId && !e.isReturn);
+                const firstId = gid();
+                const res = resolveSettle(form, grandTotal, date, "Stock Out: " + date, firstId, "in");
+
+                const isDup = (state.stockOut || []).some(e => e.date === date && e.totalAmount === grandTotal && e.linkedPartyId === res.partyId && !e.isReturn);
                 if (isDup && !window.confirm("Possible duplicate entry detected (same amount and party on this date). Save anyway?")) return;
 
-                // Auto-generate GST Invoice when GST is enabled
                 const autoInvoiceId = hasGst ? gid() : null;
-                const autoInvoiceNo = hasGst
-                    ? "GST-" + new Date().getFullYear() + "-" + String((state.gstInvoices || []).length + 1).padStart(3, "0")
-                    : null;
+                const autoInvoiceNo = hasGst ? "GST-" + new Date().getFullYear() + "-" + String((state.gstInvoices || []).length + 1).padStart(3, "0") : null;
 
                 upd(p => {
-                    // Build stock out entry — link to auto-generated invoice if GST enabled
-                    const soEntry = { id, date, godown, bottleType, category, qty: qtyVal, ratePerUnit: rateVal, totalAmount: total, gstAmount, gstRate, hsnCode, clientGstin, clientStateCode, settleMode: form.settleMode, linkedPartyId: res.partyId, linkedPartyName: res.partyName, createdDebtorId: res.createdDebtorId, clientId, clientName, billNo: hasGst ? autoInvoiceNo : (form.billNo || ""), isReturn: false, paidAmount: paidVal, gstType, cgstAmount, sgstAmount, igstAmount, ...(hasGst ? { gstInvoiceId: autoInvoiceId } : {}) };
-                    let np = { ...p, stockOut: [...p.stockOut, soEntry] };
-
-                    // Auto-create GST Invoice record
+                    let np = { ...p };
+                    const invoiceItems = [];
+                    soItems.forEach((it, idx) => {
+                        const itTaxable = Number(it.qty) * Number(it.ratePerUnit);
+                        const itGstAmt = itTaxable * (gstRate / 100);
+                        const itTotal = itTaxable + itGstAmt;
+                        const itCgst = hasGst && gstType === "cgst_sgst" ? Math.round(itGstAmt / 2 * 100) / 100 : 0;
+                        const itSgst = itCgst;
+                        const itIgst = hasGst && gstType === "igst" ? itGstAmt : 0;
+                        const itId = idx === 0 ? firstId : gid();
+                        const soEntry = { id: itId, date, godown, bottleType: it.bottleType, category: it.category, qty: Number(it.qty), ratePerUnit: Number(it.ratePerUnit), totalAmount: itTotal, gstAmount: itGstAmt, gstRate, hsnCode, clientGstin, clientStateCode, settleMode: form.settleMode, linkedPartyId: res.partyId, linkedPartyName: res.partyName, createdDebtorId: idx === 0 ? res.createdDebtorId : null, clientId, clientName, billNo: hasGst ? autoInvoiceNo : (form.billNo || ""), isReturn: false, paidAmount: idx === 0 ? paidVal : 0, gstType, cgstAmount: itCgst, sgstAmount: itSgst, igstAmount: itIgst, ...(hasGst ? { gstInvoiceId: autoInvoiceId } : {}) };
+                        np.stockOut = [...np.stockOut, soEntry];
+                        np = withLog(np, "CREATE", "stockOut", itId, `Added Stock Out of ${it.qty} ${it.bottleType}`);
+                        if (hasGst) invoiceItems.push({ bottleType: it.bottleType, category: it.category, hsnCode, qty: Number(it.qty), ratePerUnit: Number(it.ratePerUnit), taxableValue: itTaxable, gstRate, cgstRate: gstType === "cgst_sgst" ? gstRate / 2 : 0, cgstAmount: itCgst, sgstRate: gstType === "cgst_sgst" ? gstRate / 2 : 0, sgstAmount: itSgst, igstRate: gstType === "igst" ? gstRate : 0, igstAmount: itIgst, totalAmount: itTotal });
+                    });
                     if (hasGst && autoInvoiceId) {
-                        const invoiceItem = {
-                            bottleType,
-                            category,
-                            hsnCode,
-                            qty: qtyVal,
-                            ratePerUnit: rateVal,
-                            taxableValue: taxable,
-                            gstRate,
-                            cgstRate: gstType === "cgst_sgst" ? gstRate / 2 : 0,
-                            cgstAmount,
-                            sgstRate: gstType === "cgst_sgst" ? gstRate / 2 : 0,
-                            sgstAmount,
-                            igstRate: gstType === "igst" ? gstRate : 0,
-                            igstAmount,
-                            totalAmount: total
-                        };
-                        const gstInvoiceRecord = {
-                            id: autoInvoiceId,
-                            invoiceNo: autoInvoiceNo,
-                            date,
-                            clientId: clientId || null,
-                            clientName: clientName || res.partyName || "",
-                            clientGstin: clientGstin || "",
-                            clientStateCode: clientStateCode || "",
-                            clientAddress: (state.clients || []).find(c => c.id === clientId)?.address || "",
-                            clientPhone: (state.clients || []).find(c => c.id === clientId)?.phone || "",
-                            godown,
-                            settleMode: form.settleMode,
-                            linkedPartyId: res.partyId,
-                            createdDebtorId: res.createdDebtorId || null,
-                            items: [invoiceItem],
-                            taxableTotal: taxable,
-                            cgstTotal: cgstAmount,
-                            sgstTotal: sgstAmount,
-                            igstTotal: igstAmount,
-                            grandTotal: total,
-                            paidAmount: paidVal,
-                            autoCreatedFromStockOut: true,
-                            stockOutId: id
-                        };
-                        np.gstInvoices = [...(np.gstInvoices || []), gstInvoiceRecord];
+                        const invTaxable = invoiceItems.reduce((s, x) => s + x.taxableValue, 0);
+                        const invCgst = invoiceItems.reduce((s, x) => s + x.cgstAmount, 0);
+                        const invSgst = invoiceItems.reduce((s, x) => s + x.sgstAmount, 0);
+                        const invIgst = invoiceItems.reduce((s, x) => s + x.igstAmount, 0);
+                        np.gstInvoices = [...(np.gstInvoices || []), { id: autoInvoiceId, invoiceNo: autoInvoiceNo, date, clientId: clientId || null, clientName: clientName || res.partyName || "", clientGstin: clientGstin || "", clientStateCode: clientStateCode || "", clientAddress: (state.clients || []).find(c => c.id === clientId)?.address || "", clientPhone: (state.clients || []).find(c => c.id === clientId)?.phone || "", godown, settleMode: form.settleMode, linkedPartyId: res.partyId, createdDebtorId: res.createdDebtorId || null, items: invoiceItems, taxableTotal: invTaxable, cgstTotal: invCgst, sgstTotal: invSgst, igstTotal: invIgst, grandTotal, paidAmount: paidVal, autoCreatedFromStockOut: true }];
                         np = withLog(np, "CREATE", "gstInvoices", autoInvoiceId, `Auto-created GST Invoice ${autoInvoiceNo} from Stock Out`);
                     }
-
-                    if (res.createdDebtorId) { const debtorEntry = { id: res.createdDebtorId, name: form.newPartyName, date, amount: 0, creditPeriod: form.newPartyCredit || "", notified: false, checked: false }; if (clientId) debtorEntry.clientId = clientId; np.debtors = [...np.debtors, debtorEntry]; }
+                    if (res.createdDebtorId) { const de = { id: res.createdDebtorId, name: form.newPartyName, date, amount: 0, creditPeriod: form.newPartyCredit || "", notified: false, checked: false }; if (clientId) de.clientId = clientId; np.debtors = [...np.debtors, de]; }
                     if (clientId && form.clientId === "__new__") np.clients = [...(np.clients || []), { id: clientId, name: form.newClientName, type: form.newClientType || "Retailer", date, phone: form.newClientPhone || "", address: form.newClientAddress || "", gstin: form.newClientGstin || "", stateCode: form.newClientStateCode || "" }];
                     res.cashEffects.forEach(e => { np.cashEntries = [...np.cashEntries, { ...e, payType: "Sales Receipt" }]; });
-                    np = withLog(np, "CREATE", "stockOut", id, `Added Stock Out of ${qty} ${bottleType}`);
                     return np;
                 }); closeM();
             };
@@ -4621,47 +4591,71 @@
                         </div>}
 
                         {modal === "stockIn" && (() => {
+                            const siItems = form.siItems || [{ bottleType: "", category: "normal", batchNo: "", qty: "", ratePerUnit: "" }];
+                            const updateSiItem = (idx, field, val) => setForm(f => { const arr = [...(f.siItems || [{ bottleType: "", category: "normal", batchNo: "", qty: "", ratePerUnit: "" }])]; arr[idx] = { ...arr[idx], [field]: val }; return { ...f, siItems: arr }; });
+                            const addSiItem = () => setForm(f => ({ ...f, siItems: [...(f.siItems || []), { bottleType: "", category: "normal", batchNo: "", qty: "", ratePerUnit: "" }] }));
+                            const removeSiItem = idx => setForm(f => ({ ...f, siItems: (f.siItems || []).filter((_, i) => i !== idx) }));
+                            const siGrandTaxable = siItems.reduce((s, it) => s + (Number(it.qty) || 0) * (Number(it.ratePerUnit) || 0), 0);
+                            const hasGstPrev = form.enableGst === "yes";
+                            const siGstRate = hasGstPrev ? Number(form.gstRate || 18) : 0;
+                            const siGrandTotal = siGrandTaxable + siGrandTaxable * (siGstRate / 100);
                             const availableBatches = si.filter(x => !x.isReturn && x.godown === form.godown && x.bottleType === form.bottleType && x.category === form.category);
                             return <div>
                                 <div style={{ fontWeight: 800, fontSize: 15, color: C.green, marginBottom: 12 }}>📥 Stock In</div>
                                 <DateInput value={form.date} onChange={v => setForm(f => ({ ...f, date: v }))} />
-                                <select style={INP} value={form.isReturn || "false"} onChange={e => setForm(f => ({ ...f, isReturn: e.target.value, returnCreditorId: "", returnSettleMode: "", batchNo: "", ratePerUnit: "" }))}><option value="false">Entry Type: Normal</option><option value="true">Entry Type: Purchase Return</option></select>
-                                <select style={INP} value={form.godown || ""} onChange={e => setForm(f => ({ ...f, godown: e.target.value, batchNo: "" }))}><option value="">Godown *</option>{GODOWNS.map(g => <option key={g}>{g}</option>)}</select>
-                                <select style={INP} value={form.bottleType || ""} onChange={e => setForm(f => ({ ...f, bottleType: e.target.value, batchNo: "" }))}><option value="">Bottle Type *</option>{BOTTLE_TYPES.map(b => <option key={b}>{b}</option>)}</select>
-                                <select style={INP} value={form.category || ""} onChange={e => setForm(f => ({ ...f, category: e.target.value, batchNo: "" }))}><option value="">Category *</option><option>normal</option><option>customized</option></select>
+                                <select style={INP} value={form.isReturn || "false"} onChange={e => setForm(f => ({ ...f, isReturn: e.target.value, returnCreditorId: "", returnSettleMode: "", batchNo: "", ratePerUnit: "", bottleType: "", category: "normal", qty: "" }))}><option value="false">Entry Type: Normal</option><option value="true">Entry Type: Purchase Return</option></select>
+                                <select style={INP} value={form.godown || ""} onChange={e => setForm(f => ({ ...f, godown: e.target.value }))}><option value="">Godown *</option>{GODOWNS.map(g => <option key={g}>{g}</option>)}</select>
 
-                                {form.isReturn === "true" ? (
-                                    availableBatches.length > 0 ? (
-                                        <select style={INP} value={form.batchNo || ""} onChange={e => {
-                                            const val = e.target.value;
-                                            if (val === "__manual__") {
-                                                setForm(f => ({ ...f, batchNo: "", _manualBatch: true }));
-                                            } else {
-                                                const b = availableBatches.find(x => x.batchNo === val);
-                                                setForm(f => ({ ...f, batchNo: val, ratePerUnit: b ? b.ratePerUnit : f.ratePerUnit, _manualBatch: false }));
-                                            }
-                                        }}>
+                                {form.isReturn === "true" ? (<>
+                                    <select style={INP} value={form.bottleType || ""} onChange={e => setForm(f => ({ ...f, bottleType: e.target.value, batchNo: "" }))}><option value="">Bottle Type *</option>{BOTTLE_TYPES.map(b => <option key={b}>{b}</option>)}</select>
+                                    <select style={INP} value={form.category || ""} onChange={e => setForm(f => ({ ...f, category: e.target.value, batchNo: "" }))}><option value="">Category *</option><option>normal</option><option>customized</option></select>
+                                    {availableBatches.length > 0 ? (
+                                        <select style={INP} value={form.batchNo || ""} onChange={e => { const val = e.target.value; if (val === "__manual__") { setForm(f => ({ ...f, batchNo: "", _manualBatch: true })); } else { const b = availableBatches.find(x => x.batchNo === val); setForm(f => ({ ...f, batchNo: val, ratePerUnit: b ? b.ratePerUnit : f.ratePerUnit, _manualBatch: false })); } }}>
                                             <option value="">Select Batch No *</option>
-                                            {availableBatches.map(b => (
-                                                <option key={b.id} value={b.batchNo}>
-                                                    {b.batchNo} (Qty: {b.qty}, Rate: {fc(b.ratePerUnit)})
-                                                </option>
-                                            ))}
+                                            {availableBatches.map(b => (<option key={b.id} value={b.batchNo}>{b.batchNo} (Qty: {b.qty}, Rate: {fc(b.ratePerUnit)})</option>))}
                                             <option value="__manual__">+ Enter Manually</option>
                                         </select>
-                                    ) : (
-                                        <input style={INP} placeholder="Batch No *" value={form.batchNo || ""} onChange={e => setForm(f => ({ ...f, batchNo: e.target.value }))} />
-                                    )
-                                ) : (
-                                    <input style={INP} placeholder="Batch No *" value={form.batchNo || ""} onChange={e => setForm(f => ({ ...f, batchNo: e.target.value }))} />
-                                )}
-
-                                {form.isReturn === "true" && availableBatches.length > 0 && form._manualBatch && (
-                                    <input style={INP} placeholder="Enter Batch No *" value={form.batchNo || ""} onChange={e => setForm(f => ({ ...f, batchNo: e.target.value }))} />
-                                )}
-
-                                <input type="number" style={INP} placeholder="Qty *" value={form.qty || ""} onChange={e => setForm(f => ({ ...f, qty: e.target.value }))} />
-                                <input type="number" style={INP} placeholder="Rate/Unit (₹) *" value={form.ratePerUnit || ""} onChange={e => setForm(f => ({ ...f, ratePerUnit: e.target.value }))} />
+                                    ) : (<input style={INP} placeholder="Batch No *" value={form.batchNo || ""} onChange={e => setForm(f => ({ ...f, batchNo: e.target.value }))} />)}
+                                    {availableBatches.length > 0 && form._manualBatch && (<input style={INP} placeholder="Enter Batch No *" value={form.batchNo || ""} onChange={e => setForm(f => ({ ...f, batchNo: e.target.value }))} />)}
+                                    <input type="number" style={INP} placeholder="Qty *" value={form.qty || ""} onChange={e => setForm(f => ({ ...f, qty: e.target.value }))} />
+                                    <input type="number" style={INP} placeholder="Rate/Unit (₹) *" value={form.ratePerUnit || ""} onChange={e => setForm(f => ({ ...f, ratePerUnit: e.target.value }))} />
+                                </>) : (<>
+                                    {/* Multi-item table */}
+                                    <div style={{ background: "#0a0f1e", borderRadius: 10, padding: 12, marginBottom: 9, border: "1px solid #334155" }}>
+                                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                                            <span style={{ fontSize: 11, fontWeight: 800, color: C.green }}>📦 Items</span>
+                                            <button onClick={addSiItem} style={{ ...BTNP("linear-gradient(90deg,#22c55e,#16a34a)"), padding: "4px 10px", fontSize: 11 }}>+ Add Row</button>
+                                        </div>
+                                        <div style={{ overflowX: "auto" }}>
+                                            <table style={{ ...TBL, fontSize: 11 }}>
+                                                <thead><tr>
+                                                    {["Bottle", "Category", "Batch No", "Qty", "Rate/Unit", "Cost", ""].map(h => <th key={h} style={{ ...THS, fontSize: 10 }}>{h}</th>)}
+                                                </tr></thead>
+                                                <tbody>
+                                                    {siItems.map((it, idx) => {
+                                                        const cost = (Number(it.qty) || 0) * (Number(it.ratePerUnit) || 0);
+                                                        return (<tr key={idx}>
+                                                            <td style={{ ...TDS, padding: "4px" }}><select style={{ ...INP, marginBottom: 0, minWidth: 70, padding: "5px 6px", fontSize: 11 }} value={it.bottleType || ""} onChange={e => updateSiItem(idx, "bottleType", e.target.value)}><option value="">Type</option>{BOTTLE_TYPES.map(b => <option key={b}>{b}</option>)}</select></td>
+                                                            <td style={{ ...TDS, padding: "4px" }}><select style={{ ...INP, marginBottom: 0, minWidth: 90, padding: "5px 6px", fontSize: 11 }} value={it.category || "normal"} onChange={e => updateSiItem(idx, "category", e.target.value)}><option value="normal">Normal</option><option value="customized">Custom</option></select></td>
+                                                            <td style={{ ...TDS, padding: "4px" }}><input style={{ ...INP, marginBottom: 0, minWidth: 80, padding: "5px 6px", fontSize: 11 }} placeholder="Batch No" value={it.batchNo || ""} onChange={e => updateSiItem(idx, "batchNo", e.target.value)} /></td>
+                                                            <td style={{ ...TDS, padding: "4px" }}><input type="number" style={{ ...INP, marginBottom: 0, minWidth: 60, padding: "5px 6px", fontSize: 11 }} placeholder="Qty" value={it.qty || ""} onChange={e => updateSiItem(idx, "qty", e.target.value)} /></td>
+                                                            <td style={{ ...TDS, padding: "4px" }}><input type="number" style={{ ...INP, marginBottom: 0, minWidth: 70, padding: "5px 6px", fontSize: 11 }} placeholder="Rate" value={it.ratePerUnit || ""} onChange={e => updateSiItem(idx, "ratePerUnit", e.target.value)} /></td>
+                                                            <td style={{ ...TDS, fontWeight: 700, color: C.green, whiteSpace: "nowrap" }}>{cost > 0 ? fc(cost) : "—"}</td>
+                                                            <td style={{ ...TDS, padding: "4px" }}>{siItems.length > 1 && <button style={BTND} onClick={() => removeSiItem(idx)}>✕</button>}</td>
+                                                        </tr>);
+                                                    })}
+                                                </tbody>
+                                                <tfoot>
+                                                    <tr style={{ background: "#0f2010" }}>
+                                                        <td colSpan={5} style={{ ...TDS, fontWeight: 800, fontSize: 11 }}>Grand Taxable</td>
+                                                        <td style={{ ...TDS, fontWeight: 800, color: C.green }}>{fc(siGrandTaxable)}</td>
+                                                        <td style={TDS}></td>
+                                                    </tr>
+                                                </tfoot>
+                                            </table>
+                                        </div>
+                                    </div>
+                                </>)}
 
                                 <div style={{ background: "#0a0f1e", borderRadius: 8, padding: 12, marginBottom: 9, border: "1px solid " + C.border }}>
                                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
@@ -4699,46 +4693,19 @@
                                     )}
                                 </div>
 
-                                {form.qty && form.ratePerUnit && (() => {
-                                    const qty = Number(form.qty || 0);
-                                    const rate = Number(form.ratePerUnit || 0);
-                                    const taxable = qty * rate;
-                                    const hasGst = form.enableGst === "yes";
-                                    const gstRate = hasGst ? Number(form.gstRate || 18) : 0;
-                                    const gstAmount = taxable * (gstRate / 100);
-                                    const total = taxable + gstAmount;
-
+                                {siGrandTaxable > 0 && (() => {
+                                    const gstAmt = siGrandTaxable * (siGstRate / 100);
+                                    const type = form.gstType || "cgst_sgst";
                                     return (
                                         <div style={{ background: C.mid, borderRadius: 8, padding: 12, marginBottom: 9, border: "1px solid " + C.border, display: "grid", gap: 6 }}>
-                                            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11 }}>
-                                                <span style={{ color: C.muted }}>Subtotal (Taxable)</span>
-                                                <span>{fc(taxable)}</span>
-                                            </div>
-                                            {hasGst && (() => {
-                                                const type = form.gstType || "cgst_sgst";
-                                                if (type === "cgst_sgst") {
-                                                    return (<>
-                                                        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: C.amber }}>
-                                                            <span>CGST ({gstRate / 2}%)</span>
-                                                            <span>{fc(gstAmount / 2)}</span>
-                                                        </div>
-                                                        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: C.amber }}>
-                                                            <span>SGST ({gstRate / 2}%)</span>
-                                                            <span>{fc(gstAmount / 2)}</span>
-                                                        </div>
-                                                    </>);
-                                                } else {
-                                                    return (
-                                                        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: C.amber }}>
-                                                            <span>IGST ({gstRate}%)</span>
-                                                            <span>{fc(gstAmount)}</span>
-                                                        </div>
-                                                    );
-                                                }
+                                            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11 }}><span style={{ color: C.muted }}>Subtotal (Taxable)</span><span>{fc(siGrandTaxable)}</span></div>
+                                            {hasGstPrev && (() => {
+                                                if (type === "cgst_sgst") return (<><div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: C.amber }}><span>CGST ({siGstRate / 2}%)</span><span>{fc(gstAmt / 2)}</span></div><div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: C.amber }}><span>SGST ({siGstRate / 2}%)</span><span>{fc(gstAmt / 2)}</span></div></>);
+                                                return <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: C.amber }}><span>IGST ({siGstRate}%)</span><span>{fc(gstAmt)}</span></div>;
                                             })()}
                                             <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 800, fontSize: 13, borderTop: "1px dashed #334155", paddingTop: 4 }}>
                                                 <span style={{ color: C.text }}>Grand Total</span>
-                                                <span style={{ color: C.purple }}>{fc(total)}</span>
+                                                <span style={{ color: C.purple }}>{fc(siGrandTotal)}</span>
                                             </div>
                                         </div>
                                     );
@@ -4808,16 +4775,64 @@
                             </div>;
                         })()}
 
-                        {modal === "stockOut" && <div>
+                        {modal === "stockOut" && (() => {
+                            const soItems = form.soItems || [{ bottleType: "", category: "normal", qty: "", ratePerUnit: "" }];
+                            const updateSoItem = (idx, field, val) => setForm(f => { const arr = [...(f.soItems || [{ bottleType: "", category: "normal", qty: "", ratePerUnit: "" }])]; arr[idx] = { ...arr[idx], [field]: val }; return { ...f, soItems: arr }; });
+                            const addSoItem = () => setForm(f => ({ ...f, soItems: [...(f.soItems || []), { bottleType: "", category: "normal", qty: "", ratePerUnit: "" }] }));
+                            const removeSoItem = idx => setForm(f => ({ ...f, soItems: (f.soItems || []).filter((_, i) => i !== idx) }));
+                            const soGrandTaxable = soItems.reduce((s, it) => s + (Number(it.qty) || 0) * (Number(it.ratePerUnit) || 0), 0);
+                            const soHasGst = form.enableGst === "yes";
+                            const soGstRate = soHasGst ? Number(form.gstRate || 18) : 0;
+                            const soGrandTotal = soGrandTaxable + soGrandTaxable * (soGstRate / 100);
+                            return <div>
                             <div style={{ fontWeight: 800, fontSize: 15, color: C.red, marginBottom: 12 }}>📤 Stock Out</div>
                             <DateInput value={form.date} onChange={v => setForm(f => ({ ...f, date: v }))} />
-                            <select style={INP} value={form.isReturn || "false"} onChange={e => setForm(f => ({ ...f, isReturn: e.target.value }))}><option value="false">Entry Type: Normal</option><option value="true">Entry Type: Sales Return</option></select>
+                            <select style={INP} value={form.isReturn || "false"} onChange={e => setForm(f => ({ ...f, isReturn: e.target.value, returnClientId: "", returnSettleMode: "", bottleType: "", category: "normal", qty: "", ratePerUnit: "" }))}><option value="false">Entry Type: Normal</option><option value="true">Entry Type: Sales Return</option></select>
                             <select style={INP} value={form.godown || ""} onChange={e => setForm(f => ({ ...f, godown: e.target.value }))}><option value="">Godown *</option>{GODOWNS.map(g => <option key={g}>{g}</option>)}</select>
-                            <select style={INP} value={form.bottleType || ""} onChange={e => setForm(f => ({ ...f, bottleType: e.target.value }))}><option value="">Bottle Type *</option>{BOTTLE_TYPES.map(b => <option key={b}>{b}</option>)}</select>
-                            <select style={INP} value={form.category || ""} onChange={e => setForm(f => ({ ...f, category: e.target.value }))}><option value="">Category *</option><option>normal</option><option>customized</option></select>
-                            <input style={INP} placeholder="Bill No. (Optional)" value={form.billNo || ""} onChange={e => setForm(f => ({ ...f, billNo: e.target.value }))} />
-                            <input type="number" style={INP} placeholder="Qty *" value={form.qty || ""} onChange={e => setForm(f => ({ ...f, qty: e.target.value }))} />
-                            <input type="number" style={INP} placeholder="Sale Rate/Unit (₹) *" value={form.ratePerUnit || ""} onChange={e => setForm(f => ({ ...f, ratePerUnit: e.target.value }))} />
+
+                            {form.isReturn === "true" ? (<>
+                                <select style={INP} value={form.bottleType || ""} onChange={e => setForm(f => ({ ...f, bottleType: e.target.value }))}><option value="">Bottle Type *</option>{BOTTLE_TYPES.map(b => <option key={b}>{b}</option>)}</select>
+                                <select style={INP} value={form.category || ""} onChange={e => setForm(f => ({ ...f, category: e.target.value }))}><option value="">Category *</option><option>normal</option><option>customized</option></select>
+                                <input style={INP} placeholder="Bill No. (Optional)" value={form.billNo || ""} onChange={e => setForm(f => ({ ...f, billNo: e.target.value }))} />
+                                <input type="number" style={INP} placeholder="Qty *" value={form.qty || ""} onChange={e => setForm(f => ({ ...f, qty: e.target.value }))} />
+                                <input type="number" style={INP} placeholder="Sale Rate/Unit (₹) *" value={form.ratePerUnit || ""} onChange={e => setForm(f => ({ ...f, ratePerUnit: e.target.value }))} />
+                            </>) : (<>
+                                {/* Multi-item table */}
+                                <input style={INP} placeholder="Bill No. (Optional — applies to all items)" value={form.billNo || ""} onChange={e => setForm(f => ({ ...f, billNo: e.target.value }))} />
+                                <div style={{ background: "#0a0f1e", borderRadius: 10, padding: 12, marginBottom: 9, border: "1px solid #334155" }}>
+                                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                                        <span style={{ fontSize: 11, fontWeight: 800, color: C.red }}>📦 Items</span>
+                                        <button onClick={addSoItem} style={{ ...BTNP("linear-gradient(90deg,#ef4444,#dc2626)"), padding: "4px 10px", fontSize: 11 }}>+ Add Row</button>
+                                    </div>
+                                    <div style={{ overflowX: "auto" }}>
+                                        <table style={{ ...TBL, fontSize: 11 }}>
+                                            <thead><tr>
+                                                {["Bottle", "Category", "Qty", "Rate/Unit", "Cost", ""].map(h => <th key={h} style={{ ...THS, fontSize: 10 }}>{h}</th>)}
+                                            </tr></thead>
+                                            <tbody>
+                                                {soItems.map((it, idx) => {
+                                                    const cost = (Number(it.qty) || 0) * (Number(it.ratePerUnit) || 0);
+                                                    return (<tr key={idx}>
+                                                        <td style={{ ...TDS, padding: "4px" }}><select style={{ ...INP, marginBottom: 0, minWidth: 70, padding: "5px 6px", fontSize: 11 }} value={it.bottleType || ""} onChange={e => updateSoItem(idx, "bottleType", e.target.value)}><option value="">Type</option>{BOTTLE_TYPES.map(b => <option key={b}>{b}</option>)}</select></td>
+                                                        <td style={{ ...TDS, padding: "4px" }}><select style={{ ...INP, marginBottom: 0, minWidth: 90, padding: "5px 6px", fontSize: 11 }} value={it.category || "normal"} onChange={e => updateSoItem(idx, "category", e.target.value)}><option value="normal">Normal</option><option value="customized">Custom</option></select></td>
+                                                        <td style={{ ...TDS, padding: "4px" }}><input type="number" style={{ ...INP, marginBottom: 0, minWidth: 60, padding: "5px 6px", fontSize: 11 }} placeholder="Qty" value={it.qty || ""} onChange={e => updateSoItem(idx, "qty", e.target.value)} /></td>
+                                                        <td style={{ ...TDS, padding: "4px" }}><input type="number" style={{ ...INP, marginBottom: 0, minWidth: 70, padding: "5px 6px", fontSize: 11 }} placeholder="Rate" value={it.ratePerUnit || ""} onChange={e => updateSoItem(idx, "ratePerUnit", e.target.value)} /></td>
+                                                        <td style={{ ...TDS, fontWeight: 700, color: C.red, whiteSpace: "nowrap" }}>{cost > 0 ? fc(cost) : "—"}</td>
+                                                        <td style={{ ...TDS, padding: "4px" }}>{soItems.length > 1 && <button style={BTND} onClick={() => removeSoItem(idx)}>✕</button>}</td>
+                                                    </tr>);
+                                                })}
+                                            </tbody>
+                                            <tfoot>
+                                                <tr style={{ background: "#1a0808" }}>
+                                                    <td colSpan={4} style={{ ...TDS, fontWeight: 800, fontSize: 11 }}>Grand Taxable</td>
+                                                    <td style={{ ...TDS, fontWeight: 800, color: C.red }}>{fc(soGrandTaxable)}</td>
+                                                    <td style={TDS}></td>
+                                                </tr>
+                                            </tfoot>
+                                        </table>
+                                    </div>
+                                </div>
+                            </>)}
 
                             <div style={{ background: "#0a0f1e", borderRadius: 8, padding: 12, marginBottom: 9, border: "1px solid " + C.border }}>
                                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
@@ -4861,46 +4876,19 @@
                                 )}
                             </div>
 
-                            {form.qty && form.ratePerUnit && (() => {
-                                const qty = Number(form.qty || 0);
-                                const rate = Number(form.ratePerUnit || 0);
-                                const taxable = qty * rate;
-                                const hasGst = form.enableGst === "yes";
-                                const gstRate = hasGst ? Number(form.gstRate || 18) : 0;
-                                const gstAmount = taxable * (gstRate / 100);
-                                const total = taxable + gstAmount;
-
+                            {soGrandTaxable > 0 && (() => {
+                                const gstAmt = soGrandTaxable * (soGstRate / 100);
+                                const type = form.gstType || "cgst_sgst";
                                 return (
                                     <div style={{ background: C.mid, borderRadius: 8, padding: 12, marginBottom: 9, border: "1px solid " + C.border, display: "grid", gap: 6 }}>
-                                        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11 }}>
-                                            <span style={{ color: C.muted }}>Subtotal (Taxable)</span>
-                                            <span>{fc(taxable)}</span>
-                                        </div>
-                                        {hasGst && (() => {
-                                            const type = form.gstType || "cgst_sgst";
-                                            if (type === "cgst_sgst") {
-                                                return (<>
-                                                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: C.amber }}>
-                                                        <span>CGST ({gstRate / 2}%)</span>
-                                                        <span>{fc(gstAmount / 2)}</span>
-                                                    </div>
-                                                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: C.amber }}>
-                                                        <span>SGST ({gstRate / 2}%)</span>
-                                                        <span>{fc(gstAmount / 2)}</span>
-                                                    </div>
-                                                </>);
-                                            } else {
-                                                return (
-                                                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: C.amber }}>
-                                                        <span>IGST ({gstRate}%)</span>
-                                                        <span>{fc(gstAmount)}</span>
-                                                    </div>
-                                                );
-                                            }
+                                        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11 }}><span style={{ color: C.muted }}>Subtotal (Taxable)</span><span>{fc(soGrandTaxable)}</span></div>
+                                        {soHasGst && (() => {
+                                            if (type === "cgst_sgst") return (<><div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: C.amber }}><span>CGST ({soGstRate / 2}%)</span><span>{fc(gstAmt / 2)}</span></div><div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: C.amber }}><span>SGST ({soGstRate / 2}%)</span><span>{fc(gstAmt / 2)}</span></div></>);
+                                            return <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: C.amber }}><span>IGST ({soGstRate}%)</span><span>{fc(gstAmt)}</span></div>;
                                         })()}
                                         <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 800, fontSize: 13, borderTop: "1px dashed #334155", paddingTop: 4 }}>
                                             <span style={{ color: C.text }}>Grand Total</span>
-                                            <span style={{ color: C.purple }}>{fc(total)}</span>
+                                            <span style={{ color: C.purple }}>{fc(soGrandTotal)}</span>
                                         </div>
                                     </div>
                                 );
@@ -4982,7 +4970,8 @@
                                 </React.Fragment>
                             )}
                             <button style={{ ...BTNP("linear-gradient(90deg,#ef4444,#dc2626)"), width: "100%" }} onClick={applyStockOut}>Save</button>
-                        </div>}
+                        </div>;
+                        })()}
 
                         {modal === "pl" && <div>
                             <div style={{ fontWeight: 800, fontSize: 15, color: "#10b981", marginBottom: 12 }}>📈 P&L Entry</div>
