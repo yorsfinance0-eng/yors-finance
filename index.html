@@ -503,6 +503,7 @@
                 clientCreditPeriod: "30",
                 godown: "",
                 settleMode: "debtor",
+                gstType: "cgst_sgst",
                 items: [],
                 taxableTotal: 0,
                 cgstTotal: 0,
@@ -524,6 +525,7 @@
                     clientCreditPeriod: "30",
                     godown: GODOWNS[0] || "",
                     settleMode: "debtor",
+                    gstType: "cgst_sgst",
                     items: [{ bottleType: "1L", category: "normal", qty: 100, ratePerUnit: 12, taxableValue: 1200, gstRate: 18, cgstRate: 9, cgstAmount: 108, sgstRate: 9, sgstAmount: 108, igstRate: 0, igstAmount: 0, totalAmount: 1416 }],
                     taxableTotal: 1200,
                     cgstTotal: 108,
@@ -1383,7 +1385,8 @@
                             sgstTotal,
                             igstTotal,
                             grandTotal,
-                            paidAmount: paidVal
+                            paidAmount: paidVal,
+                            gstType: inv.gstType || (cgstTotal > 0 || sgstTotal > 0 ? "cgst_sgst" : "igst")
                         }],
                         stockOut: [...(p.stockOut || []), ...newStockOutEntries]
                     };
@@ -2371,7 +2374,8 @@
                         const recalculateTotals = (itemsList, currentForm) => {
                             const compState = company.stateCode || "19";
                             const shipState = currentForm.shipSameAsBill !== false ? currentForm.clientStateCode : currentForm.shipToStateCode;
-                            const isIntra = String(shipState || "").trim() === String(compState).trim();
+                            const gstType = currentForm.gstType || (String(shipState || "").trim() === String(compState).trim() ? "cgst_sgst" : (shipState ? "igst" : "cgst_sgst"));
+                            const isIntra = gstType === "cgst_sgst";
 
                             const updated = itemsList.map(item => {
                                 const qty = Number(item.qty || 0);
@@ -2385,11 +2389,11 @@
                                 if (isIntra) {
                                     cgstRate = gstRate / 2;
                                     sgstRate = gstRate / 2;
-                                    cgstAmount = taxable * (cgstRate / 100);
-                                    sgstAmount = taxable * (sgstRate / 100);
+                                    cgstAmount = Math.round(taxable * (cgstRate / 100) * 100) / 100;
+                                    sgstAmount = Math.round(taxable * (sgstRate / 100) * 100) / 100;
                                 } else {
                                     igstRate = gstRate;
-                                    igstAmount = taxable * (igstRate / 100);
+                                    igstAmount = Math.round(taxable * (igstRate / 100) * 100) / 100;
                                 }
 
                                 return {
@@ -2417,7 +2421,8 @@
                                 cgstTotal,
                                 sgstTotal,
                                 igstTotal,
-                                grandTotal
+                                grandTotal,
+                                gstType
                             };
                         };
 
@@ -2596,7 +2601,11 @@
                         if (selectedGstInvoiceId) {
                             const inv = invoices.find(x => x.id === selectedGstInvoiceId);
                             if (!inv) { setSelectedGstInvoiceId(null); return null; }
-                            const isIntra = String(inv.shipToStateCode || inv.clientStateCode || "").trim() === String(company.stateCode || "").trim();
+                            const isIntra = inv.gstType === "cgst_sgst" ||
+                                Number(inv.cgstTotal || 0) > 0 ||
+                                Number(inv.sgstTotal || 0) > 0 ||
+                                (inv.items && inv.items.some(x => Number(x.cgstAmount || 0) > 0 || Number(x.cgstRate || 0) > 0)) ||
+                                (inv.gstType !== "igst" && (String(inv.shipToStateCode || inv.clientStateCode || "").trim() === String(company.stateCode || "19").trim() || (!inv.shipToStateCode && !inv.clientStateCode)));
                             const gstRate = inv.items[0] ? Number(inv.items[0].gstRate || 18) : 18;
                             const dueDate = inv.date ? (() => { const d = new Date(inv.date); d.setDate(d.getDate() + Number(inv.clientCreditPeriod || 30)); return d.toISOString().slice(0,10); })() : "";
 
@@ -2657,7 +2666,7 @@
                                     {/* ── Header bar ── */}
                                     <div className="inv-header-bar" style={{ background: "#1e3a5f", borderRadius: "6px 6px 0 0", padding: "14px 20px", display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 0 }}>
                                         <div>
-                                            <div style={{ fontSize: 22, fontWeight: 900, color: "#fff", letterSpacing: 1 }}>💧 {company.name || "YORS WATER"}</div>
+                                            <div style={{ fontSize: 22, fontWeight: 900, color: "#fff", letterSpacing: 1 }}>{company.name || "YORS WATER"}</div>
                                             <div style={{ fontSize: 10, color: "#93c5fd", marginTop: 2 }}>Premium Packaged Drinking Water</div>
                                         </div>
                                         <div style={{ textAlign: "right" }}>
@@ -2945,6 +2954,12 @@
 
                                         <label style={{ fontSize: 11, color: "#94a3b8", fontWeight: 700, display: "block", marginBottom: 4 }}>Invoice Date *</label>
                                         <DateInput value={gstInvForm.date} onChange={v => setGstInvForm(prev => ({ ...prev, date: v }))} />
+
+                                        <label style={{ fontSize: 11, color: "#94a3b8", fontWeight: 700, display: "block", marginBottom: 4 }}>GST Tax Type *</label>
+                                        <select style={INP} value={gstInvForm.gstType || "cgst_sgst"} onChange={e => setGstInvForm(prev => { const next = { ...prev, gstType: e.target.value }; const rec = recalculateTotals(next.items, next); return { ...next, ...rec }; })}>
+                                            <option value="cgst_sgst">CGST + SGST (Local)</option>
+                                            <option value="igst">IGST (Inter-State)</option>
+                                        </select>
 
                                         <label style={{ fontSize: 11, color: "#94a3b8", fontWeight: 700, display: "block", marginBottom: 4 }}>Deduct Stock From Godown *</label>
                                         <select style={INP} value={gstInvForm.godown} onChange={e => setGstInvForm(prev => ({ ...prev, godown: e.target.value }))}>
