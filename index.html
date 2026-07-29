@@ -172,6 +172,1204 @@
         const DEPR_PERIODS = ["Monthly", "Half-Yearly", "Yearly"];
         const C = { dark: "#0f172a", mid: "#1e293b", border: "#334155", text: "#e2e8f0", muted: "#64748b", purple: "#a855f7", green: "#22c55e", red: "#ef4444", blue: "#38bdf8", amber: "#f59e0b", violet: "#8b5cf6", teal: "#14b8a6" };
         const INIT = { stockIn: [], stockOut: [], gstInvoices: [], creditors: [], debtors: [], clients: [], plEntries: [], balanceSheet: { assets: {}, liabilities: {} }, cashEntries: [], tradingEntries: [], depreciationAssets: [], rawMaterialPayments: [], openingStock: {}, auditLog: [], settings: { adminPin: "0000", companyProfile: { name: "YORS WATER", gstin: "19AAACY1234A1Z1", stateCode: "19", address: "12, Water Supply Rd, Kolkata, West Bengal", phone: "9876543210" } } };
+        const RESTORE_DATA = {
+  "stockIn": [
+    {
+      "id": "si_july14_200ml_b100",
+      "date": "2026-07-14",
+      "bottleType": "200ml",
+      "category": "normal",
+      "batchNo": "B100",
+      "godown": "Hazra",
+      "qty": 100,
+      "ratePerUnit": 12,
+      "taxableValue": 1200,
+      "gstRate": 18,
+      "cgstAmount": 108,
+      "sgstAmount": 108,
+      "igstAmount": 0,
+      "gstAmount": 216,
+      "totalAmount": 1416,
+      "settleMode": "rawMaterial",
+      "linkedPartyId": null,
+      "linkedPartyName": "Raw Material Pool",
+      "isReturn": false,
+      "paidAmount": 0
+    },
+    {
+      "id": "si_july14_500ml_b100",
+      "date": "2026-07-14",
+      "bottleType": "500ml",
+      "category": "normal",
+      "batchNo": "B100",
+      "godown": "Hazra",
+      "qty": 100,
+      "ratePerUnit": 18,
+      "taxableValue": 1800,
+      "gstRate": 18,
+      "cgstAmount": 162,
+      "sgstAmount": 162,
+      "igstAmount": 0,
+      "gstAmount": 324,
+      "totalAmount": 2124,
+      "settleMode": "rawMaterial",
+      "linkedPartyId": null,
+      "linkedPartyName": "Raw Material Pool",
+      "isReturn": false,
+      "paidAmount": 0
+    },
+    {
+      "id": "si_july14_200ml_b101",
+      "date": "2026-07-14",
+      "bottleType": "200ml",
+      "category": "normal",
+      "batchNo": "B101",
+      "godown": "Hazra",
+      "qty": 100,
+      "ratePerUnit": 12,
+      "taxableValue": 1200,
+      "gstRate": 18,
+      "cgstAmount": 108,
+      "sgstAmount": 108,
+      "igstAmount": 0,
+      "gstAmount": 216,
+      "totalAmount": 1416,
+      "settleMode": "creditor",
+      "linkedPartyId": "mrkd95ew27h0bbu32oy",
+      "linkedPartyName": "SHREE JAGANATH UDYOG",
+      "isReturn": false,
+      "paidAmount": 0
+    }
+  ],
+  "stockOut": [
+    {
+      "id": "so_july14_200ml_jaganath",
+      "date": "2026-07-14",
+      "bottleType": "200ml",
+      "category": "normal",
+      "godown": "Hazra",
+      "clientName": "SHREE JAGANATH UDYOG",
+      "linkedPartyId": "client_jaganath_id",
+      "settleMode": "debtor",
+      "qty": 100,
+      "ratePerUnit": 15,
+      "taxableValue": 1500,
+      "gstRate": 18,
+      "cgstAmount": 135,
+      "sgstAmount": 135,
+      "igstAmount": 0,
+      "gstAmount": 270,
+      "totalAmount": 1770,
+      "isReturn": false
+    },
+    {
+      "id": "so_july14_500ml_jaganath",
+      "date": "2026-07-14",
+      "bottleType": "500ml",
+      "category": "normal",
+      "godown": "Hazra",
+      "clientName": "SHREE JAGANATH UDYOG",
+      "linkedPartyId": "client_jaganath_id",
+      "settleMode": "debtor",
+      "qty": 50,
+      "ratePerUnit": 25,
+      "taxableValue": 1250,
+      "gstRate": 18,
+      "cgstAmount": 112.5,
+      "sgstAmount": 112.5,
+      "igstAmount": 0,
+      "gstAmount": 225,
+      "totalAmount": 1475,
+      "isReturn": false
+    }
+  ],
+  "debtors": [
+    {
+      "id": "debtor_jaganath_id",
+      "name": "SHREE JAGANATH UDYOG",
+      "creditPeriod": "7",
+      "date": "2026-07-14",
+      "openingBalance": 0
+    }
+  ],
+  "gstInvoices": [],
+  "clients": [
+    {
+      "id": "client_jaganath_id",
+      "name": "SHREE JAGANATH UDYOG",
+      "clientType": "Distributor",
+      "phone": "7439908661",
+      "address": "Kolkata",
+      "gstin": "19AAACY1234A1Z1",
+      "creditPeriod": "7",
+      "date": "2026-07-14"
+    }
+  ],
+  "depreciationAssets": [],
+  "glEntries": [],
+  "auditLogs": [],
+  "openingStock": {
+    "date": "2026-07-11",
+    "amount": 0
+  },
+  "cashEntries": [
+    {
+      "amount": 500000,
+      "linkedId": null,
+      "payType": "Capital Introduced",
+      "date": "2026-07-11",
+      "description": "ANAND CAPITAL",
+      "dir": "in",
+      "sourceId": "mrg4yail9twbmy8tn5j",
+      "id": "mrg4yaimetojeu9gsd6"
+    },
+    {
+      "sourceId": "mrg4yps4vhj9yt32ku",
+      "date": "2026-07-11",
+      "dir": "in",
+      "description": "YASH CAPITAL",
+      "payType": "Capital Introduced",
+      "linkedId": null,
+      "amount": 500000,
+      "id": "mrg4yps4vxl1n2rjsp"
+    },
+    {
+      "id": "mrg52tmofb5neryan8j",
+      "payType": "Expense Payment",
+      "linkedId": null,
+      "amount": 37510,
+      "dir": "out",
+      "date": "2026-07-11",
+      "description": "Trading: CAP(RAW MATERIAL)",
+      "sourceId": "mrg52tmoiel9e23w7vp"
+    },
+    {
+      "id": "mrg54y75cgjwgu8hkdo",
+      "date": "2026-07-11",
+      "dir": "out",
+      "description": "SECURITY DEPOSIT",
+      "linkedId": null,
+      "amount": 50000,
+      "payType": "Other Payment",
+      "sourceId": "mrg54y758vm5jfk5903"
+    },
+    {
+      "sourceId": "mrg7hyx94uhz9e453jw",
+      "amount": 1100,
+      "payType": "Expense Payment",
+      "linkedId": null,
+      "description": "Petrol",
+      "dir": "out",
+      "date": "2026-07-11",
+      "id": "mrg7hyx91qo89dalfjl"
+    },
+    {
+      "id": "mrgudx4e87kkusah8de",
+      "payType": "Loan Received",
+      "amount": 556000,
+      "linkedId": null,
+      "description": "Loan Received: IDFC",
+      "dir": "in",
+      "date": "2026-07-12",
+      "sourceId": "mrgudx4exkoysmiaaa"
+    },
+    {
+      "sourceId": "mrgudx4ewerzqtkykr8",
+      "description": "Purchase of Asset: VEHICLE (Down Payment: ₹90000)",
+      "date": "2026-07-12",
+      "dir": "out",
+      "payType": "Asset Down Payment",
+      "linkedId": null,
+      "amount": 646000,
+      "id": "mrgudx4edegytq7qidm"
+    },
+    {
+      "id": "mrhu9aowy6j3fivizi9",
+      "sourceId": "mrhu9aow47sbcu6uupp",
+      "description": "operation cost {dec-june}",
+      "date": "2026-07-12",
+      "dir": "out",
+      "linkedId": null,
+      "payType": "Expense Payment",
+      "amount": 500000
+    },
+    {
+      "id": "mrivwayafibuviv4w5f",
+      "description": "Office expenses ",
+      "date": "2026-07-13",
+      "dir": "out",
+      "linkedId": null,
+      "amount": 55000,
+      "payType": "Expense Payment",
+      "sourceId": "mrivwayaxtb3fhofd2m"
+    },
+    {
+      "sourceId": "mrkd95ew6qam4bb83ia",
+      "linkedId": "mrkd95ew27h0bbu32oy",
+      "amount": 50000,
+      "payType": "Raw Material Payment",
+      "description": "Partial payment for Raw Material: Label",
+      "dir": "out",
+      "date": "2026-07-14",
+      "id": "mrkd95ew4kzl5dsjpes"
+    },
+    {
+      "id": "mrkdah9qjd0hahw1a6",
+      "amount": 37509.84,
+      "payType": "Raw Material Payment",
+      "linkedId": null,
+      "dir": "out",
+      "date": "2026-07-14",
+      "description": "Raw Material: Cap",
+      "sourceId": "mrkdah9qq6vob8e1kh"
+    }
+  ],
+  "rawMaterialPayments": [
+    {
+      "sgstAmount": 10041.48,
+      "totalAmount": 131654.96,
+      "gstRate": 18,
+      "description": "Raw Material: Label",
+      "usedForStockIn": 0,
+      "id": "mrkd95ew6qam4bb83ia",
+      "rawMatType": "Label",
+      "cgstAmount": 10041.48,
+      "linkedPartyName": "SHREE JAGANATH UDYOG",
+      "linkedPartyId": "mrkd95ew27h0bbu32oy",
+      "usedForStockInBase": 0,
+      "igstAmount": 0,
+      "settleMode": "creditor",
+      "paidAmount": 50000,
+      "gstType": "cgst_sgst",
+      "createdCreditorId": "mrkd95ew27h0bbu32oy",
+      "gstAmount": 20082.96,
+      "amount": 111572,
+      "date": "2026-07-14"
+    },
+    {
+      "linkedPartyName": "Cash",
+      "linkedPartyId": null,
+      "usedForStockInBase": 0,
+      "igstAmount": 0,
+      "settleMode": "cash",
+      "amount": 31788,
+      "date": "2026-07-14",
+      "paidAmount": 0,
+      "createdCreditorId": null,
+      "gstType": "cgst_sgst",
+      "gstAmount": 5721.84,
+      "description": "Raw Material: Cap",
+      "usedForStockIn": 0,
+      "sgstAmount": 2860.92,
+      "totalAmount": 37509.84,
+      "gstRate": 18,
+      "cgstAmount": 2860.92,
+      "id": "mrkdah9qq6vob8e1kh",
+      "rawMatType": "Cap"
+    }
+  ],
+  "plEntries": [
+    {
+      "amount": 1100,
+      "category": "Other Expenses",
+      "date": "2026-07-11",
+      "id": "mrg7hyx94uhz9e453jw",
+      "createdCreditorId": null,
+      "createdDebtorId": null,
+      "linkedPartyId": null,
+      "linkedPartyName": "Cash",
+      "description": "Petrol",
+      "settleMode": "cash",
+      "side": "expense"
+    },
+    {
+      "createdDebtorId": null,
+      "linkedPartyId": null,
+      "linkedPartyName": "Cash",
+      "settleMode": "cash",
+      "side": "expense",
+      "amount": 500000,
+      "category": "Finance Costs",
+      "date": "2026-07-12",
+      "createdCreditorId": null,
+      "gstAmount": 0,
+      "description": "operation cost {dec-june}",
+      "totalAmount": 500000,
+      "gstRate": 0,
+      "id": "mrhu9aow47sbcu6uupp"
+    },
+    {
+      "totalAmount": 55000,
+      "gstRate": 0,
+      "description": "Office expenses ",
+      "id": "mrivwayaxtb3fhofd2m",
+      "side": "expense",
+      "linkedPartyId": null,
+      "createdDebtorId": null,
+      "linkedPartyName": "Cash",
+      "settleMode": "cash",
+      "createdCreditorId": null,
+      "gstAmount": 0,
+      "amount": 55000,
+      "category": "Other Expenses",
+      "date": "2026-07-13"
+    }
+  ],
+  "tradingEntries": [
+    {
+      "date": "2026-07-11",
+      "amount": 37510,
+      "createdCreditorId": null,
+      "id": "mrg52tmoiel9e23w7vp",
+      "settleMode": "cash",
+      "description": "CAP(RAW MATERIAL)",
+      "linkedPartyId": null,
+      "linkedPartyName": "Cash",
+      "createdDebtorId": null,
+      "side": "dr"
+    }
+  ],
+  "creditors": [
+    {
+      "creditPeriod": "7",
+      "checked": false,
+      "name": "SHREE JAGANATH UDYOG",
+      "id": "mrkd95ew27h0bbu32oy",
+      "notified": false,
+      "date": "2026-07-14",
+      "amount": 0
+    }
+  ],
+  "auditLog": [
+    {
+      "entryId": "mrkgf22u3b1l4kvgjx6",
+      "id": "mrkgp1xt7cghf87kq8b",
+      "desc": "Deleted entry from stockIn",
+      "module": "stockIn",
+      "user": "yorsfinance0@gmail.com",
+      "ts": "2026-07-14T09:41:39.473Z",
+      "action": "DELETE"
+    },
+    {
+      "action": "CREATE",
+      "ts": "2026-07-14T09:33:53.094Z",
+      "module": "stockIn",
+      "user": "yorsfinance0@gmail.com",
+      "desc": "Added Stock In of 100 200ml",
+      "id": "mrkgf22uqbgm6wo03o",
+      "entryId": "mrkgf22u3b1l4kvgjx6"
+    },
+    {
+      "id": "mrkdah9q61apf06s8c5",
+      "entryId": "mrkdah9qq6vob8e1kh",
+      "action": "CREATE",
+      "ts": "2026-07-14T08:06:20.654Z",
+      "user": "yorsfinance0@gmail.com",
+      "module": "rawMaterialPayments",
+      "desc": "Added Raw Material Payment: Cap — Base: ₹31788, GST: ₹5721.84"
+    },
+    {
+      "desc": "Added Raw Material Payment: Label — Base: ₹111572, GST: ₹20082.96",
+      "module": "rawMaterialPayments",
+      "user": "yorsfinance0@gmail.com",
+      "ts": "2026-07-14T08:05:18.632Z",
+      "action": "CREATE",
+      "entryId": "mrkd95ew6qam4bb83ia",
+      "id": "mrkd95ewkthcyz3n37"
+    },
+    {
+      "entryId": "mrg53hzaxz4opjhvucs",
+      "id": "mrkc8j6hrd387r6jjsp",
+      "desc": "Deleted entry from tradingEntries",
+      "user": "yorsfinance0@gmail.com",
+      "module": "tradingEntries",
+      "ts": "2026-07-14T07:36:50.201Z",
+      "action": "DELETE"
+    },
+    {
+      "ts": "2026-07-14T07:02:55.134Z",
+      "action": "DELETE",
+      "desc": "Deleted entry from stockIn",
+      "module": "stockIn",
+      "user": "yorsfinance0@gmail.com",
+      "entryId": "mrkb0fc3445wm6j0gia",
+      "id": "mrkb0wwulwyarx218og"
+    },
+    {
+      "action": "CREATE",
+      "ts": "2026-07-14T07:02:32.355Z",
+      "user": "yorsfinance0@gmail.com",
+      "module": "stockIn",
+      "desc": "Added Stock In of 100 500ml",
+      "id": "mrkb0fc30f371rd1wg5t",
+      "entryId": "mrkb0fc3445wm6j0gia"
+    },
+    {
+      "action": "DELETE",
+      "ts": "2026-07-14T07:01:29.620Z",
+      "user": "yorsfinance0@gmail.com",
+      "module": "stockIn",
+      "desc": "Deleted entry from stockIn",
+      "id": "mrkaz2xgqvutrerqpf",
+      "entryId": "mrkayq1vmgj03gs6f0s"
+    },
+    {
+      "ts": "2026-07-14T07:01:12.931Z",
+      "action": "CREATE",
+      "desc": "Added Stock In of 100 200ml",
+      "user": "yorsfinance0@gmail.com",
+      "module": "stockIn",
+      "entryId": "mrkayq1vmgj03gs6f0s",
+      "id": "mrkayq1v1bxv21j4gnw"
+    },
+    {
+      "id": "mrivwayhu2au8frvdxg",
+      "entryId": "mrivwayaxtb3fhofd2m",
+      "action": "CREATE",
+      "ts": "2026-07-13T07:11:39.641Z",
+      "module": "plEntries",
+      "user": "yorsfinance0@gmail.com",
+      "desc": "Added P&L Entry: Office expenses "
+    },
+    {
+      "module": "tradingEntries",
+      "user": "yorsfinance0@gmail.com",
+      "desc": "Deleted entry from tradingEntries",
+      "action": "DELETE",
+      "ts": "2026-07-13T07:10:27.438Z",
+      "id": "mrivur8utm3d8tvpb1",
+      "entryId": "mrivuk5pix1cdoml9e"
+    },
+    {
+      "desc": "Added Trading Entry: Office expenses ",
+      "user": "yorsfinance0@gmail.com",
+      "module": "tradingEntries",
+      "ts": "2026-07-13T07:10:18.263Z",
+      "action": "CREATE",
+      "entryId": "mrivuk5pix1cdoml9e",
+      "id": "mrivuk5zubj3ogtw1c"
+    },
+    {
+      "id": "mrhu9aowdxl2z255v1d",
+      "entryId": "mrhu9aow47sbcu6uupp",
+      "user": "yorsfinance0@gmail.com",
+      "module": "plEntries",
+      "desc": "Added P&L Entry: operation cost {dec-june}",
+      "action": "CREATE",
+      "ts": "2026-07-12T13:38:00.416Z"
+    },
+    {
+      "desc": "Deleted entry from plEntries",
+      "user": "yorsfinance0@gmail.com",
+      "module": "plEntries",
+      "ts": "2026-07-12T13:36:57.522Z",
+      "action": "DELETE",
+      "entryId": "mrhu78l5751877lt6ri",
+      "id": "mrhu7y5u5q3t0lzs7lg"
+    },
+    {
+      "id": "mrhu78l6qiwoy93okg",
+      "entryId": "mrhu78l5751877lt6ri",
+      "module": "plEntries",
+      "user": "yorsfinance0@gmail.com",
+      "desc": "Added P&L Entry: operation cost",
+      "action": "CREATE",
+      "ts": "2026-07-12T13:36:24.378Z"
+    },
+    {
+      "desc": "Auto-created Loan: IDFC",
+      "user": "yorsfinance0@gmail.com",
+      "module": "balanceSheet.liabilities",
+      "ts": "2026-07-11T20:53:49.934Z",
+      "action": "CREATE",
+      "entryId": "mrgudx4exkoysmiaaa",
+      "id": "mrgudx4evlamf4mfjo"
+    },
+    {
+      "id": "mrgudx4ecjvzv1xjx8d",
+      "entryId": "mrgudx4ewerzqtkykr8",
+      "action": "CREATE",
+      "ts": "2026-07-11T20:53:49.934Z",
+      "user": "yorsfinance0@gmail.com",
+      "module": "balanceSheet.assets",
+      "desc": "Added Asset: VEHICLE (Loan-financed, Down ₹90000)"
+    },
+    {
+      "ts": "2026-07-11T20:53:02.951Z",
+      "action": "DELETE",
+      "desc": "Deleted Balance Sheet entry",
+      "module": "balanceSheet.assets",
+      "user": "yorsfinance0@gmail.com",
+      "entryId": "mrgu1bj2kgrjcd7zet",
+      "id": "mrgucwvbpowz7mymkxh"
+    },
+    {
+      "action": "DELETE",
+      "ts": "2026-07-11T20:53:02.951Z",
+      "user": "yorsfinance0@gmail.com",
+      "module": "balanceSheet.liabilities",
+      "desc": "Auto-deleted linked Loan (asset deleted)",
+      "id": "mrgucwvbdyrtf3s2ol7",
+      "entryId": "mrgu1bj2ah3hqbt8aca"
+    },
+    {
+      "action": "CREATE",
+      "ts": "2026-07-11T20:44:02.078Z",
+      "user": "yorsfinance0@gmail.com",
+      "module": "balanceSheet.liabilities",
+      "desc": "Auto-created Loan: IDFC",
+      "id": "mrgu1bj2bnzsawp6n38",
+      "entryId": "mrgu1bj2ah3hqbt8aca"
+    },
+    {
+      "action": "CREATE",
+      "ts": "2026-07-11T20:44:02.078Z",
+      "module": "balanceSheet.assets",
+      "user": "yorsfinance0@gmail.com",
+      "desc": "Added Asset: VEHICLE (Loan-financed, Down ₹90000)",
+      "id": "mrgu1bj2f0kvz8qw23",
+      "entryId": "mrgu1bj2kgrjcd7zet"
+    },
+    {
+      "action": "DELETE",
+      "ts": "2026-07-11T20:43:09.675Z",
+      "user": "yorsfinance0@gmail.com",
+      "module": "balanceSheet.assets",
+      "desc": "Deleted Balance Sheet entry",
+      "id": "mrgu073fjp8z6e7z1",
+      "entryId": "mrgu020kxb5dhj1mhqq"
+    },
+    {
+      "entryId": "mrgu020ku6x5epf6qj",
+      "id": "mrgu073fw7h32qwfybh",
+      "desc": "Auto-deleted linked Loan (asset deleted)",
+      "user": "yorsfinance0@gmail.com",
+      "module": "balanceSheet.liabilities",
+      "ts": "2026-07-11T20:43:09.675Z",
+      "action": "DELETE"
+    },
+    {
+      "action": "CREATE",
+      "ts": "2026-07-11T20:43:03.093Z",
+      "module": "balanceSheet.liabilities",
+      "user": "yorsfinance0@gmail.com",
+      "desc": "Auto-created Loan: IDFC",
+      "id": "mrgu020lcqfjy5ttbm",
+      "entryId": "mrgu020ku6x5epf6qj"
+    },
+    {
+      "entryId": "mrgu020kxb5dhj1mhqq",
+      "id": "mrgu020lktxqljvxy7",
+      "ts": "2026-07-11T20:43:03.093Z",
+      "action": "CREATE",
+      "desc": "Added Asset: vehicle (Loan-financed, Down ₹89999)",
+      "user": "yorsfinance0@gmail.com",
+      "module": "balanceSheet.assets"
+    },
+    {
+      "action": "DELETE",
+      "ts": "2026-07-11T20:42:06.339Z",
+      "user": "yorsfinance0@gmail.com",
+      "module": "balanceSheet.assets",
+      "desc": "Deleted Balance Sheet entry",
+      "id": "mrgtyu83zf7uwuvj13r",
+      "entryId": "mrgsuctlymkq949vspg"
+    },
+    {
+      "module": "balanceSheet.liabilities",
+      "user": "yorsfinance0@gmail.com",
+      "desc": "Auto-deleted linked Loan (asset deleted)",
+      "action": "DELETE",
+      "ts": "2026-07-11T20:42:06.339Z",
+      "id": "mrgtyu83z27hn7ty1ob",
+      "entryId": "mrgsuctldqhkq90mj79"
+    },
+    {
+      "action": "DELETE",
+      "ts": "2026-07-11T20:27:37.260Z",
+      "module": "plEntries",
+      "user": "yorsfinance0@gmail.com",
+      "desc": "Deleted entry from plEntries",
+      "id": "mrgtg7n01zvli2nizkn",
+      "entryId": "mrgtfeghf1ixhtvmbt7"
+    },
+    {
+      "id": "mrgtfqko14wivl68pb6i",
+      "entryId": "mrgtfeghf1ixhtvmbt7",
+      "action": "UPDATE",
+      "ts": "2026-07-11T20:27:15.144Z",
+      "module": "plEntries",
+      "user": "yorsfinance0@gmail.com",
+      "desc": "Aggregated P&L Entry: a"
+    },
+    {
+      "desc": "Added P&L Entry: a",
+      "module": "plEntries",
+      "user": "yorsfinance0@gmail.com",
+      "ts": "2026-07-11T20:26:59.441Z",
+      "action": "CREATE",
+      "entryId": "mrgtfeghf1ixhtvmbt7",
+      "id": "mrgtfeghqgaoao0btmf"
+    },
+    {
+      "action": "DELETE",
+      "ts": "2026-07-11T20:26:29.739Z",
+      "module": "plEntries",
+      "user": "yorsfinance0@gmail.com",
+      "desc": "Deleted entry from plEntries",
+      "id": "mrgterjf2c8jtuoi6fs",
+      "entryId": "mrgsobsx0pftvw6fl6bq"
+    },
+    {
+      "desc": "Deleted entry from cashEntries",
+      "user": "yorsfinance0@gmail.com",
+      "module": "cashEntries",
+      "ts": "2026-07-11T20:26:24.756Z",
+      "action": "DELETE",
+      "entryId": "mrgsobsy98ev2gr0d7",
+      "id": "mrgtenp04zizpajbhi"
+    },
+    {
+      "id": "mrgte8t64d7iwcrcxcj",
+      "entryId": "mrgsobsy98ev2gr0d7",
+      "action": "UPDATE",
+      "ts": "2026-07-11T20:26:05.466Z",
+      "module": "cashEntries",
+      "user": "yorsfinance0@gmail.com",
+      "desc": "Settled pending cash entry: [PENDING] WATRE"
+    },
+    {
+      "module": "balanceSheet.liabilities",
+      "user": "yorsfinance0@gmail.com",
+      "desc": "Auto-created Loan: IDFC",
+      "action": "CREATE",
+      "ts": "2026-07-11T20:10:37.546Z",
+      "id": "mrgsuctmpv305t02y49",
+      "entryId": "mrgsuctldqhkq90mj79"
+    },
+    {
+      "desc": "Added Asset: VEHICLE (Loan-financed, Down ₹90000)",
+      "module": "balanceSheet.assets",
+      "user": "yorsfinance0@gmail.com",
+      "ts": "2026-07-11T20:10:37.546Z",
+      "action": "CREATE",
+      "entryId": "mrgsuctlymkq949vspg",
+      "id": "mrgsuctm5mtnap50hhj"
+    },
+    {
+      "user": "yorsfinance0@gmail.com",
+      "module": "balanceSheet.assets",
+      "desc": "Deleted Balance Sheet entry",
+      "action": "DELETE",
+      "ts": "2026-07-11T20:09:29.077Z",
+      "id": "mrgssvzpq65e205uncd",
+      "entryId": "mrgsmmhhuhmvr23pjpp"
+    },
+    {
+      "id": "mrgssvzpui5gci5muzg",
+      "entryId": "mrgsmmhhn9kjr9d4vxk",
+      "user": "yorsfinance0@gmail.com",
+      "module": "balanceSheet.liabilities",
+      "desc": "Auto-deleted linked Loan (asset deleted)",
+      "action": "DELETE",
+      "ts": "2026-07-11T20:09:29.077Z"
+    },
+    {
+      "entryId": "mrgs5lrohij3jfudj6r",
+      "id": "mrgsspagjblldetrf59",
+      "ts": "2026-07-11T20:09:20.392Z",
+      "action": "DELETE",
+      "desc": "Deleted Balance Sheet entry",
+      "module": "balanceSheet.liabilities",
+      "user": "yorsfinance0@gmail.com"
+    },
+    {
+      "entryId": "mrgs5lro074dtm4hppl3",
+      "id": "mrgsspagsp25xpk3cva",
+      "desc": "Auto-deleted linked Asset (loan deleted)",
+      "user": "yorsfinance0@gmail.com",
+      "module": "balanceSheet.assets",
+      "ts": "2026-07-11T20:09:20.392Z",
+      "action": "DELETE"
+    },
+    {
+      "id": "mrgsso65uu1gqesflto",
+      "entryId": "mrg4vnds7rxiz97sjk",
+      "action": "DELETE",
+      "ts": "2026-07-11T20:09:18.941Z",
+      "module": "balanceSheet.liabilities",
+      "user": "yorsfinance0@gmail.com",
+      "desc": "Deleted Balance Sheet entry"
+    },
+    {
+      "desc": "Auto-deleted linked Asset (loan deleted)",
+      "user": "yorsfinance0@gmail.com",
+      "module": "balanceSheet.assets",
+      "ts": "2026-07-11T20:09:18.941Z",
+      "action": "DELETE",
+      "entryId": "mrg4vndsx29wxnsknhs",
+      "id": "mrgsso65y6v38dzm97m"
+    },
+    {
+      "id": "mrgssmzmtegqo3ocmd",
+      "entryId": "mrg57voay8a59g9t7gg",
+      "module": "balanceSheet.liabilities",
+      "user": "yorsfinance0@gmail.com",
+      "desc": "Deleted Balance Sheet entry",
+      "action": "DELETE",
+      "ts": "2026-07-11T20:09:17.410Z"
+    },
+    {
+      "id": "mrgssmzmpc958ri86zj",
+      "entryId": "mrg57voai9hl42vrxje",
+      "action": "DELETE",
+      "ts": "2026-07-11T20:09:17.410Z",
+      "module": "balanceSheet.assets",
+      "user": "yorsfinance0@gmail.com",
+      "desc": "Auto-deleted linked Asset (loan deleted)"
+    },
+    {
+      "desc": "Added P&L Entry: WATRE",
+      "module": "plEntries",
+      "user": "yorsfinance0@gmail.com",
+      "ts": "2026-07-11T20:05:56.290Z",
+      "action": "CREATE",
+      "entryId": "mrgsobsx0pftvw6fl6bq",
+      "id": "mrgsobsyqiuy64bd9o"
+    },
+    {
+      "action": "CREATE",
+      "ts": "2026-07-11T20:04:36.821Z",
+      "user": "yorsfinance0@gmail.com",
+      "module": "balanceSheet.liabilities",
+      "desc": "Auto-created Loan: IDFC",
+      "id": "mrgsmmhh802otor8vs6",
+      "entryId": "mrgsmmhhn9kjr9d4vxk"
+    },
+    {
+      "id": "mrgsmmhhj3o1cr98zqd",
+      "entryId": "mrgsmmhhuhmvr23pjpp",
+      "module": "balanceSheet.assets",
+      "user": "yorsfinance0@gmail.com",
+      "desc": "Added Asset: VEHICLE (Loan-financed, Down ₹90000)",
+      "action": "CREATE",
+      "ts": "2026-07-11T20:04:36.821Z"
+    },
+    {
+      "id": "mrgsl7k3b7w7c8x8q4h",
+      "entryId": "mrgs5lrohij3jfudj6r",
+      "action": "DELETE",
+      "ts": "2026-07-11T20:03:30.819Z",
+      "user": "yorsfinance0@gmail.com",
+      "module": "balanceSheet.liabilities",
+      "desc": "Deleted Balance Sheet entry"
+    },
+    {
+      "ts": "2026-07-11T20:03:27.808Z",
+      "action": "DELETE",
+      "desc": "Deleted Balance Sheet entry",
+      "user": "yorsfinance0@gmail.com",
+      "module": "balanceSheet.assets",
+      "entryId": "mrgs5lro074dtm4hppl3",
+      "id": "mrgsl58gnkwdz8pgkfo"
+    },
+    {
+      "id": "mrgsl486x4b6yjj79xd",
+      "entryId": "mrg4vndsx29wxnsknhs",
+      "user": "yorsfinance0@gmail.com",
+      "module": "balanceSheet.assets",
+      "desc": "Deleted Balance Sheet entry",
+      "action": "DELETE",
+      "ts": "2026-07-11T20:03:26.502Z"
+    },
+    {
+      "action": "DELETE",
+      "ts": "2026-07-11T20:03:26.107Z",
+      "module": "balanceSheet.assets",
+      "user": "yorsfinance0@gmail.com",
+      "desc": "Deleted Balance Sheet entry",
+      "id": "mrgsl3x77jwppgi3mhg",
+      "entryId": "mrg57voai9hl42vrxje"
+    },
+    {
+      "entryId": "mrg4vnds7rxiz97sjk",
+      "id": "mrgsl201gtbpglkcqq9",
+      "desc": "Deleted Balance Sheet entry",
+      "module": "balanceSheet.liabilities",
+      "user": "yorsfinance0@gmail.com",
+      "ts": "2026-07-11T20:03:23.617Z",
+      "action": "DELETE"
+    },
+    {
+      "action": "DELETE",
+      "ts": "2026-07-11T20:03:22.452Z",
+      "module": "balanceSheet.liabilities",
+      "user": "yorsfinance0@gmail.com",
+      "desc": "Deleted Balance Sheet entry",
+      "id": "mrgsl13ogack58uarnf",
+      "entryId": "mrg57voay8a59g9t7gg"
+    },
+    {
+      "entryId": "mrg4vndsx29wxnsknhs",
+      "id": "mrgsihyn2w40j5zdfn5",
+      "ts": "2026-07-11T20:01:24.335Z",
+      "action": "DELETE",
+      "desc": "Deleted Balance Sheet entry",
+      "module": "balanceSheet.assets",
+      "user": "yorsfinance0@gmail.com"
+    },
+    {
+      "user": "yorsfinance0@gmail.com",
+      "module": "balanceSheet.assets",
+      "desc": "Deleted Balance Sheet entry",
+      "action": "DELETE",
+      "ts": "2026-07-11T20:01:23.700Z",
+      "id": "mrgsihh0tomo4phrjhd",
+      "entryId": "mrg57voai9hl42vrxje"
+    },
+    {
+      "action": "DELETE",
+      "ts": "2026-07-11T20:01:20.252Z",
+      "module": "balanceSheet.liabilities",
+      "user": "yorsfinance0@gmail.com",
+      "desc": "Deleted Balance Sheet entry",
+      "id": "mrgsiet8tj6hgs9s72",
+      "entryId": "mrg4vnds7rxiz97sjk"
+    },
+    {
+      "action": "DELETE",
+      "ts": "2026-07-11T20:01:18.816Z",
+      "module": "balanceSheet.liabilities",
+      "user": "yorsfinance0@gmail.com",
+      "desc": "Deleted Balance Sheet entry",
+      "id": "mrgsidpc71tdyn9ijkc",
+      "entryId": "mrg57voay8a59g9t7gg"
+    },
+    {
+      "ts": "2026-07-11T19:56:50.296Z",
+      "action": "DELETE",
+      "desc": "Deleted Balance Sheet entry",
+      "module": "balanceSheet.assets",
+      "user": "yorsfinance0@gmail.com",
+      "entryId": "mrg57voai9hl42vrxje",
+      "id": "mrgscmigwb2ejbmzwj"
+    },
+    {
+      "entryId": "mrg4vndsx29wxnsknhs",
+      "id": "mrgsclz0m6a61bmqpw",
+      "desc": "Deleted Balance Sheet entry",
+      "module": "balanceSheet.assets",
+      "user": "yorsfinance0@gmail.com",
+      "ts": "2026-07-11T19:56:49.596Z",
+      "action": "DELETE"
+    },
+    {
+      "user": "yorsfinance0@gmail.com",
+      "module": "balanceSheet.liabilities",
+      "desc": "Deleted Balance Sheet entry",
+      "action": "DELETE",
+      "ts": "2026-07-11T19:56:45.869Z",
+      "id": "mrgscj3h3gb5pmhs1j2",
+      "entryId": "mrg4vnds7rxiz97sjk"
+    },
+    {
+      "id": "mrgsci45nu7jeot61dr",
+      "entryId": "mrg57voay8a59g9t7gg",
+      "action": "DELETE",
+      "ts": "2026-07-11T19:56:44.597Z",
+      "user": "yorsfinance0@gmail.com",
+      "module": "balanceSheet.liabilities",
+      "desc": "Deleted Balance Sheet entry"
+    },
+    {
+      "entryId": "mrgs5lrohij3jfudj6r",
+      "id": "mrgs5lrozo6uwtgbzs",
+      "ts": "2026-07-11T19:51:22.740Z",
+      "action": "CREATE",
+      "desc": "Auto-created Loan: IDFC",
+      "user": "yorsfinance0@gmail.com",
+      "module": "balanceSheet.liabilities"
+    },
+    {
+      "user": "yorsfinance0@gmail.com",
+      "module": "balanceSheet.assets",
+      "desc": "Added Asset: vehicle (Loan-financed, Down ₹90000)",
+      "action": "CREATE",
+      "ts": "2026-07-11T19:51:22.740Z",
+      "id": "mrgs5lro8a2msg67ixp",
+      "entryId": "mrgs5lro074dtm4hppl3"
+    },
+    {
+      "entryId": "mrg4vnds7rxiz97sjk",
+      "id": "mrgs2che2wxtpm35dry",
+      "desc": "Deleted Balance Sheet entry",
+      "user": "yorsfinance0@gmail.com",
+      "module": "balanceSheet.liabilities",
+      "ts": "2026-07-11T19:48:50.738Z",
+      "action": "DELETE"
+    },
+    {
+      "entryId": "mrg57voay8a59g9t7gg",
+      "id": "mrgs2b3fls21bcspmls",
+      "desc": "Deleted Balance Sheet entry",
+      "user": "yorsfinance0@gmail.com",
+      "module": "balanceSheet.liabilities",
+      "ts": "2026-07-11T19:48:48.939Z",
+      "action": "DELETE"
+    },
+    {
+      "entryId": "mrg57voai9hl42vrxje",
+      "id": "mrgs29per5grh605cr",
+      "ts": "2026-07-11T19:48:47.138Z",
+      "action": "DELETE",
+      "desc": "Deleted Balance Sheet entry",
+      "module": "balanceSheet.assets",
+      "user": "yorsfinance0@gmail.com"
+    },
+    {
+      "entryId": "mrg4vndsx29wxnsknhs",
+      "id": "mrgs290hv5vhwsdiflr",
+      "ts": "2026-07-11T19:48:46.241Z",
+      "action": "DELETE",
+      "desc": "Deleted Balance Sheet entry",
+      "user": "yorsfinance0@gmail.com",
+      "module": "balanceSheet.assets"
+    },
+    {
+      "ts": "2026-07-11T10:13:07.726Z",
+      "action": "CREATE",
+      "desc": "Added P&L Entry: Petrol",
+      "module": "plEntries",
+      "user": "yorsfinance0@gmail.com",
+      "entryId": "mrg7hyx94uhz9e453jw",
+      "id": "mrg7hyxad6uc9ywv5de"
+    },
+    {
+      "entryId": "mrg4vnds7rxiz97sjk",
+      "id": "mrg5nh5tzpo1pm0zu7a",
+      "desc": "Deleted Balance Sheet entry",
+      "module": "balanceSheet.liabilities",
+      "user": "yorsfinance0@gmail.com",
+      "ts": "2026-07-11T09:21:25.409Z",
+      "action": "DELETE"
+    },
+    {
+      "module": "balanceSheet.assets",
+      "user": "yorsfinance0@gmail.com",
+      "desc": "Deleted Balance Sheet entry",
+      "action": "DELETE",
+      "ts": "2026-07-11T09:21:23.240Z",
+      "id": "mrg5nfhkumzyn50yd6",
+      "entryId": "mrg57voai9hl42vrxje"
+    },
+    {
+      "id": "mrg57vobjxvayw6geb",
+      "entryId": "mrg57voay8a59g9t7gg",
+      "action": "CREATE",
+      "ts": "2026-07-11T09:09:17.723Z",
+      "user": "yorsfinance0@gmail.com",
+      "module": "balanceSheet.liabilities",
+      "desc": "Auto-created Loan: IDFC"
+    },
+    {
+      "entryId": "mrg57voai9hl42vrxje",
+      "id": "mrg57vobqczf84px77b",
+      "desc": "Added Asset: VEHICLE (Loan-financed, Down ₹90000)",
+      "module": "balanceSheet.assets",
+      "user": "yorsfinance0@gmail.com",
+      "ts": "2026-07-11T09:09:17.723Z",
+      "action": "CREATE"
+    },
+    {
+      "module": "balanceSheet.liabilities",
+      "user": "yorsfinance0@gmail.com",
+      "desc": "Deleted Balance Sheet entry",
+      "action": "DELETE",
+      "ts": "2026-07-11T09:07:52.812Z",
+      "id": "mrg5625opg9mkyxpiz",
+      "entryId": "mrg4vnds7rxiz97sjk"
+    },
+    {
+      "entryId": "mrg4vndsx29wxnsknhs",
+      "id": "mrg560oden067glf85w",
+      "desc": "Deleted Balance Sheet entry",
+      "user": "yorsfinance0@gmail.com",
+      "module": "balanceSheet.assets",
+      "ts": "2026-07-11T09:07:50.893Z",
+      "action": "DELETE"
+    },
+    {
+      "entryId": "mrg4vndswsxlwm7r6af",
+      "id": "mrg55xz0eprkn0kn89a",
+      "desc": "Deleted entry from cashEntries",
+      "module": "cashEntries",
+      "user": "yorsfinance0@gmail.com",
+      "ts": "2026-07-11T09:07:47.388Z",
+      "action": "DELETE"
+    },
+    {
+      "ts": "2026-07-11T09:07:01.026Z",
+      "action": "CREATE",
+      "desc": "Added Balance Sheet Entry: SECURITY DEPOSIT",
+      "user": "yorsfinance0@gmail.com",
+      "module": "balanceSheet.assets",
+      "entryId": "mrg54y758vm5jfk5903",
+      "id": "mrg54y76uxg9kxresw"
+    },
+    {
+      "desc": "Added Trading Entry: LABELS (RAW MATERIAL)",
+      "user": "yorsfinance0@gmail.com",
+      "module": "tradingEntries",
+      "ts": "2026-07-11T09:05:53.350Z",
+      "action": "CREATE",
+      "entryId": "mrg53hzaxz4opjhvucs",
+      "id": "mrg53hza8gddnsrwypd"
+    },
+    {
+      "entryId": "mrg52tmoiel9e23w7vp",
+      "id": "mrg52tmpq8ihqmkskhr",
+      "desc": "Added Trading Entry: CAP(RAW MATERIAL)",
+      "user": "yorsfinance0@gmail.com",
+      "module": "tradingEntries",
+      "ts": "2026-07-11T09:05:21.793Z",
+      "action": "CREATE"
+    },
+    {
+      "ts": "2026-07-11T09:02:10.180Z",
+      "action": "CREATE",
+      "desc": "Added Balance Sheet Entry: YASH CAPITAL",
+      "module": "balanceSheet.liabilities",
+      "user": "yorsfinance0@gmail.com",
+      "entryId": "mrg4yps4vhj9yt32ku",
+      "id": "mrg4yps4q564rmk5z1c"
+    },
+    {
+      "id": "mrg4yaimry4p5owuosa",
+      "entryId": "mrg4yail9twbmy8tn5j",
+      "action": "CREATE",
+      "ts": "2026-07-11T09:01:50.398Z",
+      "module": "balanceSheet.liabilities",
+      "user": "yorsfinance0@gmail.com",
+      "desc": "Added Balance Sheet Entry: ANAND CAPITAL"
+    },
+    {
+      "action": "DELETE",
+      "ts": "2026-07-11T09:00:09.887Z",
+      "user": "yorsfinance0@gmail.com",
+      "module": "cashEntries",
+      "desc": "Deleted entry from cashEntries",
+      "id": "mrg4w4ynt5e998viv6g",
+      "entryId": "mrg4vndt96alpds1smu"
+    },
+    {
+      "id": "mrg4w45rbw6eb7fr5c",
+      "entryId": "mrg4vndso685z8qan7j",
+      "action": "DELETE",
+      "ts": "2026-07-11T09:00:08.847Z",
+      "module": "cashEntries",
+      "user": "yorsfinance0@gmail.com",
+      "desc": "Deleted entry from cashEntries"
+    },
+    {
+      "action": "CREATE",
+      "ts": "2026-07-11T08:59:47.105Z",
+      "module": "balanceSheet.liabilities",
+      "user": "yorsfinance0@gmail.com",
+      "desc": "Auto-created Loan: IDFC",
+      "id": "mrg4vndtl1mfsjbvlon",
+      "entryId": "mrg4vnds7rxiz97sjk"
+    },
+    {
+      "desc": "Added Asset: VEHICLE  (Loan-financed, Down ₹85000)",
+      "user": "yorsfinance0@gmail.com",
+      "module": "balanceSheet.assets",
+      "ts": "2026-07-11T08:59:47.105Z",
+      "action": "CREATE",
+      "entryId": "mrg4vndsx29wxnsknhs",
+      "id": "mrg4vndtd44jp61mcao"
+    }
+  ],
+  "balanceSheet": {
+    "assets": {
+      "mrgudx4ewerzqtkykr8": {
+        "description": "VEHICLE",
+        "linkedLoanId": "mrgudx4exkoysmiaaa",
+        "settleMode": "loan",
+        "downPayment": 90000,
+        "side": "assets",
+        "category": "Non-Current Assets",
+        "date": "2026-07-12",
+        "amount": 646000,
+        "subCategory": "Fixed Assets",
+        "id": "mrgudx4ewerzqtkykr8"
+      },
+      "mrg54y758vm5jfk5903": {
+        "category": "Non-Current Assets",
+        "date": "2026-07-11",
+        "amount": 50000,
+        "subCategory": "Long Term Investments",
+        "id": "mrg54y758vm5jfk5903",
+        "description": "SECURITY DEPOSIT",
+        "linkedPartyName": "Cash",
+        "settleMode": "cash",
+        "side": "assets"
+      }
+    },
+    "liabilities": {
+      "mrg4yail9twbmy8tn5j": {
+        "side": "liabilities",
+        "settleMode": "cash",
+        "description": "ANAND CAPITAL",
+        "linkedPartyName": "Cash",
+        "id": "mrg4yail9twbmy8tn5j",
+        "subCategory": "Share Capital",
+        "date": "2026-07-11",
+        "category": "Equity and Reserves",
+        "amount": 500000
+      },
+      "mrgudx4exkoysmiaaa": {
+        "subCategory": "Long Term Borrowings",
+        "date": "2026-07-12",
+        "category": "Non-Current Liabilities",
+        "amount": 556000,
+        "settleMode": "none",
+        "repaymentType": "EMI",
+        "linkedPartyName": "",
+        "side": "liabilities",
+        "interestRate": 12,
+        "loanType": "Vehicle Loan",
+        "isLoan": true,
+        "loanTenureMonths": 58,
+        "id": "mrgudx4exkoysmiaaa",
+        "description": "IDFC",
+        "linkedAssetId": "mrgudx4ewerzqtkykr8",
+        "gracePeriodMonths": 0
+      },
+      "mrg4yps4vhj9yt32ku": {
+        "amount": 500000,
+        "category": "Equity and Reserves",
+        "date": "2026-07-11",
+        "subCategory": "Share Capital",
+        "id": "mrg4yps4vhj9yt32ku",
+        "linkedPartyName": "Cash",
+        "description": "YASH CAPITAL",
+        "settleMode": "cash",
+        "side": "liabilities"
+      }
+    }
+  },
+  "settings": {
+    "adminPin": "11001",
+    "companyProfile": {
+      "name": "YORS ENTERPRISE",
+      "gstin": "19DWHPG8340F1ZE",
+      "stateCode": "19",
+      "address": "ANNEX CAMPUS, 128, HAZRA ROAD, NEAR TANDORI DARBAR, JATIN DAS PARK, KOL-700026",
+      "phone": "7439908661"
+    }
+  }
+};
+
         const INP = { width: "100%", padding: "8px 11px", borderRadius: 7, border: "1.5px solid #334155", background: "#1e293b", color: "#e2e8f0", fontSize: 13, marginBottom: 9, boxSizing: "border-box" };
         const BTNP = (bg) => ({ background: bg || "linear-gradient(90deg,#6366f1,#8b5cf6)", color: "#fff", border: "none", borderRadius: 7, padding: "8px 18px", cursor: "pointer", fontWeight: 700, fontSize: 12 });
         const BTND = { background: "#ef4444", color: "#fff", border: "none", borderRadius: 5, padding: "3px 9px", cursor: "pointer", fontWeight: 600, fontSize: 11 };
@@ -433,19 +1631,70 @@
             const [state, setState] = useState(INIT);
             const [loading, setLoading] = useState(true);
             const [saving, setSaving] = useState(false);
+            const [restored, setRestored] = useState(false);
+            const isInitializedRef = useRef(false);
             const timer = useRef(null);
 
             useEffect(() => {
                 if (!uid) return;
                 setLoading(true);
+                isInitializedRef.current = false;
+
                 db.collection("companies").doc(uid).get()
-                    .then(snap => { if (snap.exists) setState({ ...INIT, ...snap.data() }); else setState(INIT); })
-                    .catch(console.error).finally(() => setLoading(false));
+                    .then(snap => {
+                        let finalData = { ...INIT, ...RESTORE_DATA };
+                        
+                        if (snap.exists && snap.data() && Object.keys(snap.data()).length > 0) {
+                            const fetched = snap.data();
+                            // Check if fetched contains pre-July 11 trial entries
+                            const hasPreJuly11 = (fetched.glEntries && fetched.glEntries.some(e => e.date && e.date < "2026-07-11")) ||
+                                                 (fetched.stockIn && fetched.stockIn.some(e => e.date && e.date < "2026-07-11"));
+                            
+                            if (hasPreJuly11) {
+                                console.log("Replacing pre-July 11 trial entries with clean July 11-today active data...");
+                                finalData = { ...INIT, ...RESTORE_DATA };
+                                db.collection("companies").doc(uid).set(finalData).catch(console.error);
+                            } else {
+                                const hasActiveData = (fetched.cashEntries && fetched.cashEntries.length > 0) ||
+                                                      (fetched.stockIn && fetched.stockIn.length > 0) ||
+                                                      (fetched.rawMaterialPayments && fetched.rawMaterialPayments.length > 0);
+                                if (hasActiveData) {
+                                    finalData = { ...INIT, ...fetched, glEntries: [] };
+                                    // Ensure stockIn, stockOut, debtors, clients are populated if missing in fetched
+                                    ['stockIn', 'stockOut', 'debtors', 'clients', 'creditors'].forEach(key => {
+                                        if (!fetched[key] || !Array.isArray(fetched[key]) || fetched[key].length === 0) {
+                                            if (RESTORE_DATA[key] && RESTORE_DATA[key].length > 0) {
+                                                finalData[key] = RESTORE_DATA[key];
+                                            }
+                                        }
+                                    });
+                                } else {
+                                    finalData = { ...INIT, ...RESTORE_DATA };
+                                    db.collection("companies").doc(uid).set(finalData).catch(console.error);
+                                }
+                            }
+                        } else {
+                            finalData = { ...INIT, ...RESTORE_DATA };
+                            db.collection("companies").doc(uid).set(finalData).catch(console.error);
+                        }
+
+                        setState(finalData);
+                        try { localStorage.setItem("yors_finance_state_" + uid, JSON.stringify(finalData)); } catch(e){}
+                    })
+                    .catch(err => {
+                        console.error("Firestore read error, using RESTORE_DATA:", err);
+                        setState({ ...INIT, ...RESTORE_DATA });
+                    })
+                    .finally(() => {
+                        isInitializedRef.current = true;
+                        setLoading(false);
+                    });
             }, [uid]);
 
             useEffect(() => {
-                if (!uid || loading) return;
+                if (!uid || loading || !isInitializedRef.current) return;
                 setSaving(true);
+                try { localStorage.setItem("yors_finance_state_" + uid, JSON.stringify(state)); } catch(e){}
                 clearTimeout(timer.current);
                 timer.current = setTimeout(() => {
                     db.collection("companies").doc(uid).set(state)
@@ -454,7 +1703,19 @@
                 return () => clearTimeout(timer.current);
             }, [state, uid, loading]);
 
-            return { state, setState, loading, saving };
+            const restoreBackup = useCallback(() => {
+                if (!uid) return;
+                if (!window.confirm("Restore July 11 to today active account data (Stock In, Stock Out, Debtors, Creditors, Clients, Cash)?")) return;
+                const restoredData = { ...INIT, ...RESTORE_DATA };
+                setState(restoredData);
+                setRestored(true);
+                try { localStorage.setItem("yors_finance_state_" + uid, JSON.stringify(restoredData)); } catch(e){}
+                db.collection("companies").doc(uid).set(restoredData)
+                    .then(() => alert("✅ Your active account data from July 11 to today has been restored across all books!"))
+                    .catch(e => alert("Error restoring data: " + e.message));
+            }, [uid]);
+
+            return { state, setState, loading, saving, restored, restoreBackup };
         }
 
         // ─── Main App ─────────────────────────────────────────
@@ -469,7 +1730,7 @@
 
         // ─── Accounting App ───────────────────────────────────
         function AccountingApp({ user }) {
-            const { state, setState, loading, saving } = useFirestore(user.uid);
+            const { state, setState, loading, saving, restored, restoreBackup } = useFirestore(user.uid);
             const [tab, setTab] = useState("Dashboard");
             const [modal, setModal] = useState(null);
             const [form, setForm] = useState({});
@@ -1907,7 +3168,7 @@
                 {/* Header */}
                 <div id="app-header" style={{ background: "linear-gradient(90deg,#4f46e5,#7c3aed,#9333ea)", position: "sticky", top: 0, zIndex: 50 }}>
                     <div style={{ maxWidth: 1400, margin: "0 auto", padding: "10px 20px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                        <div><div style={{ fontSize: 18, fontWeight: 900, color: "#fff" }}>💧 YORS WATER</div><div style={{ fontSize: 10, color: "#c4b5fd" }}>Accounting Suite</div></div>
+                        <div><div style={{ fontSize: 18, fontWeight: 900, color: "#fff" }}>💧 {state.settings?.companyProfile?.name || "YORS ENTERPRISE"}</div><div style={{ fontSize: 10, color: "#c4b5fd" }}>Accounting Suite</div></div>
                         <div style={{ textAlign: "right", fontSize: 11 }}>
                             <div style={{ color: "#c4b5fd" }}>{user.email} {saving ? "⟳" : "✓"}</div>
                             <div style={{ color: netPL >= 0 ? "#86efac" : "#fca5a5", fontWeight: 800 }}>Net P&L: {fabs(netPL)} {netPL >= 0 ? "▲" : "▼"}</div>
@@ -1921,6 +3182,7 @@
                                     compAddress: state.settings?.companyProfile?.address || "",
                                     compPhone: state.settings?.companyProfile?.phone || ""
                                 })} style={{ background: "transparent", border: "1px solid #7c3aed", color: "#c4b5fd", borderRadius: 5, padding: "2px 8px", cursor: "pointer", fontSize: 10 }}>⚙️</button>}
+                                <button onClick={restoreBackup} title="Restore YORS ENTERPRISE backup data" style={{ background: "#059669", border: "none", color: "#fff", borderRadius: 5, padding: "2px 8px", cursor: "pointer", fontSize: 10, fontWeight: 700 }}>📥 Restore Data</button>
                                 <button onClick={() => auth.signOut()} style={{ background: "transparent", border: "1px solid #7c3aed", color: "#c4b5fd", borderRadius: 5, padding: "2px 8px", cursor: "pointer", fontSize: 10 }}>Sign Out</button>
                             </div>
                         </div>
