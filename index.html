@@ -3412,7 +3412,9 @@
 
         // ─── Helpers ──────────────────────────────────────────
         const gid = () => Date.now().toString(36) + Math.random().toString(36).slice(2);
-        const fc = n => "₹" + Number(n || 0).toLocaleString("en-IN", { minimumFractionDigits: 2 });
+        const round5 = n => Math.round(Number(n || 0) / 5) * 5;
+        const fc = n => "₹" + round5(n).toLocaleString("en-IN", { maximumFractionDigits: 0 });
+        const fn = n => round5(n).toLocaleString("en-IN", { maximumFractionDigits: 0 });
         const fabs = n => fc(Math.abs(n));
         const today = () => { const d = new Date(); return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0"); };
 
@@ -3443,7 +3445,25 @@
                     const salesReturns = stockOut.filter(x => x.bottleType === bt && x.category === cat && x.isReturn);
                     let cogs = 0;
                     outs.forEach(out => { let needed = Number(out.qty); for (let i = 0; i < batches.length && needed > 0; i++) { if (batches[i].godown !== out.godown) continue; const take = Math.min(batches[i].remQty, needed); if (take > 0) { cogs += take * batches[i].rate; batches[i].remQty -= take; needed -= take; } } });
-                    salesReturns.forEach(sr => { batches.push({ origQty: Number(sr.qty), remQty: Number(sr.qty), rate: Number(sr.ratePerUnit), godown: sr.godown, batchNo: "SR" }); });
+                    // Sales returns: add qty back to existing batches in the same godown (LIFO restoration)
+                    salesReturns.forEach(sr => {
+                        const godown = sr.godown;
+                        let toRestore = Number(sr.qty);
+                        // Try to restore to batches in same godown, starting from most recently depleted (reverse order)
+                        for (let i = batches.length - 1; i >= 0 && toRestore > 0; i--) {
+                            if (batches[i].godown !== godown) continue;
+                            const restoreAmt = Math.min(toRestore, batches[i].origQty - batches[i].remQty); // can only restore what was taken
+                            if (restoreAmt > 0) {
+                                batches[i].remQty += restoreAmt;
+                                toRestore -= restoreAmt;
+                            }
+                        }
+                        // If still some left to restore (e.g. original batch exhausted in another way), add to most recent batch
+                        if (toRestore > 0) {
+                            const fallback = [...batches].reverse().find(b => b.godown === godown);
+                            if (fallback) { fallback.remQty += toRestore; fallback.origQty += toRestore; }
+                        }
+                    });
                     const inQty = batches.reduce((a, b) => a + b.origQty, 0), outQty = outs.reduce((a, b) => a + Number(b.qty), 0);
                     let closingValue = 0; batches.forEach(b => { closingValue += b.remQty * b.rate; });
                     results[key] = { batches, cogs, closingValue, inQty, outQty, balQty: inQty - outQty };
@@ -3829,7 +3849,10 @@
                 grandTotal: 0
             });
             const startNewInvoice = () => {
-                const nextNo = "GST-" + new Date().getFullYear() + "-" + String((state.gstInvoices || []).length + 1).padStart(3, "0");
+                const existingNos = new Set((state.gstInvoices || []).map(x => x.invoiceNo));
+                let nextSeq = (state.gstInvoices || []).length + 1;
+                let nextNo = "GST-" + new Date().getFullYear() + "-" + String(nextSeq).padStart(3, "0");
+                while (existingNos.has(nextNo)) { nextSeq++; nextNo = "GST-" + new Date().getFullYear() + "-" + String(nextSeq).padStart(3, "0"); }
                 setGstInvForm({
                     invoiceNo: nextNo,
                     date: today(),
@@ -4468,10 +4491,31 @@
                     const cgstAmount = hasGst && gstType === "cgst_sgst" ? Math.round(gstAmount / 2 * 100) / 100 : 0;
                     const sgstAmount = hasGst && gstType === "cgst_sgst" ? Math.round(gstAmount / 2 * 100) / 100 : 0;
                     const igstAmount = hasGst && gstType === "igst" ? gstAmount : 0;
-                    if (!date || !godown || !bottleType || !category || !qty || !ratePerUnit) { alert("Fill all fields"); return; }
+                    if (!date || !bottleType || !category || !qty || !ratePerUnit) { alert("Fill all fields"); return; }
                     if (qtyVal <= 0 || rateVal <= 0) { alert("Qty and Rate must be > 0"); return; }
                     if (!form.returnSettleMode) { alert("Select a return settlement mode"); return; }
                     if (form.returnSettleMode === "debtor" && !form.returnClientId) { alert("Select a client for the return"); return; }
+
+                    // Determine godown: if bill no. provided, derive from original sale; otherwise require manual godown
+                    let returnGodown = godown;
+                    const returnBillNo = form.billNo || "";
+                    if (returnBillNo) {
+                        // Find original stockOut entries for this bill number, same bottle type & category
+                        const originalSales = (state.stockOut || []).filter(e =>
+                            e.billNo === returnBillNo && !e.isReturn &&
+                            e.bottleType === bottleType && e.category === category
+                        );
+                        if (originalSales.length > 0) {
+                            returnGodown = originalSales[0].godown; // Use godown from original sale
+                        } else if (!godown) {
+                            alert("Bill No. not found in records. Please select the godown manually.");
+                            return;
+                        }
+                    } else if (!godown) {
+                        alert("Please select a godown (or enter the original Bill No. to auto-detect godown).");
+                        return;
+                    }
+
                     const id = gid();
                     const cl = form.returnClientId ? (state.clients || []).find(c => c.id === form.returnClientId) : null;
                     const clientId = form.returnClientId || null, clientName = cl ? cl.name : "";
@@ -4481,10 +4525,10 @@
                     const linkedPartyId = settleMode === "debtor" && linkedDeb ? linkedDeb.id : null;
                     const linkedPartyName = settleMode === "debtor" && linkedDeb ? linkedDeb.name : clientName;
                     upd(p => {
-                        let np = { ...p, stockOut: [...p.stockOut, { id, date, godown, bottleType, category, qty: qtyVal, ratePerUnit: rateVal, totalAmount: total, gstAmount, gstRate, hsnCode, clientGstin, clientStateCode, settleMode, linkedPartyId, linkedPartyName, clientId, clientName, billNo: form.billNo, isReturn: true, gstType, cgstAmount, sgstAmount, igstAmount }] };
+                        let np = { ...p, stockOut: [...p.stockOut, { id, date, godown: returnGodown, bottleType, category, qty: qtyVal, ratePerUnit: rateVal, totalAmount: total, gstAmount, gstRate, hsnCode, clientGstin, clientStateCode, settleMode, linkedPartyId, linkedPartyName, clientId, clientName, billNo: returnBillNo, isReturn: true, gstType, cgstAmount, sgstAmount, igstAmount }] };
                         if (settleMode === "debtor" && linkedDeb && !linkedDeb.clientId) { np.debtors = np.debtors.map(d => d.id === linkedDeb.id ? { ...d, clientId } : d); }
-                        if (settleMode === "cash") { np.cashEntries = [...np.cashEntries, { id: gid(), dir: "out", payType: "Sales Return Refund", description: `Sales Return Refund: ${bottleType} (${category}) — ${clientName}${form.billNo ? " | Bill: " + form.billNo : ""}`, amount: total, date, sourceId: id, linkedId: null }]; }
-                        np = withLog(np, "CREATE", "stockOut", id, `Added Sales Return of ${qty} ${bottleType}`);
+                        if (settleMode === "cash") { np.cashEntries = [...np.cashEntries, { id: gid(), dir: "out", payType: "Sales Return Refund", description: `Sales Return Refund: ${bottleType} (${category}) — ${clientName}${returnBillNo ? " | Bill: " + returnBillNo : ""}`, amount: total, date, sourceId: id, linkedId: null }]; }
+                        np = withLog(np, "CREATE", "stockOut", id, `Added Sales Return of ${qty} ${bottleType} to godown: ${returnGodown}`);
                         return np;
                     });
                     closeM();
@@ -4535,7 +4579,14 @@
                 if (isDup && !window.confirm("Possible duplicate entry detected (same amount and party on this date). Save anyway?")) return;
 
                 const autoInvoiceId = hasGst ? gid() : null;
-                const autoInvoiceNo = hasGst ? "GST-" + new Date().getFullYear() + "-" + String((state.gstInvoices || []).length + 1).padStart(3, "0") : null;
+                const _existingNos = new Set((state.gstInvoices || []).map(x => x.invoiceNo));
+                let _nextSeq = (state.gstInvoices || []).length + 1;
+                let autoInvoiceNo = null;
+                if (hasGst) {
+                    let _candidate = "GST-" + new Date().getFullYear() + "-" + String(_nextSeq).padStart(3, "0");
+                    while (_existingNos.has(_candidate)) { _nextSeq++; _candidate = "GST-" + new Date().getFullYear() + "-" + String(_nextSeq).padStart(3, "0"); }
+                    autoInvoiceNo = _candidate;
+                }
 
                 upd(p => {
                     let np = { ...p };
@@ -5678,14 +5729,14 @@
                             </select>
                         </div>
                         <div style={{ background: C.mid, borderRadius: 12, overflowX: "auto" }}>
-                            <table style={TBL}><thead><tr>{["Date", "Type", "Godown", "Bottle", "Cat", "Qty", "Rate", "Total", "Mode", "Party", "Client", "Del"].map(h => <th key={h} style={THS}>{h}</th>)}</tr></thead>
-                                <tbody>{!so.length && <tr><td colSpan={12} style={{ ...TDS, textAlign: "center", color: C.muted }}>No entries</td></tr>}
+                            <table style={TBL}><thead><tr>{["Date", "Bill No.", "Type", "Godown", "Bottle", "Cat", "Qty", "Rate", "Total", "Mode", "Party", "Client", "Del"].map(h => <th key={h} style={THS}>{h}</th>)}</tr></thead>
+                                <tbody>{!so.length && <tr><td colSpan={13} style={{ ...TDS, textAlign: "center", color: C.muted }}>No entries</td></tr>}
                                     {
                                         so.filter(i => (
                                             (filterGodown === '' || i.godown === filterGodown) &&
                                             (filterBottleType === '' || i.bottleType === filterBottleType) &&
                                             (filterReturn === null || i.isReturn === filterReturn)
-                                        )).map(e => { const cName = e.clientName || (e.clientId ? (clients.find(c => c.id === e.clientId) || {}).name : ""); return <tr key={e.id}><td style={TDS}>{e.date}</td><td style={TDS}><Badge label={e.isReturn ? "Return" : "Normal"} color={e.isReturn ? C.amber : C.teal} /></td><td style={TDS}><Badge label={e.godown} color="#7c3aed" /></td><td style={TDS}><Badge label={e.bottleType} color="#6366f1" /></td><td style={TDS}><Badge label={e.category} color={e.category === "normal" ? "#0ea5e9" : C.amber} /></td><td style={{ ...TDS, fontWeight: 700 }}>{e.qty}</td><td style={TDS}>{fc(e.ratePerUnit)}</td><td style={{ ...TDS, fontWeight: 800, color: C.red }}>{fc(e.totalAmount)}{e.paidAmount > 0 && <span style={{ display: "block", fontSize: 9, color: C.muted, fontWeight: 500 }}>Paid Cash: {fc(e.paidAmount)}</span>}</td><td style={TDS}><Badge label={e.settleMode === "cash" ? "Cash" : e.settleMode === "debtor" ? "Debtor" : "Journal"} color={e.settleMode === "cash" ? C.green : C.violet} />{e.paidAmount > 0 && e.settleMode === "debtor" && <span style={{ display: "block", fontSize: 9, color: C.violet, marginTop: 2, fontWeight: 700 }}>Partial Cash</span>}</td><td style={TDS}>{e.linkedPartyName || "—"}</td><td style={TDS}>{cName ? <span style={{ color: C.teal, cursor: "pointer", fontWeight: 600 }} onClick={() => { setSelectedClient(e.clientId); setTab("Clients"); }}>{cName}</span> : "—"}</td><td style={TDS}><button style={BTND} onClick={() => cascadeDelete("stockOut", e.id)}>Del</button></td></tr>; })
+                                        )).map(e => { const cName = e.clientName || (e.clientId ? (clients.find(c => c.id === e.clientId) || {}).name : ""); return <tr key={e.id}><td style={TDS}>{e.date}</td><td style={{ ...TDS, fontWeight: 700, color: C.teal, whiteSpace: "nowrap" }}>{e.billNo || "—"}</td><td style={TDS}><Badge label={e.isReturn ? "Return" : "Normal"} color={e.isReturn ? C.amber : C.teal} /></td><td style={TDS}><Badge label={e.godown} color="#7c3aed" /></td><td style={TDS}><Badge label={e.bottleType} color="#6366f1" /></td><td style={TDS}><Badge label={e.category} color={e.category === "normal" ? "#0ea5e9" : C.amber} /></td><td style={{ ...TDS, fontWeight: 700 }}>{e.qty}</td><td style={TDS}>{fc(e.ratePerUnit)}</td><td style={{ ...TDS, fontWeight: 800, color: C.red }}>{fc(e.totalAmount)}{e.paidAmount > 0 && <span style={{ display: "block", fontSize: 9, color: C.muted, fontWeight: 500 }}>Paid Cash: {fc(e.paidAmount)}</span>}</td><td style={TDS}><Badge label={e.settleMode === "cash" ? "Cash" : e.settleMode === "debtor" ? "Debtor" : "Journal"} color={e.settleMode === "cash" ? C.green : C.violet} />{e.paidAmount > 0 && e.settleMode === "debtor" && <span style={{ display: "block", fontSize: 9, color: C.violet, marginTop: 2, fontWeight: 700 }}>Partial Cash</span>}</td><td style={TDS}>{e.linkedPartyName || "—"}</td><td style={TDS}>{cName ? <span style={{ color: C.teal, cursor: "pointer", fontWeight: 600 }} onClick={() => { setSelectedClient(e.clientId); setTab("Clients"); }}>{cName}</span> : "—"}</td><td style={TDS}><button style={BTND} onClick={() => cascadeDelete("stockOut", e.id)}>Del</button></td></tr>; })
                                     }
                                 </tbody>
                             </table>
@@ -5872,10 +5923,14 @@
                                 }
                             }
 
-                            const isDup = invoices.some(x => x.invoiceNo.trim().toLowerCase() === gstInvForm.invoiceNo.trim().toLowerCase());
-                            if (isDup) {
-                                alert(`Invoice Number ${gstInvForm.invoiceNo} already exists! Please use a unique invoice number.`);
-                                return;
+                            // Ensure invoice number is unique - auto-bump if collision
+                            let finalInvoiceNo = gstInvForm.invoiceNo;
+                            if (invoices.some(x => x.invoiceNo.trim().toLowerCase() === finalInvoiceNo.trim().toLowerCase())) {
+                                const existSet = new Set(invoices.map(x => x.invoiceNo));
+                                let seq = invoices.length + 1;
+                                finalInvoiceNo = "GST-" + new Date().getFullYear() + "-" + String(seq).padStart(3, "0");
+                                while (existSet.has(finalInvoiceNo)) { seq++; finalInvoiceNo = "GST-" + new Date().getFullYear() + "-" + String(seq).padStart(3, "0"); }
+                                gstInvForm = { ...gstInvForm, invoiceNo: finalInvoiceNo };
                             }
 
                             const success = applyGstInvoice(gstInvForm);
@@ -5889,7 +5944,7 @@
                             const units = ["", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten", "Eleven", "Twelve", "Thirteen", "Fourteen", "Fifteen", "Sixteen", "Seventeen", "Eighteen", "Nineteen"];
                             const tens = ["", "", "Twenty", "Thirty", "Forty", "Fifty", "Sixty", "Seventy", "Eighty", "Ninety"];
 
-                            const num = Math.floor(amount);
+                            const num = Math.floor(round5(amount));
                             if (num === 0) return "Zero Rupees";
 
                             function helper(n) {
@@ -6080,37 +6135,37 @@
                                                     </td>
                                                     <td style={{ ...tdBorder, textAlign: "center", fontWeight: 700 }}>{item.hsnCode || "2201"}</td>
                                                     <td style={{ ...tdBorder, textAlign: "right", fontWeight: 700 }}>{Number(item.qty).toLocaleString("en-IN")}</td>
-                                                    <td style={{ ...tdBorder, textAlign: "right" }}>{Number(item.ratePerUnit).toFixed(2)}</td>
-                                                    <td style={{ ...tdBorder, textAlign: "right" }}>{Number(item.taxableValue).toFixed(2)}</td>
+                                                    <td style={{ ...tdBorder, textAlign: "right" }}>{fn(item.ratePerUnit)}</td>
+                                                    <td style={{ ...tdBorder, textAlign: "right" }}>{fn(item.taxableValue)}</td>
                                                     {isIntra ? (<>
                                                         <td style={{ ...tdBorder, textAlign: "right" }}>
                                                             <span style={{ fontSize: 9, color: "#0369a1", fontWeight: 700 }}>{Number(item.cgstRate).toFixed(1)}%</span><br/>
-                                                            <span style={{ fontWeight: 700 }}>{Number(item.cgstAmount).toFixed(2)}</span>
+                                                            <span style={{ fontWeight: 700 }}>{fn(item.cgstAmount)}</span>
                                                         </td>
                                                         <td style={{ ...tdBorder, textAlign: "right" }}>
                                                             <span style={{ fontSize: 9, color: "#0369a1", fontWeight: 700 }}>{Number(item.sgstRate).toFixed(1)}%</span><br/>
-                                                            <span style={{ fontWeight: 700 }}>{Number(item.sgstAmount).toFixed(2)}</span>
+                                                            <span style={{ fontWeight: 700 }}>{fn(item.sgstAmount)}</span>
                                                         </td>
                                                     </>) : (
                                                         <td style={{ ...tdBorder, textAlign: "right" }}>
                                                             <span style={{ fontSize: 9, color: "#7c3aed", fontWeight: 700 }}>{Number(item.igstRate).toFixed(1)}%</span><br/>
-                                                            <span style={{ fontWeight: 700 }}>{Number(item.igstAmount).toFixed(2)}</span>
+                                                            <span style={{ fontWeight: 700 }}>{fn(item.igstAmount)}</span>
                                                         </td>
                                                     )}
-                                                    <td style={{ ...tdBorder, textAlign: "right", fontWeight: 800, fontSize: 11 }}>{Number(item.totalAmount).toFixed(2)}</td>
+                                                    <td style={{ ...tdBorder, textAlign: "right", fontWeight: 800, fontSize: 11 }}>{fn(item.totalAmount)}</td>
                                                 </tr>
                                             ))}
                                             {/* Totals row */}
                                             <tr style={{ background: "#e8f0fe", fontWeight: 800 }}>
                                                 <td colSpan={5} style={{ ...tdBorder, textAlign: "right", fontWeight: 800, background: "#e8f0fe" }}>TOTAL</td>
-                                                <td style={{ ...tdBorder, textAlign: "right", background: "#e8f0fe" }}>{Number(inv.taxableTotal).toFixed(2)}</td>
+                                                <td style={{ ...tdBorder, textAlign: "right", background: "#e8f0fe" }}>{fn(inv.taxableTotal)}</td>
                                                 {isIntra ? (<>
-                                                    <td style={{ ...tdBorder, textAlign: "right", background: "#e8f0fe" }}>{Number(inv.cgstTotal).toFixed(2)}</td>
-                                                    <td style={{ ...tdBorder, textAlign: "right", background: "#e8f0fe" }}>{Number(inv.sgstTotal).toFixed(2)}</td>
+                                                    <td style={{ ...tdBorder, textAlign: "right", background: "#e8f0fe" }}>{fn(inv.cgstTotal)}</td>
+                                                    <td style={{ ...tdBorder, textAlign: "right", background: "#e8f0fe" }}>{fn(inv.sgstTotal)}</td>
                                                 </>) : (
-                                                    <td style={{ ...tdBorder, textAlign: "right", background: "#e8f0fe" }}>{Number(inv.igstTotal).toFixed(2)}</td>
+                                                    <td style={{ ...tdBorder, textAlign: "right", background: "#e8f0fe" }}>{fn(inv.igstTotal)}</td>
                                                 )}
-                                                <td style={{ ...tdBorder, textAlign: "right", background: "#e8f0fe", fontSize: 12 }}>₹ {Number(inv.grandTotal).toFixed(2)}</td>
+                                                <td style={{ ...tdBorder, textAlign: "right", background: "#e8f0fe", fontSize: 12 }}>{fc(inv.grandTotal)}</td>
                                             </tr>
                                         </tbody>
                                     </table>
@@ -6148,33 +6203,33 @@
                                                         const totalTax = t.cgst + t.sgst + t.igst;
                                                         return (<tr key={idx} style={{ background: idx % 2 === 0 ? "#fff" : "#f8fafc" }}>
                                                             <td style={{ border: "1px solid #e2e8f0", borderLeft: "none", padding: "4px 6px", textAlign: "center", fontWeight: 700 }}>{t.hsn}</td>
-                                                            <td style={{ border: "1px solid #e2e8f0", padding: "4px 6px", textAlign: "right" }}>{t.taxable.toFixed(2)}</td>
+                                                            <td style={{ border: "1px solid #e2e8f0", padding: "4px 6px", textAlign: "right" }}>{fn(t.taxable)}</td>
                                                             {isIntra ? (<>
                                                                 <td style={{ border: "1px solid #e2e8f0", padding: "4px 6px", textAlign: "right", color: "#0369a1" }}>{Number(t.cgstRate).toFixed(1)}%</td>
-                                                                <td style={{ border: "1px solid #e2e8f0", padding: "4px 6px", textAlign: "right", fontWeight: 700, color: "#0369a1" }}>{t.cgst.toFixed(2)}</td>
+                                                                <td style={{ border: "1px solid #e2e8f0", padding: "4px 6px", textAlign: "right", fontWeight: 700, color: "#0369a1" }}>{fn(t.cgst)}</td>
                                                                 <td style={{ border: "1px solid #e2e8f0", padding: "4px 6px", textAlign: "right", color: "#0369a1" }}>{Number(t.sgstRate).toFixed(1)}%</td>
-                                                                <td style={{ border: "1px solid #e2e8f0", padding: "4px 6px", textAlign: "right", fontWeight: 700, color: "#0369a1" }}>{t.sgst.toFixed(2)}</td>
+                                                                <td style={{ border: "1px solid #e2e8f0", padding: "4px 6px", textAlign: "right", fontWeight: 700, color: "#0369a1" }}>{fn(t.sgst)}</td>
                                                             </>) : (<>
                                                                 <td style={{ border: "1px solid #e2e8f0", padding: "4px 6px", textAlign: "right", color: "#7c3aed" }}>{Number(t.igstRate).toFixed(1)}%</td>
-                                                                <td style={{ border: "1px solid #e2e8f0", padding: "4px 6px", textAlign: "right", fontWeight: 700, color: "#7c3aed" }}>{t.igst.toFixed(2)}</td>
+                                                                <td style={{ border: "1px solid #e2e8f0", padding: "4px 6px", textAlign: "right", fontWeight: 700, color: "#7c3aed" }}>{fn(t.igst)}</td>
                                                             </>)}
-                                                            <td style={{ border: "1px solid #e2e8f0", borderRight: "none", padding: "4px 6px", textAlign: "right", fontWeight: 800 }}>{totalTax.toFixed(2)}</td>
+                                                            <td style={{ border: "1px solid #e2e8f0", borderRight: "none", padding: "4px 6px", textAlign: "right", fontWeight: 800 }}>{fn(totalTax)}</td>
                                                         </tr>);
                                                     })}
                                                     {/* HSN totals */}
                                                     <tr style={{ background: "#e8f0fe", fontWeight: 800 }}>
                                                         <td style={{ border: "1px solid #cbd5e1", borderLeft: "none", padding: "4px 6px", textAlign: "center" }}>Total</td>
-                                                        <td style={{ border: "1px solid #cbd5e1", padding: "4px 6px", textAlign: "right" }}>{Number(inv.taxableTotal).toFixed(2)}</td>
+                                                        <td style={{ border: "1px solid #cbd5e1", padding: "4px 6px", textAlign: "right" }}>{fn(inv.taxableTotal)}</td>
                                                         {isIntra ? (<>
                                                             <td style={{ border: "1px solid #cbd5e1", padding: "4px 6px" }}></td>
-                                                            <td style={{ border: "1px solid #cbd5e1", padding: "4px 6px", textAlign: "right", color: "#0369a1" }}>{Number(inv.cgstTotal).toFixed(2)}</td>
+                                                            <td style={{ border: "1px solid #cbd5e1", padding: "4px 6px", textAlign: "right", color: "#0369a1" }}>{fn(inv.cgstTotal)}</td>
                                                             <td style={{ border: "1px solid #cbd5e1", padding: "4px 6px" }}></td>
-                                                            <td style={{ border: "1px solid #cbd5e1", padding: "4px 6px", textAlign: "right", color: "#0369a1" }}>{Number(inv.sgstTotal).toFixed(2)}</td>
+                                                            <td style={{ border: "1px solid #cbd5e1", padding: "4px 6px", textAlign: "right", color: "#0369a1" }}>{fn(inv.sgstTotal)}</td>
                                                         </>) : (<>
                                                             <td style={{ border: "1px solid #cbd5e1", padding: "4px 6px" }}></td>
-                                                            <td style={{ border: "1px solid #cbd5e1", padding: "4px 6px", textAlign: "right", color: "#7c3aed" }}>{Number(inv.igstTotal).toFixed(2)}</td>
+                                                            <td style={{ border: "1px solid #cbd5e1", padding: "4px 6px", textAlign: "right", color: "#7c3aed" }}>{fn(inv.igstTotal)}</td>
                                                         </>)}
-                                                        <td style={{ border: "1px solid #cbd5e1", borderRight: "none", padding: "4px 6px", textAlign: "right" }}>{(Number(inv.cgstTotal) + Number(inv.sgstTotal) + Number(inv.igstTotal)).toFixed(2)}</td>
+                                                        <td style={{ border: "1px solid #cbd5e1", borderRight: "none", padding: "4px 6px", textAlign: "right" }}>{fn(Number(inv.cgstTotal || 0) + Number(inv.sgstTotal || 0) + Number(inv.igstTotal || 0))}</td>
                                                     </tr>
                                                 </tbody>
                                             </table>
@@ -6185,18 +6240,18 @@
                                             <div style={{ fontSize: 9, fontWeight: 800, textTransform: "uppercase", color: "#1e3a5f", letterSpacing: 1, marginBottom: 8 }}>Invoice Summary</div>
                                             <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: "5px 12px", fontSize: 10.5 }}>
                                                 <span style={{ color: "#6b7280" }}>Taxable Value</span>
-                                                <span style={{ textAlign: "right", fontWeight: 700 }}>₹ {Number(inv.taxableTotal).toFixed(2)}</span>
+                                                <span style={{ textAlign: "right", fontWeight: 700 }}>₹ {fn(inv.taxableTotal)}</span>
                                                 {isIntra ? (<>
                                                     <span style={{ color: "#0369a1" }}>Add: CGST @ {Number(inv.items[0]?.cgstRate || 0).toFixed(1)}%</span>
-                                                    <span style={{ textAlign: "right", fontWeight: 700, color: "#0369a1" }}>₹ {Number(inv.cgstTotal).toFixed(2)}</span>
+                                                    <span style={{ textAlign: "right", fontWeight: 700, color: "#0369a1" }}>₹ {fn(inv.cgstTotal)}</span>
                                                     <span style={{ color: "#0369a1" }}>Add: SGST @ {Number(inv.items[0]?.sgstRate || 0).toFixed(1)}%</span>
-                                                    <span style={{ textAlign: "right", fontWeight: 700, color: "#0369a1" }}>₹ {Number(inv.sgstTotal).toFixed(2)}</span>
+                                                    <span style={{ textAlign: "right", fontWeight: 700, color: "#0369a1" }}>₹ {fn(inv.sgstTotal)}</span>
                                                 </>) : (<>
                                                     <span style={{ color: "#7c3aed" }}>Add: IGST @ {Number(inv.items[0]?.igstRate || 0).toFixed(1)}%</span>
-                                                    <span style={{ textAlign: "right", fontWeight: 700, color: "#7c3aed" }}>₹ {Number(inv.igstTotal).toFixed(2)}</span>
+                                                    <span style={{ textAlign: "right", fontWeight: 700, color: "#7c3aed" }}>₹ {fn(inv.igstTotal)}</span>
                                                 </>)}
                                                 <span style={{ color: "#6b7280" }}>Total GST</span>
-                                                <span style={{ textAlign: "right", fontWeight: 700 }}>₹ {(Number(inv.cgstTotal) + Number(inv.sgstTotal) + Number(inv.igstTotal)).toFixed(2)}</span>
+                                                <span style={{ textAlign: "right", fontWeight: 700 }}>₹ {fn(Number(inv.cgstTotal || 0) + Number(inv.sgstTotal || 0) + Number(inv.igstTotal || 0))}</span>
                                                 {(() => {
                                                     const paid = Number(inv.paidAmount);
                                                     const total = Number(inv.grandTotal);
@@ -6204,15 +6259,15 @@
                                                     if (!showPartial) return null;
                                                     return (<>
                                                         <span style={{ color: "#16a34a" }}>Advance Received</span>
-                                                        <span style={{ textAlign: "right", fontWeight: 700, color: "#16a34a" }}>₹ {paid.toFixed(2)}</span>
+                                                        <span style={{ textAlign: "right", fontWeight: 700, color: "#16a34a" }}>{fc(paid)}</span>
                                                         <span style={{ color: "#dc2626" }}>Balance Due</span>
-                                                        <span style={{ textAlign: "right", fontWeight: 700, color: "#dc2626" }}>₹ {(total - paid).toFixed(2)}</span>
+                                                        <span style={{ textAlign: "right", fontWeight: 700, color: "#dc2626" }}>{fc(total - paid)}</span>
                                                     </>);
                                                 })()}
                                             </div>
                                             <div style={{ marginTop: 10, padding: "8px 10px", background: "#1e3a5f", borderRadius: 6, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                                                 <span style={{ color: "#fff", fontWeight: 800, fontSize: 11 }}>GRAND TOTAL</span>
-                                                <span style={{ color: "#fff", fontWeight: 900, fontSize: 14 }}>₹ {Number(inv.grandTotal).toFixed(2)}</span>
+                                                <span style={{ color: "#fff", fontWeight: 900, fontSize: 14 }}>{fc(inv.grandTotal)}</span>
                                             </div>
                                         </div>
                                     </div>
@@ -7944,7 +7999,7 @@
                                 <div style={{ fontWeight: 800, fontSize: 15, color: C.green, marginBottom: 12 }}>📥 Stock In</div>
                                 <DateInput value={form.date} onChange={v => setForm(f => ({ ...f, date: v }))} />
                                 <select style={INP} value={form.isReturn || "false"} onChange={e => setForm(f => ({ ...f, isReturn: e.target.value, returnCreditorId: "", returnSettleMode: "", batchNo: "", ratePerUnit: "", bottleType: "", category: "normal", qty: "" }))}><option value="false">Entry Type: Normal</option><option value="true">Entry Type: Purchase Return</option></select>
-                                <select style={INP} value={form.godown || ""} onChange={e => setForm(f => ({ ...f, godown: e.target.value }))}><option value="">Godown *</option>{GODOWNS.map(g => <option key={g}>{g}</option>)}</select>
+                                <select style={INP} value={form.godown || ""} onChange={e => setForm(f => ({ ...f, godown: e.target.value }))}><option value="">{form.isReturn === "true" && form.billNo ? "Godown (auto from bill)" : "Godown *"}</option>{GODOWNS.map(g => <option key={g}>{g}</option>)}</select>
 
                                 {form.isReturn === "true" ? (<>
                                     <select style={INP} value={form.bottleType || ""} onChange={e => setForm(f => ({ ...f, bottleType: e.target.value, batchNo: "" }))}><option value="">Bottle Type *</option>{BOTTLE_TYPES.map(b => <option key={b}>{b}</option>)}</select>
