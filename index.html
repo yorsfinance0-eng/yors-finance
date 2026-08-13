@@ -4158,7 +4158,29 @@
 
             const upd = fn => setState(p => fn(p));
             const toggleChk = (key, id) => upd(p => ({ ...p, [key]: p[key].map(e => e.id === id ? { ...e, checked: !e.checked, manualCheck: true } : e) }));
-            const openM = (t, preset) => { setModal(t); setForm({ date: today(), paidAmount: "", settleMode: "cash", linkedPartyId: "", newPartyName: "", newPartyCredit: "", siItems: [{ bottleType: "", category: "normal", batchNo: "", qty: "", ratePerUnit: "" }], soItems: [{ bottleType: "", category: "normal", qty: "", ratePerUnit: "" }], ...(preset || {}) }); };
+
+            /* ── Auto Bill Number helper ──────────────────────────────────────────
+               Scans all existing non-GST stockOut entries for BILL-NNN style
+               numbers and returns the next one in sequence (BILL-001, BILL-002…).
+               Numbers without the prefix are also counted to avoid gaps.
+            ──────────────────────────────────────────────────────────────────── */
+            const getNextBillNo = () => {
+                const allBillNos = (state.stockOut || [])
+                    .map(e => e.billNo || "")
+                    .filter(b => b && !b.startsWith("GST-"));
+                let maxSeq = 0;
+                allBillNos.forEach(b => {
+                    const m = b.match(/(?:BILL-?)(\d+)$/i);
+                    if (m) { const n = parseInt(m[1], 10); if (n > maxSeq) maxSeq = n; }
+                });
+                return "BILL-" + String(maxSeq + 1).padStart(3, "0");
+            };
+
+            const openM = (t, preset) => {
+                const autoBillNo = t === "stockOut" ? getNextBillNo() : "";
+                setModal(t);
+                setForm({ date: today(), paidAmount: "", settleMode: "cash", linkedPartyId: "", newPartyName: "", newPartyCredit: "", siItems: [{ bottleType: "", category: "normal", batchNo: "", qty: "", ratePerUnit: "" }], soItems: [{ bottleType: "", category: "normal", qty: "", ratePerUnit: "" }], billNo: autoBillNo, _autoBillNo: autoBillNo, ...(preset || {}) });
+            };
             const closeM = () => { setModal(null); setForm({}); };
 
             const [isAdmin, setIsAdmin] = React.useState(false);
@@ -8229,12 +8251,34 @@
                             {form.isReturn === "true" ? (<>
                                 <select style={INP} value={form.bottleType || ""} onChange={e => setForm(f => ({ ...f, bottleType: e.target.value }))}><option value="">Bottle Type *</option>{BOTTLE_TYPES.map(b => <option key={b}>{b}</option>)}</select>
                                 <select style={INP} value={form.category || ""} onChange={e => setForm(f => ({ ...f, category: e.target.value }))}><option value="">Category *</option><option>normal</option><option>customized</option></select>
-                                <input style={INP} placeholder="Bill No. (Optional)" value={form.billNo || ""} onChange={e => setForm(f => ({ ...f, billNo: e.target.value }))} />
+                                {/* ── Bill No. for Sales Return ── */}
+                                <div style={{ position: "relative", marginBottom: 9 }}>
+                                    <input style={{ ...INP, marginBottom: 0, paddingRight: 72 }} placeholder="Bill No. (Optional)" value={form.billNo || ""} onChange={e => setForm(f => ({ ...f, billNo: e.target.value }))} />
+                                    <span style={{ position: "absolute", right: 6, top: "50%", transform: "translateY(-50%)", display: "flex", gap: 4 }}>
+                                        {form._autoBillNo && (
+                                            <button title="Reset to auto-generated" onClick={() => setForm(f => ({ ...f, billNo: f._autoBillNo }))} style={{ background: "#1e3a5f", border: "1px solid #2563eb", color: "#60a5fa", borderRadius: 5, padding: "2px 7px", fontSize: 10, cursor: "pointer", fontWeight: 700, lineHeight: 1.4 }}>🔄 Auto</button>
+                                        )}
+                                        {form.billNo && (
+                                            <button title="Clear bill number" onClick={() => setForm(f => ({ ...f, billNo: "" }))} style={{ background: "#3b0f0f", border: "1px solid #dc2626", color: "#f87171", borderRadius: 5, padding: "2px 7px", fontSize: 10, cursor: "pointer", fontWeight: 700, lineHeight: 1.4 }}>✕</button>
+                                        )}
+                                    </span>
+                                </div>
                                 <input type="number" style={INP} placeholder="Qty *" value={form.qty || ""} onChange={e => setForm(f => ({ ...f, qty: e.target.value }))} />
                                 <input type="number" style={INP} placeholder="Sale Rate/Unit (₹) *" value={form.ratePerUnit || ""} onChange={e => setForm(f => ({ ...f, ratePerUnit: e.target.value }))} />
                             </>) : (<>
                                 {/* Multi-item table */}
-                                <input style={INP} placeholder="Bill No. (Optional — applies to all items)" value={form.billNo || ""} onChange={e => setForm(f => ({ ...f, billNo: e.target.value }))} />
+                                {/* ── Bill No. for Normal Sale (multi-item) ── */}
+                                <div style={{ position: "relative", marginBottom: 9 }}>
+                                    <input style={{ ...INP, marginBottom: 0, paddingRight: 72 }} placeholder="Bill No. (applies to all items)" value={form.billNo || ""} onChange={e => setForm(f => ({ ...f, billNo: e.target.value }))} />
+                                    <span style={{ position: "absolute", right: 6, top: "50%", transform: "translateY(-50%)", display: "flex", gap: 4 }}>
+                                        {form._autoBillNo && (
+                                            <button title="Reset to auto-generated number" onClick={() => setForm(f => ({ ...f, billNo: f._autoBillNo }))} style={{ background: "#1e3a5f", border: "1px solid #2563eb", color: "#60a5fa", borderRadius: 5, padding: "2px 7px", fontSize: 10, cursor: "pointer", fontWeight: 700, lineHeight: 1.4 }}>🔄 Auto</button>
+                                        )}
+                                        {form.billNo && (
+                                            <button title="Clear bill number" onClick={() => setForm(f => ({ ...f, billNo: "" }))} style={{ background: "#3b0f0f", border: "1px solid #dc2626", color: "#f87171", borderRadius: 5, padding: "2px 7px", fontSize: 10, cursor: "pointer", fontWeight: 700, lineHeight: 1.4 }}>✕</button>
+                                        )}
+                                    </span>
+                                </div>
                                 <div style={{ background: "#0a0f1e", borderRadius: 10, padding: 12, marginBottom: 9, border: "1px solid #334155" }}>
                                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
                                         <span style={{ fontSize: 11, fontWeight: 800, color: C.red }}>📦 Items</span>
