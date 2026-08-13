@@ -3429,8 +3429,8 @@
 
         // ─── Helpers ──────────────────────────────────────────
         const gid = () => Date.now().toString(36) + Math.random().toString(36).slice(2);
-        const fc = n => "₹" + Math.round(Number(n || 0)).toLocaleString("en-IN", { maximumFractionDigits: 0 });
-        const fn = n => Math.round(Number(n || 0)).toLocaleString("en-IN", { maximumFractionDigits: 0 });
+        const fc = n => "₹" + Number(n || 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        const fn = n => Number(n || 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
         const fabs = n => fc(Math.abs(n));
         const today = () => { const d = new Date(); return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0"); };
 
@@ -3559,15 +3559,15 @@
                 if (["purchase", "sale"].includes(mode)) {
                     if (qty === 0 && rate === 0 && form.amount) {
                         const base = Number(form.amount || 0);
-                        const gstAmount = hasGst ? Math.round(base * gstRate) / 100 : 0;
+                        const gstAmount = hasGst ? (base * gstRate) / 100 : 0;
                         return base + gstAmount;
                     }
                     const taxable = qty * rate;
-                    const gstAmount = hasGst ? Math.round(taxable * gstRate) / 100 : 0;
+                    const gstAmount = hasGst ? (taxable * gstRate) / 100 : 0;
                     return taxable + gstAmount;
                 } else if (["trading_dr", "trading_cr", "pl_expense", "pl_income"].includes(mode)) {
                     const base = Number(form.amount || 0);
-                    const gstAmount = hasGst ? Math.round(base * gstRate) / 100 : 0;
+                    const gstAmount = hasGst ? (base * gstRate) / 100 : 0;
                     return base + gstAmount;
                 } else {
                     return Number(form.amount || 0);
