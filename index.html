@@ -3890,10 +3890,7 @@
                 grandTotal: 0
             });
             const startNewInvoice = () => {
-                const existingNos = new Set((state.gstInvoices || []).map(x => x.invoiceNo));
-                let nextSeq = (state.gstInvoices || []).length + 1;
-                let nextNo = "GST-" + new Date().getFullYear() + "-" + String(nextSeq).padStart(3, "0");
-                while (existingNos.has(nextNo)) { nextSeq++; nextNo = "GST-" + new Date().getFullYear() + "-" + String(nextSeq).padStart(3, "0"); }
+                const nextNo = getNextGstNo();
                 setGstInvForm({
                     invoiceNo: nextNo,
                     date: today(),
@@ -4174,6 +4171,28 @@
                     if (m) { const n = parseInt(m[1], 10); if (n > maxSeq) maxSeq = n; }
                 });
                 return "BILL-" + String(maxSeq + 1).padStart(3, "0");
+            };
+
+            /* ── Auto GST Invoice Number helper ──────────────────────────────────
+               Scans ALL existing GST invoice numbers for the current financial
+               year (GST-YYYY-NNN), finds the highest sequence number used, and
+               returns the next one.  This guarantees:
+                 • No repeats even after deletions
+                 • Strict sequential order (001, 002, 003 …)
+                 • Year resets automatically when the calendar year changes
+            ──────────────────────────────────────────────────────────────────── */
+            const getNextGstNo = () => {
+                const yr = new Date().getFullYear();
+                const prefix = "GST-" + yr + "-";
+                let maxSeq = 0;
+                (state.gstInvoices || []).forEach(inv => {
+                    const no = (inv.invoiceNo || "").trim();
+                    if (no.startsWith(prefix)) {
+                        const n = parseInt(no.slice(prefix.length), 10);
+                        if (!isNaN(n) && n > maxSeq) maxSeq = n;
+                    }
+                });
+                return prefix + String(maxSeq + 1).padStart(3, "0");
             };
 
             const openM = (t, preset) => {
@@ -4642,14 +4661,7 @@
                 if (isDup && !window.confirm("Possible duplicate entry detected (same amount and party on this date). Save anyway?")) return;
 
                 const autoInvoiceId = hasGst ? gid() : null;
-                const _existingNos = new Set((state.gstInvoices || []).map(x => x.invoiceNo));
-                let _nextSeq = (state.gstInvoices || []).length + 1;
-                let autoInvoiceNo = null;
-                if (hasGst) {
-                    let _candidate = "GST-" + new Date().getFullYear() + "-" + String(_nextSeq).padStart(3, "0");
-                    while (_existingNos.has(_candidate)) { _nextSeq++; _candidate = "GST-" + new Date().getFullYear() + "-" + String(_nextSeq).padStart(3, "0"); }
-                    autoInvoiceNo = _candidate;
-                }
+                const autoInvoiceNo = hasGst ? getNextGstNo() : null;
 
                 upd(p => {
                     let np = { ...p };
@@ -5986,13 +5998,10 @@
                                 }
                             }
 
-                            // Ensure invoice number is unique - auto-bump if collision
+                            // Ensure invoice number is unique - auto-assign from sequence if collision
                             let finalInvoiceNo = gstInvForm.invoiceNo;
                             if (invoices.some(x => x.invoiceNo.trim().toLowerCase() === finalInvoiceNo.trim().toLowerCase())) {
-                                const existSet = new Set(invoices.map(x => x.invoiceNo));
-                                let seq = invoices.length + 1;
-                                finalInvoiceNo = "GST-" + new Date().getFullYear() + "-" + String(seq).padStart(3, "0");
-                                while (existSet.has(finalInvoiceNo)) { seq++; finalInvoiceNo = "GST-" + new Date().getFullYear() + "-" + String(seq).padStart(3, "0"); }
+                                finalInvoiceNo = getNextGstNo();
                                 gstInvForm = { ...gstInvForm, invoiceNo: finalInvoiceNo };
                             }
 
