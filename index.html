@@ -3429,9 +3429,8 @@
 
         // ─── Helpers ──────────────────────────────────────────
         const gid = () => Date.now().toString(36) + Math.random().toString(36).slice(2);
-        const round5 = n => Math.round(Number(n || 0) / 5) * 5;
-        const fc = n => "₹" + round5(n).toLocaleString("en-IN", { maximumFractionDigits: 0 });
-        const fn = n => round5(n).toLocaleString("en-IN", { maximumFractionDigits: 0 });
+        const fc = n => "₹" + Math.round(Number(n || 0)).toLocaleString("en-IN", { maximumFractionDigits: 0 });
+        const fn = n => Math.round(Number(n || 0)).toLocaleString("en-IN", { maximumFractionDigits: 0 });
         const fabs = n => fc(Math.abs(n));
         const today = () => { const d = new Date(); return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0"); };
 
@@ -5986,7 +5985,7 @@
                             const units = ["", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten", "Eleven", "Twelve", "Thirteen", "Fourteen", "Fifteen", "Sixteen", "Seventeen", "Eighteen", "Nineteen"];
                             const tens = ["", "", "Twenty", "Thirty", "Forty", "Fifty", "Sixty", "Seventy", "Eighty", "Ninety"];
 
-                            const num = Math.floor(round5(amount));
+                            const num = Math.round(amount);
                             if (num === 0) return "Zero Rupees";
 
                             function helper(n) {
