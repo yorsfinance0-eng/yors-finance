@@ -175,7 +175,15 @@
         // ─── Constants ────────────────────────────────────────
         const BOTTLE_TYPES = ["200ml", "500ml", "1L"];
         const GODOWNS = ["Hazra", "Dunlop", "Bhawanipur", "Alipore", "Gariahat"];
-        const TABS = ["Dashboard", "Inventory", "Stock In", "Stock Out", "GST Invoice", "Raw Materials", "Debtors", "Creditors", "Clients", "Cash Book", "Trading A/C", "P&L Account", "Balance Sheet", "Trial Balance", "Cash Flow", "Journal", "Audit Trail", "Depreciation", "Charts"];
+        const TABS = ["Dashboard", "Inventory", "Stock In", "Stock Out", "Cash Bills", "GST Invoice", "Quotations", "Raw Materials", "Debtors", "Creditors", "Clients", "Cash Book", "Trading A/C", "P&L Account", "Balance Sheet", "Trial Balance", "Cash Flow", "Journal", "Audit Trail", "Depreciation", "Charts"];
+        // ── GST-REPORTABLE COLLECTIONS ────────────────────────────────────────────
+        // ONLY these collections feed GST reports, Ledger, Trial Balance, P&L:
+        //   gstInvoices  (Sales Invoices)
+        //   stockOut     (stock movements linked to invoices)
+        // The `quotations` collection is NEVER included in any GST computation,
+        // regardless of status (Draft/Sent/Accepted/Converted/Rejected/Expired).
+        // Only a converted Sales Invoice (gstInvoices entry) feeds accounting books.
+        // ─────────────────────────────────────────────────────────────────────────
         const RAW_MAT_TYPES = ["Label", "Cap", "Conversion Cost", "Preform", "Shrink"];
         const CLIENT_TYPES = ["Retailer", "Distributor"];
         const CASH_IN_TYPES = ["Sales Receipt", "Debtor Payment", "Capital Introduced", "Loan Received", "Purchase Return Receipt", "Other Income Receipt"];
@@ -188,7 +196,7 @@
         const DEPR_METHODS = ["Straight Line (SLM)", "Written Down Value (WDV)"];
         const DEPR_PERIODS = ["Monthly", "Half-Yearly", "Yearly"];
         const C = { dark: "#0f172a", mid: "#1e293b", border: "#334155", text: "#e2e8f0", muted: "#64748b", purple: "#a855f7", green: "#22c55e", red: "#ef4444", blue: "#38bdf8", amber: "#f59e0b", violet: "#8b5cf6", teal: "#14b8a6" };
-        const INIT = { stockIn: [], stockOut: [], gstInvoices: [], creditors: [], debtors: [], clients: [], plEntries: [], balanceSheet: { assets: {}, liabilities: {} }, cashEntries: [], tradingEntries: [], depreciationAssets: [], rawMaterialPayments: [], openingStock: {}, auditLog: [], settings: { adminPin: "0000", companyProfile: { name: "YORS WATER", gstin: "19AAACY1234A1Z1", stateCode: "19", address: "12, Water Supply Rd, Kolkata, West Bengal", phone: "9876543210" } } };
+        const INIT = { stockIn: [], stockOut: [], gstInvoices: [], quotations: [], creditors: [], debtors: [], clients: [], plEntries: [], balanceSheet: { assets: {}, liabilities: {} }, cashEntries: [], tradingEntries: [], depreciationAssets: [], rawMaterialPayments: [], openingStock: {}, auditLog: [], settings: { adminPin: "0000", companyProfile: { name: "YORS WATER", gstin: "19AAACY1234A1Z1", stateCode: "19", address: "12, Water Supply Rd, Kolkata, West Bengal", phone: "9876543210" } } };
         const CLEAN_RECOVERED_STATE = {
   "stockIn": [],
   "rawMaterialPayments": [
@@ -3835,6 +3843,39 @@
             return { state, setState, loading, savingStatus, lastSaveError, setLastSaveError, exportBackup, importBackup };
         }
 
+        // ─── Shared GST Calculation (Invoice + Quotation modules) ─────────────
+        // Both GST Invoice and Quotation tabs call this function — never duplicate.
+        // gstType: "cgst_sgst" (intra-state) | "igst" (inter-state)
+        // Items in: { qty, ratePerUnit, discountPct, gstRate, ...rest }
+        // Returns: { items (enriched), taxableTotal, cgstTotal, sgstTotal, igstTotal, grandTotal, gstType }
+        function recalcGSTTotals(itemsList, gstType) {
+            const isIntra = gstType === "cgst_sgst";
+            const updated = (itemsList || []).map(item => {
+                const qty = Number(item.qty || 0);
+                const rate = Number(item.ratePerUnit || 0);
+                const discountPct = Number(item.discountPct || 0);
+                const taxable = Math.round(qty * rate * (1 - discountPct / 100) * 100) / 100;
+                const gstRate = Number(item.gstRate || 18);
+                let cgstRate = 0, sgstRate = 0, igstRate = 0;
+                let cgstAmount = 0, sgstAmount = 0, igstAmount = 0;
+                if (isIntra) {
+                    cgstRate = gstRate / 2; sgstRate = gstRate / 2;
+                    cgstAmount = Math.round(taxable * (cgstRate / 100) * 100) / 100;
+                    sgstAmount = Math.round(taxable * (sgstRate / 100) * 100) / 100;
+                } else {
+                    igstRate = gstRate;
+                    igstAmount = Math.round(taxable * (igstRate / 100) * 100) / 100;
+                }
+                return { ...item, taxableValue: taxable, cgstRate, cgstAmount, sgstRate, sgstAmount, igstRate, igstAmount, totalAmount: Math.round((taxable + cgstAmount + sgstAmount + igstAmount) * 100) / 100 };
+            });
+            const taxableTotal = updated.reduce((s, x) => s + (x.taxableValue || 0), 0);
+            const cgstTotal = updated.reduce((s, x) => s + (x.cgstAmount || 0), 0);
+            const sgstTotal = updated.reduce((s, x) => s + (x.sgstAmount || 0), 0);
+            const igstTotal = updated.reduce((s, x) => s + (x.igstAmount || 0), 0);
+            const grandTotal = taxableTotal + cgstTotal + sgstTotal + igstTotal;
+            return { items: updated, taxableTotal, cgstTotal, sgstTotal, igstTotal, grandTotal, gstType };
+        }
+
         // ─── Main App ─────────────────────────────────────────
         function App() {
             const [user, setUser] = useState(null);
@@ -3869,6 +3910,23 @@
             const [expandedCreditor, setExpandedCreditor] = useState(null);
             const [selectedGstInvoiceId, setSelectedGstInvoiceId] = useState(null);
             const [showCreateGstInvoice, setShowCreateGstInvoice] = useState(false);
+
+            const [selectedCashBillId, setSelectedCashBillId] = useState(null);
+            const [cashBillFilter, setCashBillFilter] = useState({ dateFrom: "", dateTo: "", search: "" });
+
+            // ── Quotation module state ──────────────────────────────────────────────
+            const [selectedQuotationId, setSelectedQuotationId] = useState(null);
+            const [showCreateQuotation, setShowCreateQuotation] = useState(false);
+            const [editQuotationId, setEditQuotationId] = useState(null);
+            const [quoteAcceptModal, setQuoteAcceptModal] = useState(null); // null | quotationId
+            const [quotFilter, setQuotFilter] = useState({ status: "All", dateFrom: "", dateTo: "", search: "" });
+            const [quotForm, setQuotForm] = useState({
+                quotNo: "", date: "", validityDate: "", clientId: "", clientName: "",
+                clientGstin: "", clientStateCode: "", clientAddress: "", clientPhone: "",
+                gstType: "cgst_sgst", items: [], taxableTotal: 0, cgstTotal: 0,
+                sgstTotal: 0, igstTotal: 0, grandTotal: 0, notes: "", terms: ""
+            });
+
             const [gstInvForm, setGstInvForm] = useState({
                 invoiceNo: "",
                 date: today(),
@@ -4149,6 +4207,41 @@
             const bsAdjToAssets = credsOpeningOffset + (diffAfterCredsAdj < -0.01 ? -diffAfterCredsAdj : 0);
             const bsAdjToLiab   = diffAfterCredsAdj > 0.01 ? diffAfterCredsAdj : 0;
             // --- Step 4: Final balanced values (no stored data changed) ---
+            /* ── Auto Quotation Number helper ──────────────────────────────────
+               QUO-YYYY-0001, sequential, NOT gapless (quotations are not a
+               GST-mandated document — gaps are allowed after soft-deletes).
+            ────────────────────────────────────────────────────────────────────────── */
+            const getNextQuoNo = () => {
+                const yr = new Date().getFullYear();
+                const prefix = "QUO-" + yr + "-";
+                let maxSeq = 0;
+                (state.quotations || []).filter(q => !q.deleted).forEach(q => {
+                    const no = (q.quotNo || "").trim();
+                    if (no.startsWith(prefix)) {
+                        const n = parseInt(no.slice(prefix.length), 10);
+                        if (!isNaN(n) && n > maxSeq) maxSeq = n;
+                    }
+                });
+                return prefix + String(maxSeq + 1).padStart(4, "0");
+            };
+
+            const startNewQuotation = () => {
+                const comp = state.settings?.companyProfile || {};
+                const defaultValidity = (() => { const d = new Date(); d.setDate(d.getDate() + 30); return d.toISOString().slice(0,10); })();
+                setQuotForm({
+                    quotNo: getNextQuoNo(), date: today(), validityDate: defaultValidity,
+                    clientId: "", clientName: "", clientGstin: "",
+                    clientStateCode: comp.stateCode || "19",
+                    clientAddress: "", clientPhone: "", gstType: "cgst_sgst",
+                    items: [{ itemName: "Packaged Drinking Water", hsnCode: "2201", qty: 100, ratePerUnit: 12, discountPct: 0, gstRate: 18 }],
+                    taxableTotal: 0, cgstTotal: 0, sgstTotal: 0, igstTotal: 0, grandTotal: 0,
+                    notes: "",
+                    terms: "1. Prices are valid till the validity date shown above.\n2. GST as applicable.\n3. Goods once confirmed cannot be returned without prior approval.\n4. Subject to Kolkata jurisdiction only."
+                });
+                setEditQuotationId(null);
+                setShowCreateQuotation(true);
+            };
+
             const bsAutoAssets = bsAutoAssetsRaw + bsAdjToAssets;
             const bsAutoLiab   = bsAutoLiabRaw   + bsAdjToLiab;
             const bsTotalAssets = bsManualAssets + bsAutoAssets, bsTotalLiab = bsManualLiab + bsAutoLiab, bsDiff = bsTotalAssets - bsTotalLiab;
@@ -4628,18 +4721,24 @@
                 if (!form.settleMode) { alert("Select a receipt mode"); return; }
 
                 // Stock availability check per item
-                const currentFifo = computeFIFO(si, so);
+                const currentFIFOVal = computeFIFO(si, so);
                 for (const it of soItems) {
-                    const inv = currentFifo[it.bottleType + "_" + it.category] || { batches: [] };
+                    const inv = currentFIFOVal[it.bottleType + "_" + it.category] || { batches: [] };
                     const avail = inv.batches.filter(b => b.godown === godown).reduce((a, b) => a + b.remQty, 0);
                     if (avail <= 0) { alert(`⛔ No stock in ${godown} for ${it.bottleType} (${it.category}).`); return; }
                     if (avail < Number(it.qty)) { alert(`⛔ Insufficient stock in ${godown} for ${it.bottleType} (${it.category}).\nAvailable: ${avail}, Requested: ${it.qty}`); return; }
                 }
 
-                const grandTotal = soItems.reduce((sum, it) => {
-                    const t = Number(it.qty) * Number(it.ratePerUnit);
-                    return sum + t + t * (gstRate / 100);
-                }, 0);
+                // ── Cash Discount Calculations ──
+                const totalBeforeDiscountTaxable = soItems.reduce((sum, it) => sum + (Number(it.qty) * Number(it.ratePerUnit)), 0);
+                const discountType = form.discountType || "%";
+                const discountValue = Number(form.discountValue || 0);
+                const discountAmount = discountType === "%"
+                    ? Math.round(totalBeforeDiscountTaxable * (discountValue / 100) * 100) / 100
+                    : discountValue;
+                const netAfterDiscount = Math.max(0, totalBeforeDiscountTaxable - discountAmount);
+                const gstAmount = netAfterDiscount * (gstRate / 100);
+                const grandTotal = netAfterDiscount + gstAmount;
 
                 const paidVal = Number(form.paidAmount || 0);
                 if (paidVal < 0 || (form.settleMode !== "cash" && paidVal > grandTotal)) {
@@ -4667,14 +4766,31 @@
                     let np = { ...p };
                     const invoiceItems = [];
                     soItems.forEach((it, idx) => {
-                        const itTaxable = Number(it.qty) * Number(it.ratePerUnit);
+                        const itTaxableBeforeDiscount = Number(it.qty) * Number(it.ratePerUnit);
+                        const prop = totalBeforeDiscountTaxable > 0 ? (itTaxableBeforeDiscount / totalBeforeDiscountTaxable) : 0;
+                        const itDiscountAmt = discountAmount * prop;
+                        const itTaxable = Math.max(0, itTaxableBeforeDiscount - itDiscountAmt);
                         const itGstAmt = itTaxable * (gstRate / 100);
                         const itTotal = itTaxable + itGstAmt;
                         const itCgst = hasGst && gstType === "cgst_sgst" ? Math.round(itGstAmt / 2 * 100) / 100 : 0;
                         const itSgst = itCgst;
                         const itIgst = hasGst && gstType === "igst" ? itGstAmt : 0;
                         const itId = idx === 0 ? firstId : gid();
-                        const soEntry = { id: itId, date, godown, bottleType: it.bottleType, category: it.category, qty: Number(it.qty), ratePerUnit: Number(it.ratePerUnit), totalAmount: itTotal, gstAmount: itGstAmt, gstRate, hsnCode, clientGstin, clientStateCode, settleMode: form.settleMode, linkedPartyId: res.partyId, linkedPartyName: res.partyName, createdDebtorId: idx === 0 ? res.createdDebtorId : null, clientId, clientName, billNo: hasGst ? autoInvoiceNo : (form.billNo || ""), isReturn: false, paidAmount: idx === 0 ? paidVal : 0, gstType, cgstAmount: itCgst, sgstAmount: itSgst, igstAmount: itIgst, ...(hasGst ? { gstInvoiceId: autoInvoiceId } : {}) };
+                        
+                        const soEntry = {
+                            id: itId, date, godown, bottleType: it.bottleType, category: it.category,
+                            qty: Number(it.qty), ratePerUnit: Number(it.ratePerUnit), totalAmount: itTotal,
+                            gstAmount: itGstAmt, gstRate, hsnCode, clientGstin, clientStateCode,
+                            settleMode: form.settleMode, linkedPartyId: res.partyId, linkedPartyName: res.partyName,
+                            createdDebtorId: idx === 0 ? res.createdDebtorId : null, clientId, clientName,
+                            billNo: hasGst ? autoInvoiceNo : (form.billNo || ""), isReturn: false,
+                            paidAmount: idx === 0 ? paidVal : 0, gstType, cgstAmount: itCgst, sgstAmount: itSgst,
+                            igstAmount: itIgst, enableGst: form.enableGst || "no",
+                            discountType: form.discountType || "%", discountValue: Number(form.discountValue || 0),
+                            discountAmount: discountAmount, customerName: form.customerName || "",
+                            customerAddress: form.customerAddress || "", subtotalBeforeDiscount: totalBeforeDiscountTaxable,
+                            ...(hasGst ? { gstInvoiceId: autoInvoiceId } : {})
+                        };
                         np.stockOut = [...np.stockOut, soEntry];
                         np = withLog(np, "CREATE", "stockOut", itId, `Added Stock Out of ${it.qty} ${it.bottleType}`);
                         if (hasGst) invoiceItems.push({ bottleType: it.bottleType, category: it.category, hsnCode, qty: Number(it.qty), ratePerUnit: Number(it.ratePerUnit), taxableValue: itTaxable, gstRate, cgstRate: gstType === "cgst_sgst" ? gstRate / 2 : 0, cgstAmount: itCgst, sgstRate: gstType === "cgst_sgst" ? gstRate / 2 : 0, sgstAmount: itSgst, igstRate: gstType === "igst" ? gstRate : 0, igstAmount: itIgst, totalAmount: itTotal });
@@ -4858,6 +4974,156 @@
 
                 return true;
             };
+
+            // ─────────────────────────────────────────────────────────────────
+            // ── QUOTATION BUSINESS LOGIC ──────────────────────────────────────
+            // NOTE: Quotations NEVER touch gstInvoices, stockOut, cashEntries,
+            // plEntries or any accounting collection. Data isolation is total.
+            // ─────────────────────────────────────────────────────────────────
+
+            const saveQuotation = (qf, editId, initialStatus) => {
+                if (!initialStatus) initialStatus = "Draft";
+                // ── Resolve client details ──
+                let clientName = qf.clientName || "";
+                let clientGstin = qf.clientGstin || "";
+                let clientStateCode = qf.clientStateCode || (state.settings?.companyProfile?.stateCode || "19");
+                let clientAddress = qf.clientAddress || "";
+                let clientPhone = qf.clientPhone || "";
+                if (qf.clientId === "__new__") {
+                    clientName = qf.newClientName || "";
+                    if (!clientName) { alert("Please enter the new client's name."); return false; }
+                    clientGstin = (qf.newClientGstin || "").toUpperCase();
+                    clientStateCode = qf.newClientStateCode || (state.settings?.companyProfile?.stateCode || "19");
+                    clientAddress = qf.newClientAddress || "";
+                    clientPhone = qf.newClientPhone || "";
+                }
+                // ── Validate ──
+                if (!qf.clientId) { alert("Please select or create a client."); return false; }
+                if (!qf.quotNo) { alert("Quotation number is required."); return false; }
+                if (!qf.validityDate) { alert("Validity date is required."); return false; }
+                if (!qf.date) { alert("Quotation date is required."); return false; }
+                if ((qf.items || []).length === 0) { alert("Add at least one item."); return false; }
+                if (qf.items.some(x => !x.itemName)) { alert("Every item must have a name."); return false; }
+
+                // ── Duplicate number check (skip when editing same doc) ──
+                if (!editId) {
+                    if ((state.quotations || []).some(q => !q.deleted && q.quotNo.trim().toLowerCase() === qf.quotNo.trim().toLowerCase())) {
+                        alert("Quotation number already exists. A new number has been assigned.");
+                        return false;
+                    }
+                }
+
+                const rec = recalcGSTTotals(qf.items, qf.gstType || "cgst_sgst");
+
+                if (editId) {
+                    upd(p => {
+                        let np = { ...p, quotations: (p.quotations || []).map(q => q.id === editId ? {
+                            ...q, quotNo: qf.quotNo, date: qf.date, validityDate: qf.validityDate,
+                            clientId: qf.clientId === "__new__" ? (q.clientId || "adhoc-" + gid()) : qf.clientId,
+                            clientName, clientGstin, clientStateCode, clientAddress, clientPhone,
+                            gstType: rec.gstType, items: rec.items,
+                            taxableTotal: rec.taxableTotal, cgstTotal: rec.cgstTotal,
+                            sgstTotal: rec.sgstTotal, igstTotal: rec.igstTotal, grandTotal: rec.grandTotal,
+                            notes: qf.notes || "", terms: qf.terms || "",
+                            updatedAt: new Date().toISOString()
+                        } : q) };
+                        np = withLog(np, "UPDATE", "quotations", editId, `Updated Quotation ${qf.quotNo} for ${clientName} — \u20b9${rec.grandTotal.toFixed(2)}`);
+                        return np;
+                    });
+                } else {
+                    const id = gid();
+                    upd(p => {
+                        let np = { ...p, quotations: [...(p.quotations || []), {
+                            id, quotNo: qf.quotNo, date: qf.date, validityDate: qf.validityDate,
+                            clientId: qf.clientId === "__new__" ? ("adhoc-" + id) : qf.clientId,
+                            clientName, clientGstin, clientStateCode, clientAddress, clientPhone,
+                            gstType: rec.gstType, items: rec.items,
+                            taxableTotal: rec.taxableTotal, cgstTotal: rec.cgstTotal,
+                            sgstTotal: rec.sgstTotal, igstTotal: rec.igstTotal, grandTotal: rec.grandTotal,
+                            notes: qf.notes || "", terms: qf.terms || "",
+                            status: initialStatus, convertedInvoiceId: null, convertedInvoiceNo: null,
+                            createdAt: new Date().toISOString(), deleted: false
+                        }] };
+                        np = withLog(np, "CREATE", "quotations", id, `Created Quotation ${qf.quotNo} for ${clientName} — \u20b9${rec.grandTotal.toFixed(2)} [${initialStatus}]`);
+                        return np;
+                    });
+                }
+                return true;
+            };
+
+            const updateQuotationStatus = (quotId, newStatus) => {
+                if (newStatus === "Accepted") {
+                    // Update status first, then open the accept-choice modal
+                    upd(p => {
+                        let np = { ...p, quotations: (p.quotations || []).map(q => q.id === quotId ? { ...q, status: "Accepted" } : q) };
+                        np = withLog(np, "UPDATE", "quotations", quotId, `Marked Quotation as Accepted`);
+                        return np;
+                    });
+                    setQuoteAcceptModal(quotId);
+                } else {
+                    upd(p => {
+                        let np = { ...p, quotations: (p.quotations || []).map(q => q.id === quotId ? { ...q, status: newStatus } : q) };
+                        np = withLog(np, "UPDATE", "quotations", quotId, `Marked Quotation as ${newStatus}`);
+                        return np;
+                    });
+                }
+            };
+
+            const convertQuotationToInvoice = (quotId) => {
+                const quot = (state.quotations || []).find(q => q.id === quotId);
+                if (!quot) { alert("Quotation not found."); return; }
+
+                // ── Guard: duplicate conversion prevention ──
+                if (quot.convertedInvoiceId) {
+                    alert(`\u26a0\ufe0f This quotation has already been converted to Sales Invoice ${quot.convertedInvoiceNo}.\nDuplicate conversion is blocked to prevent double accounting entries.`);
+                    return;
+                }
+
+                // Pre-fill the invoice form with quotation data
+                // Map quotation generic items → invoice items (user can adjust godown/bottleType in the form)
+                const mappedItems = (quot.items || []).map(item => ({
+                    bottleType: item.bottleType || "1L",
+                    category: item.category || "normal",
+                    qty: Number(item.qty || 0),
+                    ratePerUnit: Number(item.ratePerUnit || 0),
+                    gstRate: Number(item.gstRate || 18),
+                    hsnCode: item.hsnCode || "2201",
+                    taxableValue: Number(item.taxableValue || 0),
+                    cgstRate: Number(item.cgstRate || 0), cgstAmount: Number(item.cgstAmount || 0),
+                    sgstRate: Number(item.sgstRate || 0), sgstAmount: Number(item.sgstAmount || 0),
+                    igstRate: Number(item.igstRate || 0), igstAmount: Number(item.igstAmount || 0),
+                    totalAmount: Number(item.totalAmount || 0)
+                }));
+
+                setGstInvForm({
+                    invoiceNo: getNextGstNo(), date: today(),
+                    clientId: quot.clientId, clientName: quot.clientName,
+                    clientGstin: quot.clientGstin, clientStateCode: quot.clientStateCode,
+                    clientAddress: quot.clientAddress, clientPhone: quot.clientPhone,
+                    clientCreditPeriod: "30", godown: GODOWNS[0] || "",
+                    settleMode: "debtor", gstType: quot.gstType || "cgst_sgst",
+                    items: mappedItems,
+                    taxableTotal: quot.taxableTotal, cgstTotal: quot.cgstTotal,
+                    sgstTotal: quot.sgstTotal, igstTotal: quot.igstTotal, grandTotal: quot.grandTotal,
+                    sourceQuotationId: quotId  // back-reference stored on the invoice
+                });
+                setQuoteAcceptModal(null);
+                setShowCreateGstInvoice(true);
+                setTab("GST Invoice");  // navigate to invoice tab for user to confirm
+            };
+
+            const softDeleteQuotation = (quotId) => {
+                if (!isAdmin) { alert("Locked \uD83D\uDD12: Switch to Admin Mode to delete entries."); return; }
+                const q = (state.quotations || []).find(x => x.id === quotId);
+                if (!window.confirm(`Soft-delete Quotation ${q?.quotNo || quotId}?\nIt will be hidden from the list but NOT permanently erased.`)) return;
+                upd(p => {
+                    let np = { ...p, quotations: (p.quotations || []).map(x => x.id === quotId ? { ...x, deleted: true } : x) };
+                    np = withLog(np, "DELETE", "quotations", quotId, `Soft-deleted Quotation ${q?.quotNo || quotId}`);
+                    return np;
+                });
+                if (selectedQuotationId === quotId) setSelectedQuotationId(null);
+            };
+
             const applyTrading = () => {
                 if (!form.description || !form.amount || !form.side || !form.date || !form.settleMode) { alert("Fill all fields"); return; }
                 if (form.settleMode === "creditor" || form.settleMode === "debtor") {
@@ -5811,70 +6077,271 @@
                                             (filterGodown === '' || i.godown === filterGodown) &&
                                             (filterBottleType === '' || i.bottleType === filterBottleType) &&
                                             (filterReturn === null || i.isReturn === filterReturn)
-                                        )).map(e => { const cName = e.clientName || (e.clientId ? (clients.find(c => c.id === e.clientId) || {}).name : ""); return <tr key={e.id}><td style={TDS}>{e.date}</td><td style={{ ...TDS, fontWeight: 700, color: C.teal, whiteSpace: "nowrap" }}>{e.billNo || "—"}</td><td style={TDS}><Badge label={e.isReturn ? "Return" : "Normal"} color={e.isReturn ? C.amber : C.teal} /></td><td style={TDS}><Badge label={e.godown} color="#7c3aed" /></td><td style={TDS}><Badge label={e.bottleType} color="#6366f1" /></td><td style={TDS}><Badge label={e.category} color={e.category === "normal" ? "#0ea5e9" : C.amber} /></td><td style={{ ...TDS, fontWeight: 700 }}>{e.qty}</td><td style={TDS}>{fc(e.ratePerUnit)}</td><td style={{ ...TDS, fontWeight: 800, color: C.red }}>{fc(e.totalAmount)}{e.paidAmount > 0 && <span style={{ display: "block", fontSize: 9, color: C.muted, fontWeight: 500 }}>Paid Cash: {fc(e.paidAmount)}</span>}</td><td style={TDS}><Badge label={e.settleMode === "cash" ? "Cash" : e.settleMode === "debtor" ? "Debtor" : "Journal"} color={e.settleMode === "cash" ? C.green : C.violet} />{e.paidAmount > 0 && e.settleMode === "debtor" && <span style={{ display: "block", fontSize: 9, color: C.violet, marginTop: 2, fontWeight: 700 }}>Partial Cash</span>}</td><td style={TDS}>{e.linkedPartyName || "—"}</td><td style={TDS}>{cName ? <span style={{ color: C.teal, cursor: "pointer", fontWeight: 600 }} onClick={() => { setSelectedClient(e.clientId); setTab("Clients"); }}>{cName}</span> : "—"}</td><td style={TDS}><button style={BTND} onClick={() => cascadeDelete("stockOut", e.id)}>Del</button></td></tr>; })
+                                        )).map(e => { const cName = e.clientName || (e.clientId ? (clients.find(c => c.id === e.clientId) || {}).name : ""); return <tr key={e.id}><td style={TDS}>{e.date}</td><td style={{ ...TDS, fontWeight: 700, color: C.teal, whiteSpace: "nowrap" }}>{e.billNo || "—"}{(!e.isReturn && e.enableGst !== "yes" && e.billNo) && <span title="View Cash Bill" onClick={() => { setSelectedCashBillId(e.billNo); setTab("Cash Bills"); }} style={{ marginLeft: 6, cursor: "pointer", display: "inline-block", background: C.mid, border: "1px solid " + C.border, borderRadius: 4, padding: "1px 5px", fontSize: 9, color: C.blue, fontWeight: 800 }}>📄 Bill</span>}</td><td style={TDS}><Badge label={e.isReturn ? "Return" : "Normal"} color={e.isReturn ? C.amber : C.teal} /></td><td style={TDS}><Badge label={e.godown} color="#7c3aed" /></td><td style={TDS}><Badge label={e.bottleType} color="#6366f1" /></td><td style={TDS}><Badge label={e.category} color={e.category === "normal" ? "#0ea5e9" : C.amber} /></td><td style={{ ...TDS, fontWeight: 700 }}>{e.qty}</td><td style={TDS}>{fc(e.ratePerUnit)}</td><td style={{ ...TDS, fontWeight: 800, color: C.red }}>{fc(e.totalAmount)}{e.paidAmount > 0 && <span style={{ display: "block", fontSize: 9, color: C.muted, fontWeight: 500 }}>Paid Cash: {fc(e.paidAmount)}</span>}</td><td style={TDS}><Badge label={e.settleMode === "cash" ? "Cash" : e.settleMode === "debtor" ? "Debtor" : "Journal"} color={e.settleMode === "cash" ? C.green : C.violet} />{e.paidAmount > 0 && e.settleMode === "debtor" && <span style={{ display: "block", fontSize: 9, color: C.violet, marginTop: 2, fontWeight: 700 }}>Partial Cash</span>}</td><td style={TDS}>{e.linkedPartyName || "—"}</td><td style={TDS}>{cName ? <span style={{ color: C.teal, cursor: "pointer", fontWeight: 600 }} onClick={() => { setSelectedClient(e.clientId); setTab("Clients"); }}>{cName}</span> : "—"}</td><td style={TDS}><button style={BTND} onClick={() => cascadeDelete("stockOut", e.id)}>Del</button></td></tr>; })
                                     }
                                 </tbody>
                             </table>
                         </div>
                     </div>}
 
+                    {tab === "Cash Bills" && (() => {
+                        const company = state.settings?.companyProfile || { name: "YORS WATER", gstin: "", stateCode: "19", address: "", phone: "" };
+                        
+                        // Group Stock Out entries where enableGst !== "yes" and it's not a return, by billNo
+                        const cashBills = (() => {
+                            const raw = (state.stockOut || []).filter(e => !e.isReturn && e.enableGst !== "yes" && e.billNo);
+                            const groups = {};
+                            raw.forEach(e => {
+                                const bNo = e.billNo;
+                                if (!groups[bNo]) {
+                                    groups[bNo] = {
+                                        billNo: bNo,
+                                        date: e.date,
+                                        clientId: e.clientId,
+                                        clientName: e.clientName,
+                                        customerName: e.customerName,
+                                        customerAddress: e.customerAddress,
+                                        settleMode: e.settleMode,
+                                        linkedPartyName: e.linkedPartyName,
+                                        discountType: e.discountType || "%",
+                                        discountValue: Number(e.discountValue || 0),
+                                        discountAmount: Number(e.discountAmount || 0),
+                                        subtotalBeforeDiscount: Number(e.subtotalBeforeDiscount || 0),
+                                        items: [],
+                                        originalTotalAmount: 0
+                                    };
+                                }
+                                groups[bNo].items.push(e);
+                                groups[bNo].originalTotalAmount += Number(e.totalAmount || 0);
+                            });
+                            return Object.values(groups).sort((a, b) => b.date.localeCompare(a.date) || b.billNo.localeCompare(a.billNo));
+                        })();
+
+                        const qNumToWords = (amount) => {
+                            const units = ["","One","Two","Three","Four","Five","Six","Seven","Eight","Nine","Ten","Eleven","Twelve","Thirteen","Fourteen","Fifteen","Sixteen","Seventeen","Eighteen","Nineteen"];
+                            const tens = ["","","Twenty","Thirty","Forty","Fifty","Sixty","Seventy","Eighty","Ninety"];
+                            const num = Math.round(amount);
+                            if (num === 0) return "Zero Rupees";
+                            function h(n) { if (n < 20) return units[n]; if (n < 100) return tens[Math.floor(n/10)] + (n%10 ? " "+units[n%10] : ""); if (n < 1000) return units[Math.floor(n/100)]+" Hundred"+(n%100 ? " and "+h(n%100) : ""); return ""; }
+                            let temp = num;
+                            const crore = Math.floor(temp/10000000); temp %= 10000000;
+                            const lakh = Math.floor(temp/100000); temp %= 100000;
+                            const thou = Math.floor(temp/1000); temp %= 1000;
+                            const words = [];
+                            if (crore) words.push(h(crore)+" Crore"); if (lakh) words.push(h(lakh)+" Lakh");
+                            if (thou) words.push(h(thou)+" Thousand"); if (temp) words.push(h(temp));
+                            const paise = Math.round((amount - num)*100);
+                            return "Rupees "+words.join(" ")+(paise>0?" and "+h(paise)+" Paise":"")+" Only";
+                        };
+
+                        const filteredBills = cashBills.filter(b => {
+                            if (cashBillFilter.dateFrom && b.date < cashBillFilter.dateFrom) return false;
+                            if (cashBillFilter.dateTo && b.date > cashBillFilter.dateTo) return false;
+                            if (cashBillFilter.search) {
+                                const s = cashBillFilter.search.toLowerCase();
+                                const cName = (b.clientName || b.customerName || b.linkedPartyName || "").toLowerCase();
+                                const bNo = b.billNo.toLowerCase();
+                                if (!cName.includes(s) && !bNo.includes(s)) return false;
+                            }
+                            return true;
+                        });
+
+                        const totalValue = cashBills.reduce((s, b) => s + b.originalTotalAmount, 0);
+                        const totalDiscount = cashBills.reduce((s, b) => s + b.discountAmount, 0);
+
+                        // ─── Print/Detail View ───
+                        if (selectedCashBillId) {
+                            const b = cashBills.find(x => x.billNo === selectedCashBillId);
+                            if (!b) { setSelectedCashBillId(null); return null; }
+                            const tdB = { border: "1px solid #000", padding: "5px 8px", color: "#111", fontSize: 10 };
+                            const thB = { border: "1px solid #000", padding: "6px 8px", background: "#334155", color: "#fff", fontWeight: 700, fontSize: 10 };
+                            const billSubtotal = b.items.reduce((s, it) => s + (Number(it.qty) || 0) * (Number(it.ratePerUnit) || 0), 0);
+                            
+                            return (<div>
+                                <style>{`@media print { #no-print-cb-actions{display:none!important} body{background:white!important;color:black!important;margin:0} #cb-print-area{margin:0!important;padding:18px 24px!important;box-shadow:none!important;border:none!important;color:black!important;background:white!important;width:100%!important;max-width:100%!important} .cb-hbar{background:#334155!important;-webkit-print-color-adjust:exact;print-color-adjust:exact} .cb-th{background:#334155!important;color:#fff!important;-webkit-print-color-adjust:exact;print-color-adjust:exact} .cb-alt{background:#f8fafc!important;-webkit-print-color-adjust:exact;print-color-adjust:exact} }`}</style>
+                                <div id="no-print-cb-actions" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, gap: 8 }}>
+                                    <button onClick={() => setSelectedCashBillId(null)} style={{ ...BTNP(C.mid), border: "1px solid " + C.border, color: C.muted }}>← Back to Cash Bills</button>
+                                    <button onClick={() => window.print()} style={BTNP("linear-gradient(90deg,#0ea5e9,#0284c7)")}>🖨️ Print / PDF</button>
+                                </div>
+                                <div id="cb-print-area" style={{ background: "#fff", color: "#111", padding: "28px 36px", borderRadius: 10, maxWidth: 800, margin: "0 auto", border: "1.5px solid #94a3b8", boxShadow: "0 6px 30px rgba(0,0,0,0.12)", fontFamily: "'Inter','Segoe UI',sans-serif", fontSize: 11 }}>
+                                    <div className="cb-hbar" style={{ background: "#334155", borderRadius: "6px 6px 0 0", padding: "14px 20px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                                        <div>
+                                            <div style={{ fontSize: 22, fontWeight: 900, color: "#fff", letterSpacing: 1 }}>{company.name || "YORS WATER"}</div>
+                                            <div style={{ fontSize: 10, color: "#cbd5e1", marginTop: 2 }}>Premium Packaged Drinking Water</div>
+                                        </div>
+                                        <div style={{ textAlign: "right" }}>
+                                            <div style={{ fontSize: 16, fontWeight: 900, color: "#fff", letterSpacing: 1.5 }}>CASH BILL</div>
+                                            <div style={{ fontSize: 9, color: "#f87171", fontWeight: 700, marginTop: 2, background: "#fff", padding: "1px 5px", borderRadius: 3, display: "inline-block" }}>NOT A TAX INVOICE</div>
+                                        </div>
+                                    </div>
+                                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", border: "1px solid #000", borderTop: "3px solid #334155" }}>
+                                        <div style={{ padding: "10px 14px", borderRight: "1px solid #000" }}>
+                                            <div style={{ fontSize: 9, color: "#334155", fontWeight: 800, textTransform: "uppercase", letterSpacing: 1, marginBottom: 5, borderBottom: "1px solid #e2e8f0", paddingBottom: 3 }}>Supplier Info</div>
+                                            <div style={{ fontWeight: 900, fontSize: 13, marginBottom: 2 }}>{company.name || "YORS WATER"}</div>
+                                            <div style={{ fontSize: 10, lineHeight: "1.5", color: "#374151", marginBottom: 4 }}>{company.address}</div>
+                                            {company.phone && <div style={{ fontSize: 10, color: "#374151" }}><strong>Phone:</strong> {company.phone}</div>}
+                                        </div>
+                                        <div style={{ padding: "10px 14px" }}>
+                                            <div style={{ fontSize: 9, color: "#334155", fontWeight: 800, textTransform: "uppercase", letterSpacing: 1, marginBottom: 5, borderBottom: "1px solid #e2e8f0", paddingBottom: 3 }}>Bill Details</div>
+                                            <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "3px 12px", fontSize: 10 }}>
+                                                <span style={{ color: "#6b7280", fontWeight: 700 }}>Bill No.</span><span style={{ fontWeight: 900, color: "#334155" }}>{b.billNo}</span>
+                                                <span style={{ color: "#6b7280", fontWeight: 700 }}>Date</span><span style={{ fontWeight: 700 }}>{b.date}</span>
+                                                <span style={{ color: "#6b7280", fontWeight: 700 }}>Settle Mode</span><span style={{ textTransform: "capitalize", fontWeight: 700 }}>{b.settleMode} {b.linkedPartyName ? `(${b.linkedPartyName})` : ""}</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div style={{ border: "1px solid #000", borderTop: "none", padding: "10px 14px" }}>
+                                        <div style={{ fontSize: 9, color: "#334155", fontWeight: 800, textTransform: "uppercase", letterSpacing: 1, marginBottom: 5, borderBottom: "1px solid #e2e8f0", paddingBottom: 3 }}>Buyer / Recipient</div>
+                                        {b.clientName || b.customerName ? (
+                                            <div>
+                                                <div style={{ fontWeight: 900, fontSize: 12, marginBottom: 2 }}>{b.clientName || b.customerName}</div>
+                                                {b.customerAddress && <div style={{ fontSize: 10, color: "#374151" }}>{b.customerAddress}</div>}
+                                            </div>
+                                        ) : (
+                                            <div style={{ fontSize: 10, color: "#6b7280", fontStyle: "italic" }}>Counter Sale (Unregistered Customer)</div>
+                                        )}
+                                    </div>
+                                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 10.5 }}>
+                                        <thead>
+                                            <tr>
+                                                {["#", "Item Description", "Category", "Qty", "Rate (₹)", "Total (₹)"].map((h, i) => (
+                                                    <th key={i} className="cb-th" style={{ ...thB, textAlign: i === 0 ? "center" : i === 1 ? "left" : "right", width: i === 0 ? 30 : undefined }}>{h}</th>
+                                                ))}
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {b.items.map((item, i) => {
+                                                const sub = (Number(item.qty) || 0) * (Number(item.ratePerUnit) || 0);
+                                                return (
+                                                    <tr key={i} className={i % 2 === 1 ? "cb-alt" : ""} style={{ background: i % 2 === 1 ? "#f8fafc" : "#fff" }}>
+                                                        <td style={{ ...tdB, textAlign: "center", fontWeight: 700 }}>{i + 1}</td>
+                                                        <td style={tdB}><div style={{ fontWeight: 700 }}>{item.bottleType} Bottled Water</div></td>
+                                                        <td style={{ ...tdB, textAlign: "right" }}><Badge label={item.category} color={item.category === "normal" ? "#0ea5e9" : C.amber} /></td>
+                                                        <td style={{ ...tdB, textAlign: "right" }}>{item.qty}</td>
+                                                        <td style={{ ...tdB, textAlign: "right" }}>{fc(item.ratePerUnit)}</td>
+                                                        <td style={{ ...tdB, textAlign: "right", fontWeight: 700 }}>{fc(sub)}</td>
+                                                    </tr>
+                                                );
+                                            })}
+                                        </tbody>
+                                    </table>
+                                    <div style={{ display: "grid", gridTemplateColumns: "1.5fr 1fr", border: "1px solid #000", borderTop: "none" }}>
+                                        <div style={{ padding: "10px 14px", borderRight: "1px solid #000" }}>
+                                            <div style={{ fontSize: 9, fontWeight: 800, color: "#334155", marginBottom: 6 }}>Amount in Words</div>
+                                            <div style={{ fontSize: 10, fontStyle: "italic", color: "#374151" }}>{qNumToWords(b.originalTotalAmount)}</div>
+                                        </div>
+                                        <div style={{ padding: "10px 14px" }}>
+                                            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10.5, marginBottom: 4 }}>
+                                                <span style={{ color: "#6b7280" }}>Subtotal</span>
+                                                <span style={{ fontWeight: 700 }}>{fc(billSubtotal)}</span>
+                                            </div>
+                                            {b.discountAmount > 0 && (
+                                                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10.5, marginBottom: 4, color: "#16a34a" }}>
+                                                    <span>Discount ({b.discountType === "%" ? b.discountValue + "%" : "flat"})</span>
+                                                    <span>-{fc(b.discountAmount)}</span>
+                                                </div>
+                                            )}
+                                            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, fontWeight: 900, background: "#334155", color: "#fff", padding: "6px 8px", borderRadius: 4, marginTop: 4 }}>
+                                                <span>NET TOTAL</span>
+                                                <span>{fc(b.originalTotalAmount)}</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div style={{ display: "grid", gridTemplateColumns: "1.5fr 1fr", border: "1px solid #000", borderTop: "none" }}>
+                                        <div style={{ padding: "10px 14px", borderRight: "1px solid #000" }}>
+                                            <div style={{ fontSize: 9, fontWeight: 800, color: "#334155", marginBottom: 5 }}>Terms &amp; Conditions</div>
+                                            <div style={{ fontSize: 9, color: "#374151", lineHeight: "1.5" }}>
+                                                1. Goods once sold will not be returned.<br />
+                                                2. Subject to local jurisdiction only.<br />
+                                                3. This is not a Tax Invoice. No Input Tax Credit (ITC) can be claimed.
+                                            </div>
+                                        </div>
+                                        <div style={{ padding: "10px 14px", textAlign: "center", fontSize: 10 }}>
+                                            <div style={{ fontWeight: 700, marginBottom: 2 }}>For <strong>{company.name || "YORS WATER"}</strong></div>
+                                            <div style={{ height: 35, borderBottom: "1px solid #000", margin: "6px 20px" }}></div>
+                                            <div style={{ fontSize: 9, color: "#6b7280" }}>Receiver / Authorised Signatory</div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>);
+                        }
+
+                        // ─── List View ───
+                        return (<div>
+                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+                                <div style={{ fontSize: 16, fontWeight: 800, color: C.blue }}>📄 Cash Bills (GST Disabled)</div>
+                            </div>
+                            <div style={{ display: "flex", gap: 9, flexWrap: "wrap", marginBottom: 16 }}>
+                                {[
+                                    ["Total Bills", cashBills.length, "#475569,#334155"],
+                                    ["Total Sales Value", fc(totalValue), "#38bdf8,#0284c7"],
+                                    ["Total Discount Given", fc(totalDiscount), "#22c55e,#16a34a"]
+                                ].map(([l, v, g]) => (
+                                    <div key={l} style={CARD(g)}><div style={{ fontSize: 9, opacity: .85 }}>{l}</div><div style={{ fontSize: 13, fontWeight: 900 }}>{v}</div></div>
+                                ))}
+                            </div>
+                            <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap", background: C.mid, borderRadius: 10, padding: "10px 14px", border: "1px solid " + C.border }}>
+                                <DateInput value={cashBillFilter.dateFrom} onChange={v => setCashBillFilter(f => ({ ...f, dateFrom: v }))} />
+                                <DateInput value={cashBillFilter.dateTo} onChange={v => setCashBillFilter(f => ({ ...f, dateTo: v }))} />
+                                <input style={{ ...INP, marginBottom: 0, flex: 2, minWidth: 160 }} placeholder="Search client / Bill No." value={cashBillFilter.search} onChange={e => setCashBillFilter(f => ({ ...f, search: e.target.value }))} />
+                                <button style={{ ...BTNP(C.mid), border: "1px solid " + C.border, color: C.muted }} onClick={() => setCashBillFilter({ dateFrom: "", dateTo: "", search: "" })}>Clear</button>
+                            </div>
+                            <div style={{ overflowX: "auto" }}>
+                                <table style={TBL}>
+                                    <thead>
+                                        <tr>
+                                            {["Bill No.", "Date", "Customer", "Items (Qty)", "Subtotal", "Discount", "Net Total", "Settle Mode", "Action"].map(h => (
+                                                <th key={h} style={THS}>{h}</th>
+                                            ))}
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {filteredBills.length === 0 ? (
+                                            <tr>
+                                                <td colSpan={9} style={{ ...TDS, textAlign: "center", color: C.muted, padding: 24 }}>
+                                                    {cashBills.length === 0 ? "No non-GST bills yet. Disable GST in Stock Out to create one." : "No bills match the current filters."}
+                                                </td>
+                                            </tr>
+                                        ) : filteredBills.map(b => {
+                                            const totalQty = b.items.reduce((s, it) => s + (Number(it.qty) || 0), 0);
+                                            const subtotal = b.items.reduce((s, it) => s + (Number(it.qty) || 0) * (Number(it.ratePerUnit) || 0), 0);
+                                            return (
+                                                <tr key={b.billNo}>
+                                                    <td style={{ ...TDS, fontWeight: 700, color: C.teal, fontFamily: "monospace" }}>{b.billNo}</td>
+                                                    <td style={TDS}>{b.date}</td>
+                                                    <td style={TDS}>
+                                                        <div style={{ fontWeight: 700 }}>{b.clientName || b.customerName || "Counter Sale"}</div>
+                                                        {b.customerAddress && <div style={{ fontSize: 9, color: C.muted }}>{b.customerAddress}</div>}
+                                                    </td>
+                                                    <td style={TDS}>{b.items.length} items ({totalQty} bottles)</td>
+                                                    <td style={TDS}>{fc(subtotal)}</td>
+                                                    <td style={{ ...TDS, color: C.green }}>{b.discountAmount > 0 ? `-${fc(b.discountAmount)}` : "—"}</td>
+                                                    <td style={{ ...TDS, fontWeight: 800, color: C.red }}>{fc(b.originalTotalAmount)}</td>
+                                                    <td style={TDS}><Badge label={b.settleMode} color={b.settleMode === "cash" ? C.green : C.violet} /></td>
+                                                    <td style={TDS}>
+                                                        <button style={{ ...BTNP("linear-gradient(90deg,#1e293b,#334155)"), padding: "3px 8px", fontSize: 10, border: "1px solid " + C.border }} onClick={() => setSelectedCashBillId(b.billNo)}>👁 View Bill</button>
+                                                    </td>
+                                                </tr>
+                                            );
+                                        })}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>);
+                    })()}
+
                     {tab === "GST Invoice" && (() => {
                         const invoices = state.gstInvoices || [];
                         const company = state.settings?.companyProfile || { name: "YORS WATER", gstin: "", stateCode: "19", address: "", phone: "" };
 
+                        // \u2500\u2500 GST Invoice recalculate \u2500\u2500 delegates to shared recalcGSTTotals \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+                        // The shared recalcGSTTotals function (module-level) is the single source of truth.
+                        // This wrapper resolves gstType from the form then delegates. Zero duplicate logic.
                         const recalculateTotals = (itemsList, currentForm) => {
                             const compState = company.stateCode || "19";
                             const shipState = currentForm.shipSameAsBill !== false ? currentForm.clientStateCode : currentForm.shipToStateCode;
                             const gstType = currentForm.gstType || (String(shipState || "").trim() === String(compState).trim() ? "cgst_sgst" : (shipState ? "igst" : "cgst_sgst"));
-                            const isIntra = gstType === "cgst_sgst";
-
-                            const updated = itemsList.map(item => {
-                                const qty = Number(item.qty || 0);
-                                const rate = Number(item.ratePerUnit || 0);
-                                const taxable = qty * rate;
-                                const gstRate = Number(item.gstRate || 18);
-
-                                let cgstRate = 0, sgstRate = 0, igstRate = 0;
-                                let cgstAmount = 0, sgstAmount = 0, igstAmount = 0;
-
-                                if (isIntra) {
-                                    cgstRate = gstRate / 2;
-                                    sgstRate = gstRate / 2;
-                                    cgstAmount = Math.round(taxable * (cgstRate / 100) * 100) / 100;
-                                    sgstAmount = Math.round(taxable * (sgstRate / 100) * 100) / 100;
-                                } else {
-                                    igstRate = gstRate;
-                                    igstAmount = Math.round(taxable * (igstRate / 100) * 100) / 100;
-                                }
-
-                                return {
-                                    ...item,
-                                    taxableValue: taxable,
-                                    cgstRate,
-                                    cgstAmount,
-                                    sgstRate,
-                                    sgstAmount,
-                                    igstRate,
-                                    igstAmount,
-                                    totalAmount: taxable + cgstAmount + sgstAmount + igstAmount
-                                };
-                            });
-
-                            const taxableTotal = updated.reduce((s, x) => s + x.taxableValue, 0);
-                            const cgstTotal = updated.reduce((s, x) => s + x.cgstAmount, 0);
-                            const sgstTotal = updated.reduce((s, x) => s + x.sgstAmount, 0);
-                            const igstTotal = updated.reduce((s, x) => s + x.igstAmount, 0);
-                            const grandTotal = taxableTotal + cgstTotal + sgstTotal + igstTotal;
-
-                            return {
-                                items: updated,
-                                taxableTotal,
-                                cgstTotal,
-                                sgstTotal,
-                                igstTotal,
-                                grandTotal,
-                                gstType
-                            };
+                            return recalcGSTTotals(itemsList, gstType);
                         };
 
                         const handleClientSelect = (cId) => {
@@ -6985,7 +7452,376 @@
                     })()}
 
 
+
+                    {tab === "Quotations" && (() => {
+                        // \u2500\u2500 DATA ISOLATION \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+                        // Quotations in ANY status are NEVER included in GST reports,
+                        // Ledger, Sales Register, Trial Balance, P&L, or Cash Book.
+                        // Only a converted Sales Invoice feeds accounting books.
+                        // \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+                        const quotations = (state.quotations || []).filter(q => !q.deleted);
+                        const company = state.settings?.companyProfile || { name: "YORS WATER", gstin: "", stateCode: "19", address: "", phone: "" };
+
+                        const getEffStatus = (q) => {
+                            if (q.convertedInvoiceId) return "Converted";
+                            if (q.status === "Rejected") return "Rejected";
+                            if (q.status === "Accepted") return "Accepted";
+                            if (q.validityDate && q.validityDate < today()) return "Expired";
+                            return q.status || "Draft";
+                        };
+                        const STATUS_COLOR = { Draft: C.muted, Sent: C.blue, Accepted: C.green, Rejected: C.red, Expired: C.amber, Converted: C.teal };
+                        const STATUS_EMOJI = { Draft: "📝", Sent: "📤", Accepted: "✅", Rejected: "❌", Expired: "⏰", Converted: "🔄" };
+
+                        const qNumToWords = (amount) => {
+                            const units = ["","One","Two","Three","Four","Five","Six","Seven","Eight","Nine","Ten","Eleven","Twelve","Thirteen","Fourteen","Fifteen","Sixteen","Seventeen","Eighteen","Nineteen"];
+                            const tens = ["","","Twenty","Thirty","Forty","Fifty","Sixty","Seventy","Eighty","Ninety"];
+                            const num = Math.round(amount);
+                            if (num === 0) return "Zero Rupees";
+                            function h(n) { if (n < 20) return units[n]; if (n < 100) return tens[Math.floor(n/10)] + (n%10 ? " "+units[n%10] : ""); if (n < 1000) return units[Math.floor(n/100)]+" Hundred"+(n%100 ? " and "+h(n%100) : ""); return ""; }
+                            let temp = num;
+                            const crore = Math.floor(temp/10000000); temp %= 10000000;
+                            const lakh = Math.floor(temp/100000); temp %= 100000;
+                            const thou = Math.floor(temp/1000); temp %= 1000;
+                            const words = [];
+                            if (crore) words.push(h(crore)+" Crore"); if (lakh) words.push(h(lakh)+" Lakh");
+                            if (thou) words.push(h(thou)+" Thousand"); if (temp) words.push(h(temp));
+                            const paise = Math.round((amount - num)*100);
+                            return "Rupees "+words.join(" ")+(paise>0?" and "+h(paise)+" Paise":"")+" Only";
+                        };
+
+                        const updateQuotItem = (idx, field, value) => {
+                            setQuotForm(prev => { const ni = [...prev.items]; ni[idx] = { ...ni[idx], [field]: value }; const rec = recalcGSTTotals(ni, prev.gstType || "cgst_sgst"); return { ...prev, ...rec }; });
+                        };
+                        const addQuotItem = () => {
+                            setQuotForm(prev => { const ni = [...prev.items, { itemName: "", hsnCode: "2201", qty: 1, ratePerUnit: 0, discountPct: 0, gstRate: 18 }]; const rec = recalcGSTTotals(ni, prev.gstType || "cgst_sgst"); return { ...prev, ...rec }; });
+                        };
+                        const removeQuotItem = (idx) => {
+                            setQuotForm(prev => { const ni = prev.items.filter((_, i) => i !== idx); const rec = recalcGSTTotals(ni, prev.gstType || "cgst_sgst"); return { ...prev, ...rec }; });
+                        };
+                        const handleQuotClientSelect = (cId) => {
+                            setQuotForm(prev => {
+                                let next = { ...prev, clientId: cId };
+                                if (cId && cId !== "__new__") {
+                                    const cl = (state.clients || []).find(c => c.id === cId);
+                                    if (cl) {
+                                        const compState = company.stateCode || "19";
+                                        const clState = cl.stateCode || compState;
+                                        const gstType = String(clState).trim() === String(compState).trim() ? "cgst_sgst" : "igst";
+                                        next = { ...next, clientName: cl.name, clientGstin: cl.gstin || "", clientStateCode: clState, clientAddress: cl.address || "", clientPhone: cl.phone || "", gstType };
+                                    }
+                                } else {
+                                    next = { ...next, clientName: "", clientGstin: "", clientStateCode: company.stateCode || "19", clientAddress: "", clientPhone: "" };
+                                }
+                                const rec = recalcGSTTotals(next.items, next.gstType || "cgst_sgst");
+                                return { ...next, ...rec };
+                            });
+                        };
+
+                        const STATUSES = ["Draft","Sent","Accepted","Rejected","Expired","Converted"];
+                        const sCounts = STATUSES.reduce((acc, s) => { acc[s] = quotations.filter(q => getEffStatus(q) === s).length; return acc; }, {});
+                        const totalQuotValue = quotations.filter(q => getEffStatus(q) !== "Rejected").reduce((a, q) => a + Number(q.grandTotal || 0), 0);
+                        const filtered = quotations.filter(q => {
+                            const eff = getEffStatus(q);
+                            if (quotFilter.status !== "All" && eff !== quotFilter.status) return false;
+                            if (quotFilter.dateFrom && q.date < quotFilter.dateFrom) return false;
+                            if (quotFilter.dateTo && q.date > quotFilter.dateTo) return false;
+                            if (quotFilter.search) { const s = quotFilter.search.toLowerCase(); if (!q.clientName?.toLowerCase().includes(s) && !(q.quotNo||"").toLowerCase().includes(s)) return false; }
+                            return true;
+                        }).sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+
+                        // \u2550\u2550\u2550\u2550\u2550\u2550\u2550 VIEW B: DETAIL / PRINT VIEW \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
+                        if (selectedQuotationId) {
+                            const q = quotations.find(x => x.id === selectedQuotationId);
+                            if (!q) { setSelectedQuotationId(null); return null; }
+                            const effStatus = getEffStatus(q);
+                            const isIntra = (q.gstType || "cgst_sgst") === "cgst_sgst";
+                            const tdB = { border: "1px solid #000", padding: "5px 8px", color: "#111", fontSize: 10 };
+                            const thB = { border: "1px solid #000", padding: "6px 8px", background: "#1e3a5f", color: "#fff", fontWeight: 700, fontSize: 10 };
+                            return (<div>
+                                <style>{`@media print { #no-print-actions{display:none!important} body{background:white!important;color:black!important;margin:0} #print-area{margin:0!important;padding:18px 24px!important;box-shadow:none!important;border:none!important;color:black!important;background:white!important;width:100%!important;max-width:100%!important} .quo-hbar{background:#1e3a5f!important;-webkit-print-color-adjust:exact;print-color-adjust:exact} .quo-th{background:#1e3a5f!important;color:#fff!important;-webkit-print-color-adjust:exact;print-color-adjust:exact} .quo-alt{background:#f8fafc!important;-webkit-print-color-adjust:exact;print-color-adjust:exact} }`}</style>
+                                <div id="no-print-actions" style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:16, gap:8, flexWrap:"wrap" }}>
+                                    <button onClick={() => setSelectedQuotationId(null)} style={{ ...BTNP(C.mid), border:"1px solid "+C.border, color:C.muted }}>← Back to Quotations</button>
+                                    <div style={{ display:"flex", gap:8, flexWrap:"wrap", alignItems:"center" }}>
+                                        <div style={{ background:C.mid, border:"1px solid "+C.border, borderRadius:8, padding:"6px 14px", fontSize:11 }}>
+                                            <span style={{ color:C.muted }}>Quotation: </span><strong style={{ color:C.teal }}>{q.quotNo}</strong>
+                                            <span style={{ color:C.muted, margin:"0 8px" }}>|</span>
+                                            <span style={{ color:C.muted }}>Total: </span><strong style={{ color:C.green }}>{fc(q.grandTotal)}</strong>
+                                            <span style={{ color:C.muted, margin:"0 8px" }}>|</span>
+                                            <span style={{ fontWeight:800, color:STATUS_COLOR[effStatus] }}>{STATUS_EMOJI[effStatus]} {effStatus}</span>
+                                        </div>
+                                        {isAdmin && effStatus === "Draft" && <button onClick={() => { updateQuotationStatus(q.id, "Sent"); setSelectedQuotationId(null); }} style={BTNP("linear-gradient(90deg,#0ea5e9,#0284c7)")}>📤 Mark as Sent</button>}
+                                        {isAdmin && effStatus === "Sent" && <>
+                                            <button onClick={() => updateQuotationStatus(q.id, "Accepted")} style={BTNP("linear-gradient(90deg,#16a34a,#15803d)")}>✅ Mark Accepted</button>
+                                            <button onClick={() => { updateQuotationStatus(q.id, "Rejected"); setSelectedQuotationId(null); }} style={BTNP("linear-gradient(90deg,#dc2626,#b91c1c)")}>❌ Reject</button>
+                                        </>}
+                                        {isAdmin && effStatus === "Accepted" && !q.convertedInvoiceId && <button onClick={() => convertQuotationToInvoice(q.id)} style={BTNP("linear-gradient(90deg,#0d9488,#0f766e)")}>🔄 Convert to Invoice</button>}
+                                        {q.convertedInvoiceId && <div style={{ background:"#042f2e", border:"1px solid "+C.teal, borderRadius:8, padding:"6px 14px", fontSize:11, color:C.teal }}>↗ Converted to Invoice <strong>{q.convertedInvoiceNo}</strong></div>}
+                                        <button onClick={() => window.print()} style={BTNP("linear-gradient(90deg,#0ea5e9,#0284c7)")}>🖨️ Print / PDF</button>
+                                    </div>
+                                </div>
+                                <div id="print-area" style={{ background:"#fff", color:"#111", padding:"28px 36px", borderRadius:10, maxWidth:960, margin:"0 auto", border:"1.5px solid #b0bec5", boxShadow:"0 6px 30px rgba(0,0,0,0.12)", fontFamily:"'Inter','Segoe UI',system-ui,sans-serif", fontSize:11 }}>
+                                    <div className="quo-hbar" style={{ background:"#1e3a5f", borderRadius:"6px 6px 0 0", padding:"14px 20px", display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                                        <div><div style={{ fontSize:22, fontWeight:900, color:"#fff", letterSpacing:1 }}>{company.name||"YORS WATER"}</div><div style={{ fontSize:10, color:"#93c5fd", marginTop:2 }}>Premium Packaged Drinking Water</div></div>
+                                        <div style={{ textAlign:"right" }}><div style={{ fontSize:18, fontWeight:900, color:"#fff", letterSpacing:2 }}>QUOTATION</div><div style={{ fontSize:10, color:"#93c5fd", marginTop:2 }}>Valid Till: {q.validityDate||"—"}</div></div>
+                                    </div>
+                                    <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", border:"1px solid #000", borderTop:"3px solid #1e3a5f" }}>
+                                        <div style={{ padding:"10px 14px", borderRight:"1px solid #000" }}>
+                                            <div style={{ fontSize:9, color:"#1e3a5f", fontWeight:800, textTransform:"uppercase", letterSpacing:1, marginBottom:5, borderBottom:"1px solid #e2e8f0", paddingBottom:3 }}>Supplier Details</div>
+                                            <div style={{ fontWeight:900, fontSize:13, marginBottom:2 }}>{company.name||"YORS WATER"}</div>
+                                            <div style={{ fontSize:10, lineHeight:"1.5", color:"#374151", marginBottom:4 }}>{company.address}</div>
+                                            <div style={{ display:"grid", gridTemplateColumns:"auto 1fr", gap:"2px 8px", fontSize:10 }}>
+                                                {company.gstin&&<><span style={{ color:"#6b7280", fontWeight:700 }}>GSTIN</span><span style={{ fontWeight:700 }}>{company.gstin}</span></>}
+                                                <span style={{ color:"#6b7280", fontWeight:700 }}>State Code</span><span>{company.stateCode}</span>
+                                                {company.phone&&<><span style={{ color:"#6b7280", fontWeight:700 }}>Phone</span><span>{company.phone}</span></>}
+                                            </div>
+                                        </div>
+                                        <div style={{ padding:"10px 14px" }}>
+                                            <div style={{ fontSize:9, color:"#1e3a5f", fontWeight:800, textTransform:"uppercase", letterSpacing:1, marginBottom:5, borderBottom:"1px solid #e2e8f0", paddingBottom:3 }}>Quotation Details</div>
+                                            <div style={{ display:"grid", gridTemplateColumns:"auto 1fr", gap:"4px 12px", fontSize:11 }}>
+                                                <span style={{ color:"#6b7280", fontWeight:700 }}>Quotation No.</span><span style={{ fontWeight:900, color:"#1e3a5f" }}>{q.quotNo}</span>
+                                                <span style={{ color:"#6b7280", fontWeight:700 }}>Date</span><span style={{ fontWeight:700 }}>{q.date}</span>
+                                                <span style={{ color:"#6b7280", fontWeight:700 }}>Valid Until</span><span style={{ fontWeight:700, color:effStatus==="Expired"?"#dc2626":"#16a34a" }}>{q.validityDate||"—"}</span>
+                                                <span style={{ color:"#6b7280", fontWeight:700 }}>Tax Type</span><span style={{ fontWeight:800, color:isIntra?"#0369a1":"#7c3aed" }}>{isIntra?"CGST + SGST (Intra-State)":"IGST (Inter-State)"}</span>
+                                                <span style={{ color:"#6b7280", fontWeight:700 }}>Status</span><span style={{ fontWeight:800, color:STATUS_COLOR[effStatus] }}>{effStatus}</span>
+                                                {q.convertedInvoiceId&&<><span style={{ color:"#6b7280", fontWeight:700 }}>Invoice Ref.</span><span style={{ fontWeight:800, color:"#0d9488" }}>{q.convertedInvoiceNo}</span></>}
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div style={{ border:"1px solid #000", borderTop:"none", padding:"10px 14px" }}>
+                                        <div style={{ fontSize:9, color:"#1e3a5f", fontWeight:800, textTransform:"uppercase", letterSpacing:1, marginBottom:5, borderBottom:"1px solid #e2e8f0", paddingBottom:3 }}>Bill To (Recipient)</div>
+                                        <div style={{ fontWeight:900, fontSize:13, marginBottom:3 }}>{q.clientName}</div>
+                                        {q.clientAddress&&<div style={{ fontSize:10, lineHeight:"1.5", color:"#374151", marginBottom:4 }}>{q.clientAddress}</div>}
+                                        <div style={{ display:"grid", gridTemplateColumns:"auto 1fr", gap:"2px 8px", fontSize:10 }}>
+                                            <span style={{ color:"#6b7280", fontWeight:700 }}>GSTIN</span><span style={{ fontWeight:700 }}>{q.clientGstin||"URP — Unregistered Person"}</span>
+                                            <span style={{ color:"#6b7280", fontWeight:700 }}>State Code</span><span>{q.clientStateCode}</span>
+                                            {q.clientPhone&&<><span style={{ color:"#6b7280", fontWeight:700 }}>Phone</span><span>{q.clientPhone}</span></>}
+                                        </div>
+                                    </div>
+                                    <table style={{ width:"100%", borderCollapse:"collapse", fontSize:10.5 }}>
+                                        <thead><tr>
+                                            {["#","Description / Item","HSN/SAC","Qty","Rate (₹)","Disc%","Taxable (₹)", isIntra?"CGST":"IGST", isIntra?"SGST":null, "Total (₹)"].filter(Boolean).map((h,i) => <th key={i} className="quo-th" style={{ ...thB, textAlign: i===0||i===2?"center":"right", textAlign: i===1?"left":"right", width: i===0?28:i===2?60:undefined }}>{h}</th>)}
+                                        </tr></thead>
+                                        <tbody>
+                                            {(q.items||[]).map((item,i) => (
+                                                <tr key={i} className={i%2===1?"quo-alt":""} style={{ background:i%2===1?"#f8fafc":"#fff" }}>
+                                                    <td style={{ ...tdB, textAlign:"center", fontWeight:700 }}>{i+1}</td>
+                                                    <td style={tdB}><div style={{ fontWeight:700 }}>{item.itemName||"—"}</div></td>
+                                                    <td style={{ ...tdB, textAlign:"center" }}>{item.hsnCode||"—"}</td>
+                                                    <td style={{ ...tdB, textAlign:"right" }}>{item.qty}</td>
+                                                    <td style={{ ...tdB, textAlign:"right" }}>{fc(item.ratePerUnit||0)}</td>
+                                                    <td style={{ ...tdB, textAlign:"right" }}>{item.discountPct?item.discountPct+"%":"—"}</td>
+                                                    <td style={{ ...tdB, textAlign:"right" }}>{fc(item.taxableValue||0)}</td>
+                                                    {isIntra ? <>
+                                                        <td style={{ ...tdB, textAlign:"right" }}>{item.cgstRate}% | {fc(item.cgstAmount||0)}</td>
+                                                        <td style={{ ...tdB, textAlign:"right" }}>{item.sgstRate}% | {fc(item.sgstAmount||0)}</td>
+                                                    </> : <td style={{ ...tdB, textAlign:"right" }}>{item.igstRate}% | {fc(item.igstAmount||0)}</td>}
+                                                    <td style={{ ...tdB, textAlign:"right", fontWeight:800 }}>{fc(item.totalAmount||0)}</td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                    <div style={{ display:"grid", gridTemplateColumns:"1.5fr 1fr", border:"1px solid #000", borderTop:"none" }}>
+                                        <div style={{ padding:"10px 14px", borderRight:"1px solid #000" }}>
+                                            <div style={{ fontSize:9, fontWeight:800, color:"#1e3a5f", marginBottom:6 }}>Amount in Words</div>
+                                            <div style={{ fontSize:10, fontStyle:"italic", color:"#374151" }}>{qNumToWords(q.grandTotal||0)}</div>
+                                            {q.notes&&<div style={{ marginTop:8, fontSize:9, color:"#374151" }}><strong>Notes:</strong> {q.notes}</div>}
+                                        </div>
+                                        <div style={{ padding:"10px 14px" }}>
+                                            {[["Taxable Amount", q.taxableTotal||0], ...(isIntra?[["CGST",q.cgstTotal||0],["SGST",q.sgstTotal||0]]:[["IGST",q.igstTotal||0]])].map(([l,v]) => (
+                                                <div key={l} style={{ display:"flex", justifyContent:"space-between", fontSize:11, marginBottom:4 }}><span style={{ color:"#6b7280" }}>{l}</span><span style={{ fontWeight:700 }}>{fc(v)}</span></div>
+                                            ))}
+                                            <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, fontWeight:900, background:"#1e3a5f", color:"#fff", padding:"7px 10px", borderRadius:5, marginTop:6 }}><span>GRAND TOTAL</span><span>{fc(q.grandTotal||0)}</span></div>
+                                        </div>
+                                    </div>
+                                    <div style={{ display:"grid", gridTemplateColumns:"1.5fr 1fr", border:"1px solid #000", borderTop:"none" }}>
+                                        <div style={{ padding:"10px 14px", borderRight:"1px solid #000" }}>
+                                            <div style={{ fontSize:9, fontWeight:800, color:"#1e3a5f", marginBottom:5 }}>Terms &amp; Conditions</div>
+                                            <div style={{ fontSize:9.5, color:"#374151", lineHeight:"1.6", whiteSpace:"pre-line" }}>{q.terms||"—"}</div>
+                                        </div>
+                                        <div style={{ padding:"10px 14px", textAlign:"center", fontSize:10 }}>
+                                            <div style={{ fontWeight:700, marginBottom:2 }}>For <strong>{company.name||"YORS WATER"}</strong></div>
+                                            <div style={{ height:40, borderBottom:"1px solid #000", margin:"8px 20px" }}></div>
+                                            <div style={{ fontSize:9.5, color:"#6b7280" }}>Authorised Signatory &amp; Seal</div>
+                                        </div>
+                                    </div>
+                                    <div style={{ marginTop:10, textAlign:"center", fontSize:9, color:"#94a3b8", borderTop:"1px dashed #e2e8f0", paddingTop:6 }}>This is a computer-generated quotation. | Generated by Yors Finance Accounting Suite | {new Date().toLocaleString("en-IN")}</div>
+                                </div>
+                            </div>);
+                        }
+
+                        // \u2550\u2550\u2550\u2550\u2550\u2550\u2550 VIEW C: CREATE / EDIT FORM \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
+                        if (showCreateQuotation) {
+                            const isEditing = !!editQuotationId;
+                            return (<div>
+                                <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:14 }}>
+                                    <div style={{ fontSize:16, fontWeight:800, color:C.teal }}>📋 {isEditing?"Edit Quotation":"New Quotation"}</div>
+                                    <button onClick={() => { setShowCreateQuotation(false); setEditQuotationId(null); }} style={{ ...BTNP(C.mid), border:"1px solid "+C.border, color:C.muted }}>Cancel</button>
+                                </div>
+                                <div style={{ display:"grid", gridTemplateColumns:"1fr 1.8fr", gap:16, alignItems:"start" }}>
+                                    {/* Left panel */}
+                                    <div style={{ background:C.mid, borderRadius:14, padding:16, border:"1px solid "+C.border }}>
+                                        <div style={{ fontWeight:800, fontSize:13, color:C.teal, marginBottom:12, borderBottom:"1px solid #334155", paddingBottom:6 }}>📋 Quotation Details</div>
+                                        <label style={{ fontSize:11, color:"#94a3b8", fontWeight:700, display:"block", marginBottom:4 }}>Quotation No. *</label>
+                                        <input style={INP} value={quotForm.quotNo} onChange={e => setQuotForm(p => ({ ...p, quotNo: e.target.value }))} />
+                                        <label style={{ fontSize:11, color:"#94a3b8", fontWeight:700, display:"block", marginBottom:4 }}>Date *</label>
+                                        <DateInput value={quotForm.date} onChange={v => setQuotForm(p => ({ ...p, date: v }))} />
+                                        <label style={{ fontSize:11, color:"#94a3b8", fontWeight:700, display:"block", marginBottom:4 }}>Valid Until *</label>
+                                        <DateInput value={quotForm.validityDate} onChange={v => setQuotForm(p => ({ ...p, validityDate: v }))} />
+                                        <label style={{ fontSize:11, color:"#94a3b8", fontWeight:700, display:"block", marginBottom:4 }}>GST Tax Type *</label>
+                                        <select style={INP} value={quotForm.gstType||"cgst_sgst"} onChange={e => setQuotForm(p => { const t = e.target.value; const rec = recalcGSTTotals(p.items, t); return { ...p, gstType:t, ...rec }; })}>
+                                            <option value="cgst_sgst">CGST + SGST (Intra-State)</option>
+                                            <option value="igst">IGST (Inter-State)</option>
+                                        </select>
+                                        <div style={{ fontWeight:800, fontSize:13, color:C.blue, margin:"14px 0 12px 0", borderBottom:"1px solid #334155", paddingBottom:6 }}>👤 Client (Recipient)</div>
+                                        <select style={INP} value={quotForm.clientId} onChange={e => handleQuotClientSelect(e.target.value)}>
+                                            <option value="">Select Client *</option>
+                                            {(state.clients||[]).map(c => <option key={c.id} value={c.id}>{c.name} ({c.type})</option>)}
+                                            <option value="__new__">+ Create New Client</option>
+                                        </select>
+                                        {quotForm.clientId === "__new__" ? (
+                                            <div>
+                                                <label style={{ fontSize:11, color:"#94a3b8", fontWeight:700, display:"block", marginBottom:3 }}>Client Name *</label>
+                                                <input style={INP} placeholder="Client Name *" value={quotForm.newClientName||""} onChange={e => setQuotForm(p => ({ ...p, newClientName:e.target.value }))} />
+                                                <label style={{ fontSize:11, color:"#94a3b8", fontWeight:700, display:"block", marginBottom:3 }}>GSTIN (Optional)</label>
+                                                <input style={INP} placeholder="GSTIN" value={quotForm.newClientGstin||""} onChange={e => setQuotForm(p => ({ ...p, newClientGstin:e.target.value.toUpperCase() }))} />
+                                                <label style={{ fontSize:11, color:"#94a3b8", fontWeight:700, display:"block", marginBottom:3 }}>State Code *</label>
+                                                <input style={INP} placeholder="e.g. 19" value={quotForm.newClientStateCode||""} onChange={e => { const v=e.target.value; setQuotForm(p => { const gt=String(v).trim()===String(company.stateCode||"19").trim()?"cgst_sgst":"igst"; const next={...p,newClientStateCode:v,clientStateCode:v,gstType:gt}; const rec=recalcGSTTotals(next.items,gt); return {...next,...rec}; }); }} />
+                                                <label style={{ fontSize:11, color:"#94a3b8", fontWeight:700, display:"block", marginBottom:3 }}>Address</label>
+                                                <input style={INP} placeholder="Address" value={quotForm.newClientAddress||""} onChange={e => setQuotForm(p => ({ ...p, newClientAddress:e.target.value }))} />
+                                                <label style={{ fontSize:11, color:"#94a3b8", fontWeight:700, display:"block", marginBottom:3 }}>Phone</label>
+                                                <input style={INP} placeholder="Phone" value={quotForm.newClientPhone||""} onChange={e => setQuotForm(p => ({ ...p, newClientPhone:e.target.value }))} />
+                                            </div>
+                                        ) : quotForm.clientId ? (
+                                            <div style={{ background:"#0a0f1e", borderRadius:8, padding:10, border:"1px solid "+C.border, fontSize:11, display:"grid", gap:3 }}>
+                                                <div><strong>GSTIN:</strong> {quotForm.clientGstin||"URP (Unregistered)"}</div>
+                                                <div><strong>State:</strong> {quotForm.clientStateCode} | <strong>Tax:</strong> {quotForm.gstType==="igst"?"IGST":"CGST+SGST"}</div>
+                                                {quotForm.clientAddress&&<div><strong>Address:</strong> {quotForm.clientAddress}</div>}
+                                            </div>
+                                        ) : null}
+                                        <div style={{ fontWeight:800, fontSize:13, color:C.amber, margin:"14px 0 12px 0", borderBottom:"1px solid #334155", paddingBottom:6 }}>📝 Notes &amp; Terms</div>
+                                        <label style={{ fontSize:11, color:"#94a3b8", fontWeight:700, display:"block", marginBottom:4 }}>Notes</label>
+                                        <textarea style={{ ...INP, height:55, resize:"vertical" }} placeholder="Optional notes" value={quotForm.notes||""} onChange={e => setQuotForm(p => ({ ...p, notes:e.target.value }))} />
+                                        <label style={{ fontSize:11, color:"#94a3b8", fontWeight:700, display:"block", marginBottom:4 }}>Terms &amp; Conditions</label>
+                                        <textarea style={{ ...INP, height:80, resize:"vertical" }} placeholder="Terms and conditions" value={quotForm.terms||""} onChange={e => setQuotForm(p => ({ ...p, terms:e.target.value }))} />
+                                    </div>
+                                    {/* Right panel */}
+                                    <div>
+                                        <div style={{ background:C.mid, borderRadius:14, padding:16, border:"1px solid "+C.border, marginBottom:14 }}>
+                                            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12, borderBottom:"1px solid #334155", paddingBottom:6 }}>
+                                                <div style={{ fontWeight:800, fontSize:13, color:C.violet }}>📦 Line Items</div>
+                                                <button onClick={addQuotItem} style={BTNP("linear-gradient(90deg,#7c3aed,#6366f1)")}>+ Add Item</button>
+                                            </div>
+                                            {quotForm.items.length === 0 ? (
+                                                <div style={{ textAlign:"center", color:C.muted, padding:20, fontSize:12 }}>No items yet. Click "+ Add Item" to start.</div>
+                                            ) : (
+                                                <div style={{ overflowX:"auto" }}>
+                                                    <table style={{ width:"100%", borderCollapse:"collapse", fontSize:11 }}>
+                                                        <thead><tr>{["Item / Description","HSN/SAC","Qty","Rate ₹","Disc%","GST%","Taxable","Tax Amt","Total",""].map(h => <th key={h} style={THS}>{h}</th>)}</tr></thead>
+                                                        <tbody>
+                                                            {quotForm.items.map((item,idx) => (
+                                                                <tr key={idx}>
+                                                                    <td style={TDS}><input style={{ ...INP, marginBottom:0, minWidth:130 }} placeholder="Item name *" value={item.itemName||""} onChange={e => updateQuotItem(idx,"itemName",e.target.value)} /></td>
+                                                                    <td style={TDS}><input style={{ ...INP, marginBottom:0, width:65 }} placeholder="HSN/SAC" value={item.hsnCode||""} onChange={e => updateQuotItem(idx,"hsnCode",e.target.value)} /></td>
+                                                                    <td style={TDS}><input type="number" style={{ ...INP, marginBottom:0, width:60 }} value={item.qty} onChange={e => updateQuotItem(idx,"qty",e.target.value)} /></td>
+                                                                    <td style={TDS}><input type="number" style={{ ...INP, marginBottom:0, width:75 }} value={item.ratePerUnit} onChange={e => updateQuotItem(idx,"ratePerUnit",e.target.value)} /></td>
+                                                                    <td style={TDS}><input type="number" style={{ ...INP, marginBottom:0, width:52 }} value={item.discountPct||0} onChange={e => updateQuotItem(idx,"discountPct",e.target.value)} /></td>
+                                                                    <td style={TDS}><select style={{ ...INP, marginBottom:0, width:68 }} value={item.gstRate||18} onChange={e => updateQuotItem(idx,"gstRate",Number(e.target.value))}>{[0,5,12,18,28].map(r=><option key={r} value={r}>{r}%</option>)}</select></td>
+                                                                    <td style={{ ...TDS, fontWeight:700, color:C.text }}>{fc(item.taxableValue||0)}</td>
+                                                                    <td style={{ ...TDS, color:C.amber, fontSize:10 }}>{(quotForm.gstType||"cgst_sgst")==="cgst_sgst"?`C:${fc(item.cgstAmount||0)} S:${fc(item.sgstAmount||0)}`:`I:${fc(item.igstAmount||0)}`}</td>
+                                                                    <td style={{ ...TDS, fontWeight:900, color:C.green }}>{fc(item.totalAmount||0)}</td>
+                                                                    <td style={TDS}><button style={BTND} onClick={() => removeQuotItem(idx)}>✕</button></td>
+                                                                </tr>
+                                                            ))}
+                                                        </tbody>
+                                                    </table>
+                                                </div>
+                                            )}
+                                        </div>
+                                        {quotForm.items.length > 0 && (
+                                            <div style={{ background:"linear-gradient(135deg,#0f172a,#1e1b4b)", borderRadius:14, border:"2px solid "+C.border, padding:16, marginBottom:14 }}>
+                                                <div style={{ fontWeight:900, fontSize:13, color:C.text, marginBottom:12, borderBottom:"1px solid #334155", paddingBottom:6 }}>🧮 Tax Summary (GST-Compliant)</div>
+                                                <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
+                                                    <div>
+                                                        {[["Taxable Value",quotForm.taxableTotal,C.text],...(quotForm.gstType==="igst"?[["IGST",quotForm.igstTotal,C.violet]]:[["CGST",quotForm.cgstTotal,C.blue],["SGST",quotForm.sgstTotal,C.blue]])].map(([l,v,c]) => (
+                                                            <div key={l} style={{ display:"flex", justifyContent:"space-between", fontSize:12, marginBottom:6 }}><span style={{ color:C.muted }}>{l}</span><span style={{ color:c, fontWeight:700 }}>{fc(v)}</span></div>
+                                                        ))}
+                                                    </div>
+                                                    <div style={{ display:"flex", flexDirection:"column", justifyContent:"center", alignItems:"center", background:"#042f2e", borderRadius:10, padding:14, border:"1.5px solid "+C.teal }}>
+                                                        <div style={{ fontSize:11, color:C.muted, marginBottom:4 }}>Grand Total</div>
+                                                        <div style={{ fontSize:22, fontWeight:900, color:C.teal }}>{fc(quotForm.grandTotal)}</div>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        )}
+                                        <div style={{ display:"flex", gap:10 }}>
+                                            <button style={{ ...BTNP(), flex:1, padding:"12px 0", fontSize:14 }} onClick={() => { const ok=saveQuotation(quotForm,editQuotationId,"Draft"); if(ok){setShowCreateQuotation(false);setEditQuotationId(null);} }}>{isEditing?"💾 Save Changes":"📋 Save as Draft"}</button>
+                                            {!isEditing && <button style={{ ...BTNP("linear-gradient(90deg,#0ea5e9,#0284c7)"), flex:1, padding:"12px 0", fontSize:14 }} onClick={() => { const ok=saveQuotation(quotForm,null,"Sent"); if(ok){setShowCreateQuotation(false);} }}>📤 Save &amp; Mark as Sent</button>}
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>);
+                        }
+
+                        // \u2550\u2550\u2550\u2550\u2550\u2550\u2550 VIEW A: LIST VIEW \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
+                        return (<div>
+                            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:14 }}>
+                                <div style={{ fontSize:16, fontWeight:800, color:C.teal }}>📋 Quotations</div>
+                                {isAdmin && <button style={BTNP()} onClick={startNewQuotation}>+ New Quotation</button>}
+                            </div>
+                            <div style={{ display:"flex", gap:9, flexWrap:"wrap", marginBottom:16 }}>
+                                {[["Total Quotations",quotations.length,"#475569,#334155"],["Draft",sCounts.Draft,"#475569,#334155"],["Sent",sCounts.Sent,"#0ea5e9,#0284c7"],["Accepted",sCounts.Accepted,"#16a34a,#15803d"],["Converted",sCounts.Converted,"#0d9488,#0f766e"],["Rejected",sCounts.Rejected,"#dc2626,#b91c1c"],["Expired",sCounts.Expired,"#d97706,#b45309"],["Total Value",fc(totalQuotValue),"#7c3aed,#6d28d9"]].map(([l,v,g]) => (
+                                    <div key={l} style={CARD(g)}><div style={{ fontSize:9, opacity:.85 }}>{l}</div><div style={{ fontSize:13, fontWeight:900 }}>{v}</div></div>
+                                ))}
+                            </div>
+                            <div style={{ display:"flex", gap:8, marginBottom:14, flexWrap:"wrap", background:C.mid, borderRadius:10, padding:"10px 14px", border:"1px solid "+C.border }}>
+                                <select style={{ ...INP, marginBottom:0, flex:1, minWidth:120 }} value={quotFilter.status} onChange={e => setQuotFilter(f => ({ ...f, status:e.target.value }))}>
+                                    <option value="All">All Statuses</option>
+                                    {STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
+                                </select>
+                                <DateInput value={quotFilter.dateFrom} onChange={v => setQuotFilter(f => ({ ...f, dateFrom:v }))} />
+                                <DateInput value={quotFilter.dateTo} onChange={v => setQuotFilter(f => ({ ...f, dateTo:v }))} />
+                                <input style={{ ...INP, marginBottom:0, flex:2, minWidth:160 }} placeholder="Search client / QUO no." value={quotFilter.search} onChange={e => setQuotFilter(f => ({ ...f, search:e.target.value }))} />
+                                <button style={{ ...BTNP(C.mid), border:"1px solid "+C.border, color:C.muted }} onClick={() => setQuotFilter({ status:"All", dateFrom:"", dateTo:"", search:"" })}>Clear</button>
+                            </div>
+                            <div style={{ overflowX:"auto" }}>
+                                <table style={TBL}>
+                                    <thead><tr>{["QUO No.","Date","Valid Until","Customer","Taxable","Grand Total","Status","Actions"].map(h => <th key={h} style={THS}>{h}</th>)}</tr></thead>
+                                    <tbody>
+                                        {filtered.length === 0 ? (
+                                            <tr><td colSpan={8} style={{ ...TDS, textAlign:"center", color:C.muted, padding:24 }}>{quotations.length===0?"No quotations yet. Click '+ New Quotation' to create your first one.":"No quotations match the current filters."}</td></tr>
+                                        ) : filtered.map(q => {
+                                            const eff = getEffStatus(q);
+                                            return (<tr key={q.id}>
+                                                <td style={{ ...TDS, fontWeight:700, color:C.teal, fontFamily:"monospace" }}>{q.quotNo}</td>
+                                                <td style={TDS}>{q.date}</td>
+                                                <td style={{ ...TDS, color:eff==="Expired"?C.red:(q.validityDate&&q.validityDate<today()?C.amber:C.muted) }}>{q.validityDate||"—"}</td>
+                                                <td style={TDS}><div style={{ fontWeight:700 }}>{q.clientName}</div>{q.clientGstin&&<div style={{ fontSize:9, color:C.muted, fontFamily:"monospace" }}>{q.clientGstin}</div>}</td>
+                                                <td style={{ ...TDS, textAlign:"right" }}>{fc(q.taxableTotal||0)}</td>
+                                                <td style={{ ...TDS, textAlign:"right", fontWeight:800, color:C.green }}>{fc(q.grandTotal||0)}</td>
+                                                <td style={TDS}>
+                                                    <Badge label={eff} color={STATUS_COLOR[eff]||C.muted} />
+                                                    {q.convertedInvoiceId&&<div style={{ fontSize:9, color:C.teal, marginTop:2, fontWeight:700 }}>↗ {q.convertedInvoiceNo}</div>}
+                                                </td>
+                                                <td style={TDS}>
+                                                    <div style={{ display:"flex", gap:4, flexWrap:"wrap" }}>
+                                                        <button style={{ ...BTNP("linear-gradient(90deg,#1e293b,#334155)"), padding:"3px 8px", fontSize:10, border:"1px solid "+C.border }} onClick={() => setSelectedQuotationId(q.id)}>👁 View</button>
+                                                        {isAdmin && eff === "Draft" && <button style={{ ...BTNP("linear-gradient(90deg,#6366f1,#4f46e5)"), padding:"3px 8px", fontSize:10 }} onClick={() => { setQuotForm({ ...q }); setEditQuotationId(q.id); setShowCreateQuotation(true); }}>✏️ Edit</button>}
+                                                        {isAdmin && eff === "Draft" && <button style={{ ...BTNP("linear-gradient(90deg,#0ea5e9,#0284c7)"), padding:"3px 8px", fontSize:10 }} onClick={() => updateQuotationStatus(q.id,"Sent")}>📤 Send</button>}
+                                                        {isAdmin && eff === "Sent" && <button style={{ ...BTNP("linear-gradient(90deg,#16a34a,#15803d)"), padding:"3px 8px", fontSize:10 }} onClick={() => updateQuotationStatus(q.id,"Accepted")}>✅ Accept</button>}
+                                                        {isAdmin && eff === "Accepted" && !q.convertedInvoiceId && <button style={{ ...BTNP("linear-gradient(90deg,#0d9488,#0f766e)"), padding:"3px 8px", fontSize:10 }} onClick={() => convertQuotationToInvoice(q.id)}>🔄 Convert</button>}
+                                                        {isAdmin && <button style={BTND} onClick={() => softDeleteQuotation(q.id)}>Del</button>}
+                                                    </div>
+                                                </td>
+                                            </tr>);
+                                        })}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>);
+                    })()}
+
                     {tab === "P&L Account" && <div>
+
                         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
                             <div style={{ fontSize: 16, fontWeight: 800, color: "#10b981" }}>📈 Profit & Loss Account</div>
                             {isAdmin && <button style={BTNP()} onClick={() => openM("pl")}>+ Add Entry</button>}
@@ -8248,9 +9084,16 @@
                             const addSoItem = () => setForm(f => ({ ...f, soItems: [...(f.soItems || []), { bottleType: "", category: "normal", qty: "", ratePerUnit: "" }] }));
                             const removeSoItem = idx => setForm(f => ({ ...f, soItems: (f.soItems || []).filter((_, i) => i !== idx) }));
                             const soGrandTaxable = soItems.reduce((s, it) => s + (Number(it.qty) || 0) * (Number(it.ratePerUnit) || 0), 0);
+                            const discountType = form.discountType || "%";
+                            const discountValue = Number(form.discountValue || 0);
+                            const discountAmount = discountType === "%"
+                                ? Math.round(soGrandTaxable * (discountValue / 100) * 100) / 100
+                                : discountValue;
+                            const netAfterDiscount = Math.max(0, soGrandTaxable - discountAmount);
                             const soHasGst = form.enableGst === "yes";
                             const soGstRate = soHasGst ? Number(form.gstRate || 18) : 0;
-                            const soGrandTotal = soGrandTaxable + soGrandTaxable * (soGstRate / 100);
+                            const gstAmount = netAfterDiscount * (soGstRate / 100);
+                            const soGrandTotal = netAfterDiscount + gstAmount;
                             return <div>
                             <div style={{ fontWeight: 800, fontSize: 15, color: C.red, marginBottom: 12 }}>📤 Stock Out</div>
                             <DateInput value={form.date} onChange={v => setForm(f => ({ ...f, date: v }))} />
@@ -8323,6 +9166,34 @@
                                 </div>
                             </>)}
 
+                            {/* ── Cash Discount Section ── */}
+                            {form.isReturn !== "true" && (
+                                <div style={{ background: "#0a0f1e", borderRadius: 8, padding: 12, marginBottom: 9, border: "1px solid " + C.border }}>
+                                    <div style={{ fontWeight: 700, fontSize: 11, color: C.text, marginBottom: 8 }}>💸 Cash Discount</div>
+                                    <div style={{ display: "flex", gap: 8 }}>
+                                        <select style={{ ...INP, marginBottom: 0, width: 70 }} value={form.discountType || "%"} onChange={e => setForm(f => ({ ...f, discountType: e.target.value }))}>
+                                            <option value="%">%</option>
+                                            <option value="₹">₹</option>
+                                        </select>
+                                        <input type="number" style={{ ...INP, marginBottom: 0, flex: 1 }} placeholder="Discount Value" value={form.discountValue || ""} onChange={e => setForm(f => ({ ...f, discountValue: e.target.value }))} />
+                                    </div>
+                                    {discountAmount > 0 && (
+                                        <div style={{ fontSize: 10, color: C.green, marginTop: 6, fontWeight: 700 }}>
+                                            Discount Amount: -{fc(discountAmount)}
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+
+                            {/* ── Ad-hoc Customer Details for Non-GST ── */}
+                            {form.isReturn !== "true" && form.enableGst !== "yes" && (
+                                <div style={{ background: "#0a0f1e", borderRadius: 8, padding: 12, marginBottom: 9, border: "1px solid " + C.border }}>
+                                    <div style={{ fontWeight: 700, fontSize: 11, color: C.text, marginBottom: 8 }}>👤 Customer Info (Optional, for Cash Bill)</div>
+                                    <input style={{ ...INP, marginBottom: 6 }} placeholder="Customer Name" value={form.customerName || ""} onChange={e => setForm(f => ({ ...f, customerName: e.target.value }))} />
+                                    <textarea style={{ ...INP, marginBottom: 0, height: 40, resize: "none" }} placeholder="Customer Address" value={form.customerAddress || ""} onChange={e => setForm(f => ({ ...f, customerAddress: e.target.value }))} />
+                                </div>
+                            )}
+
                             <div style={{ background: "#0a0f1e", borderRadius: 8, padding: 12, marginBottom: 9, border: "1px solid " + C.border }}>
                                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                                     <span style={{ fontSize: 11, color: "#94a3b8", fontWeight: 700 }}>Enable GST / Tax Invoice?</span>
@@ -8360,17 +9231,29 @@
                                 {form.enableGst === "yes" && (
                                     <div style={{ marginTop: 10, background: "#052e16", border: "1px solid #22c55e", borderRadius: 7, padding: "8px 12px", fontSize: 10, color: "#86efac", lineHeight: "1.5" }}>
                                         <strong style={{ color: "#4ade80" }}>✅ GST Invoice will be auto-created!</strong><br />
-                                        Saving this entry will automatically generate a <strong>Tax Invoice</strong> (e.g. GST-2026-001) and it will appear in the <strong>GST Invoices</strong> tab for viewing and printing. The invoice number is assigned sequentially.
+                                        Saving this entry will automatically generate a <strong>Tax Invoice</strong> (e.g. GST-2026-001) and it will appear in the <strong>GST Invoices</strong> tab.
+                                    </div>
+                                )}
+                                {form.enableGst !== "yes" && (
+                                    <div style={{ marginTop: 10, background: "#1e3a5f22", border: "1px solid " + C.blue, borderRadius: 7, padding: "8px 12px", fontSize: 10, color: C.blue, lineHeight: "1.5" }}>
+                                        <strong style={{ color: C.teal }}>📄 Cash Bill will be auto-created!</strong><br />
+                                        Saving this entry will generate a printable <strong>Cash Bill / Delivery Challan</strong>. You can view/print it in the <strong>Cash Bills</strong> tab.
                                     </div>
                                 )}
                             </div>
 
                             {soGrandTaxable > 0 && (() => {
-                                const gstAmt = soGrandTaxable * (soGstRate / 100);
+                                const gstAmt = netAfterDiscount * (soGstRate / 100);
                                 const type = form.gstType || "cgst_sgst";
                                 return (
                                     <div style={{ background: C.mid, borderRadius: 8, padding: 12, marginBottom: 9, border: "1px solid " + C.border, display: "grid", gap: 6 }}>
-                                        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11 }}><span style={{ color: C.muted }}>Subtotal (Taxable)</span><span>{fc(soGrandTaxable)}</span></div>
+                                        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11 }}><span style={{ color: C.muted }}>Subtotal</span><span>{fc(soGrandTaxable)}</span></div>
+                                        {discountAmount > 0 && (
+                                            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: C.green }}><span>Cash Discount ({discountType === "%" ? discountValue + "%" : "flat"})</span><span>-{fc(discountAmount)}</span></div>
+                                        )}
+                                        {discountAmount > 0 && (
+                                            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, fontWeight: 700 }}><span style={{ color: C.muted }}>Taxable Net</span><span>{fc(netAfterDiscount)}</span></div>
+                                        )}
                                         {soHasGst && (() => {
                                             if (type === "cgst_sgst") return (<><div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: C.amber }}><span>CGST ({soGstRate / 2}%)</span><span>{fc(gstAmt / 2)}</span></div><div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: C.amber }}><span>SGST ({soGstRate / 2}%)</span><span>{fc(gstAmt / 2)}</span></div></>);
                                             return <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: C.amber }}><span>IGST ({soGstRate}%)</span><span>{fc(gstAmt)}</span></div>;
@@ -8880,10 +9763,41 @@
                     </div>
                 </div>}
 
+                {/* ──── ACCEPT CHOICE MODAL ──── */}
+                {quoteAcceptModal && (() => {
+                    const q = (state.quotations || []).find(x => x.id === quoteAcceptModal);
+                    return (
+                        <div style={{ position:"fixed", inset:0, background:"#000000e0", display:"flex", alignItems:"center", justifyContent:"center", zIndex:400, overflowY:"auto" }}>
+                            <div style={{ background:"linear-gradient(135deg,#0f172a,#1e1b4b)", border:"2px solid "+C.teal, borderRadius:20, padding:32, width:480, maxWidth:"95vw", boxShadow:"0 20px 60px rgba(0,0,0,0.8)", margin:"20px auto" }}>
+                                <div style={{ fontSize:28, textAlign:"center", marginBottom:10 }}>✅</div>
+                                <div style={{ fontWeight:900, fontSize:17, color:C.teal, marginBottom:8, textAlign:"center" }}>Quotation Accepted</div>
+                                <div style={{ fontSize:12, color:C.muted, marginBottom:4, textAlign:"center" }}>{q?.quotNo} — {q?.clientName}</div>
+                                <div style={{ fontSize:13, color:C.text, marginBottom:20, textAlign:"center", padding:"10px 0", borderTop:"1px solid #334155", borderBottom:"1px solid #334155", marginTop:10 }}>
+                                    What would you like to do next?
+                                </div>
+                                <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
+                                    <button style={{ ...BTNP("linear-gradient(135deg,#0d9488,#0f766e)"), padding:"14px 20px", fontSize:14, borderRadius:12, textAlign:"left", display:"flex", flexDirection:"column", gap:4 }} onClick={() => convertQuotationToInvoice(quoteAcceptModal)}>
+                                        <span style={{ fontWeight:900 }}>📄 Convert to Sales Invoice Now</span>
+                                        <span style={{ fontSize:11, opacity:.85, fontWeight:400 }}>Opens the invoice wizard pre-filled with quotation data. Generates invoice number and posts to accounting books.</span>
+                                    </button>
+                                    <button style={{ ...BTNP("linear-gradient(135deg,#1e293b,#334155)"), padding:"14px 20px", fontSize:14, borderRadius:12, border:"1.5px solid "+C.border, textAlign:"left", display:"flex", flexDirection:"column", gap:4 }} onClick={() => setQuoteAcceptModal(null)}>
+                                        <span style={{ fontWeight:900 }}>📌 Keep as Standalone Record</span>
+                                        <span style={{ fontSize:11, opacity:.85, fontWeight:400, color:C.muted }}>Status stays "Accepted". No invoice created. No impact on Ledger, GST reports, or P&L. You can convert later.</span>
+                                    </button>
+                                </div>
+                                <div style={{ marginTop:16, fontSize:10, color:C.muted, textAlign:"center" }}>
+                                    ⚠️ Quotations in "Accepted" status do NOT feed accounting books until a Sales Invoice is created.
+                                </div>
+                            </div>
+                        </div>
+                    );
+                })()}
+
                 {loanPopup && (
                     <div onClick={() => {
                         setForm(f => ({ ...f, subCategory: "", isLoan: false, interestRate: "" }));
                         setLoanPopup(false);
+
                     }} style={{ position: "fixed", inset: 0, background: "#000000d0", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 300, overflowY: "auto" }}>
                         <div onClick={e => e.stopPropagation()} style={{ background: C.mid, border: "1.5px solid " + C.blue, borderRadius: 16, padding: 24, width: 400, maxWidth: "95vw", boxShadow: "0 10px 30px rgba(0,0,0,0.6)", margin: "20px auto" }}>
                             <div style={{ fontWeight: 800, fontSize: 15, color: C.blue, marginBottom: 6, display: "flex", alignItems: "center", gap: 6 }}>
