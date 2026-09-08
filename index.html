@@ -173,7 +173,7 @@
         const { useState, useEffect, useMemo, useRef, useCallback } = React;
 
         // ─── Constants ────────────────────────────────────────
-        const BOTTLE_TYPES = ["200ml", "500ml", "1L"];
+        const BOTTLE_TYPES = ["200ml", "500ml", "1L", "Premium"];
         const GODOWNS = ["Hazra", "Dunlop", "Bhawanipur", "Alipore", "Gariahat"];
         const TABS = ["Dashboard", "Inventory", "Stock In", "Stock Out", "Cash Bills", "GST Invoice", "Quotations", "Raw Materials", "Debtors", "Creditors", "Clients", "Cash Book", "Trading A/C", "P&L Account", "Balance Sheet", "Trial Balance", "Cash Flow", "Journal", "Audit Trail", "Depreciation", "Charts"];
         // ── GST-REPORTABLE COLLECTIONS ────────────────────────────────────────────
@@ -185,6 +185,12 @@
         // Only a converted Sales Invoice (gstInvoices entry) feeds accounting books.
         // ─────────────────────────────────────────────────────────────────────────
         const RAW_MAT_TYPES = ["Label", "Cap", "Conversion Cost", "Preform", "Shrink"];
+        const RAW_MAT_RATES = {
+            "200ml": { "Conversion Cost": 39.00, "Cap": 14.88, "Label": 5.28, "Preform": 61.20 },
+            "500ml": { "Conversion Cost": 23.00, "Cap": 7.44, "Label": 5.76, "Preform": 44.88 },
+            "1L":    { "Conversion Cost": 17.00, "Cap": 3.72, "Label": 4.92, "Preform": 36.72 },
+            "Premium": { "Conversion Cost": 17.00, "Cap": 3.72, "Label": 4.92, "Preform": 36.72 }
+        };
         const CLIENT_TYPES = ["Retailer", "Distributor"];
         const CASH_IN_TYPES = ["Sales Receipt", "Debtor Payment", "Capital Introduced", "Loan Received", "Purchase Return Receipt", "Other Income Receipt"];
         const CASH_OUT_TYPES = ["Expense Payment", "Creditor Payment", "Stock Purchase Payment", "Raw Material Payment", "Asset Down Payment", "Loan Repayment", "Interest on Loan Repayment", "Sales Return Refund", "GST Tax Payment", "Other Payment"];
@@ -3444,55 +3450,106 @@
 
         function computeFIFO(stockIn, stockOut) {
             const results = {};
+            const keys = [];
             BOTTLE_TYPES.forEach(bt => {
                 ["normal", "customized"].forEach(cat => {
                     const key = bt + "_" + cat;
-                    const batches = stockIn.filter(x => x.bottleType === bt && x.category === cat && !x.isReturn).sort((a, b) => new Date(a.date) - new Date(b.date)).map(x => ({ ...x, origQty: Number(x.qty), remQty: Number(x.qty), rate: Number(x.ratePerUnit), batchNo: x.batchNo, godown: x.godown }));
-                    const returns = stockIn.filter(x => x.bottleType === bt && x.category === cat && x.isReturn);
+                    keys.push(key);
+                    const batches = (stockIn || [])
+                        .filter(x => (x.bottleType === bt || (bt === "Premium" && x.bottleType === "Premium")) && (x.category || "normal") === cat && !x.isReturn)
+                        .sort((a, b) => new Date(a.date) - new Date(b.date))
+                        .map(x => ({ ...x, origQty: Number(x.qty), remQty: Number(x.qty), rate: Number(x.ratePerUnit), batchNo: x.batchNo, godown: x.godown }));
+                    const returns = (stockIn || []).filter(x => (x.bottleType === bt || (bt === "Premium" && x.bottleType === "Premium")) && (x.category || "normal") === cat && x.isReturn);
                     returns.forEach(r => {
                         let b = batches.find(x => x.batchNo === r.batchNo && x.godown === r.godown);
-                        if (!b) {
-                            b = batches.find(x => x.godown === r.godown && x.remQty >= Number(r.qty));
-                            if (!b) {
-                                b = batches.find(x => x.godown === r.godown && x.remQty > 0);
-                                if (!b) {
-                                    b = batches.find(x => x.godown === r.godown);
-                                }
-                            }
-                        }
+                        if (!b) b = batches.find(x => x.godown === r.godown && x.remQty >= Number(r.qty));
+                        if (!b) b = batches.find(x => x.godown === r.godown && x.remQty > 0);
+                        if (!b) b = batches.find(x => x.godown === r.godown);
                         if (b) {
                             b.origQty -= Number(r.qty);
                             b.remQty -= Number(r.qty);
                         }
                     });
-                    const outs = stockOut.filter(x => x.bottleType === bt && x.category === cat && !x.isReturn).sort((a, b) => new Date(a.date) - new Date(b.date));
-                    const salesReturns = stockOut.filter(x => x.bottleType === bt && x.category === cat && x.isReturn);
-                    let cogs = 0;
-                    outs.forEach(out => { let needed = Number(out.qty); for (let i = 0; i < batches.length && needed > 0; i++) { if (batches[i].godown !== out.godown) continue; const take = Math.min(batches[i].remQty, needed); if (take > 0) { cogs += take * batches[i].rate; batches[i].remQty -= take; needed -= take; } } });
-                    // Sales returns: add qty back to existing batches in the same godown (LIFO restoration)
-                    salesReturns.forEach(sr => {
-                        const godown = sr.godown;
-                        let toRestore = Number(sr.qty);
-                        // Try to restore to batches in same godown, starting from most recently depleted (reverse order)
-                        for (let i = batches.length - 1; i >= 0 && toRestore > 0; i--) {
-                            if (batches[i].godown !== godown) continue;
-                            const restoreAmt = Math.min(toRestore, batches[i].origQty - batches[i].remQty); // can only restore what was taken
-                            if (restoreAmt > 0) {
-                                batches[i].remQty += restoreAmt;
-                                toRestore -= restoreAmt;
-                            }
-                        }
-                        // If still some left to restore (e.g. original batch exhausted in another way), add to most recent batch
-                        if (toRestore > 0) {
-                            const fallback = [...batches].reverse().find(b => b.godown === godown);
-                            if (fallback) { fallback.remQty += toRestore; fallback.origQty += toRestore; }
-                        }
-                    });
-                    const inQty = batches.reduce((a, b) => a + b.origQty, 0), outQty = outs.reduce((a, b) => a + Number(b.qty), 0);
-                    let closingValue = 0; batches.forEach(b => { closingValue += b.remQty * b.rate; });
-                    results[key] = { batches, cogs, closingValue, inQty, outQty, balQty: inQty - outQty };
+                    results[key] = { batches, cogs: 0, closingValue: 0, inQty: batches.reduce((a, b) => a + b.origQty, 0), outQty: 0, balQty: 0 };
                 });
             });
+
+            // Process Stock Out entries in chronological order
+            const outs = (stockOut || []).filter(x => !x.isReturn).sort((a, b) => new Date(a.date) - new Date(b.date));
+            outs.forEach(out => {
+                let needed = Number(out.qty);
+                const bt = out.bottleType || "200ml";
+                const cat = out.category || "normal";
+                const godown = out.godown;
+
+                // Priority 1: Primary category key (e.g. 200ml_customized or 200ml_normal or Premium_normal)
+                const primaryKey = bt + "_" + cat;
+                const primaryBatches = results[primaryKey]?.batches || [];
+                for (let i = 0; i < primaryBatches.length && needed > 0; i++) {
+                    if (primaryBatches[i].godown !== godown) continue;
+                    const take = Math.min(primaryBatches[i].remQty, needed);
+                    if (take > 0) {
+                        if (results[primaryKey]) results[primaryKey].cogs += take * primaryBatches[i].rate;
+                        primaryBatches[i].remQty -= take;
+                        needed -= take;
+                    }
+                }
+
+                // Priority 2: For customized stock out (non-Premium), fallback to normal stock of same bottle type
+                if (needed > 0 && cat === "customized" && bt !== "Premium") {
+                    const fallbackKey = bt + "_normal";
+                    const fallbackBatches = results[fallbackKey]?.batches || [];
+                    for (let i = 0; i < fallbackBatches.length && needed > 0; i++) {
+                        if (fallbackBatches[i].godown !== godown) continue;
+                        const take = Math.min(fallbackBatches[i].remQty, needed);
+                        if (take > 0) {
+                            if (results[primaryKey]) results[primaryKey].cogs += take * fallbackBatches[i].rate;
+                            fallbackBatches[i].remQty -= take;
+                            needed -= take;
+                        }
+                    }
+                }
+
+                if (results[primaryKey]) {
+                    results[primaryKey].outQty += Number(out.qty);
+                }
+            });
+
+            // Process Sales Returns
+            const salesReturns = (stockOut || []).filter(x => x.isReturn);
+            salesReturns.forEach(sr => {
+                const bt = sr.bottleType || "200ml";
+                const cat = sr.category || "normal";
+                const key = bt + "_" + cat;
+                const batches = results[key]?.batches || [];
+                const godown = sr.godown;
+                let toRestore = Number(sr.qty);
+                for (let i = batches.length - 1; i >= 0 && toRestore > 0; i--) {
+                    if (batches[i].godown !== godown) continue;
+                    const restoreAmt = Math.min(toRestore, batches[i].origQty - batches[i].remQty);
+                    if (restoreAmt > 0) {
+                        batches[i].remQty += restoreAmt;
+                        toRestore -= restoreAmt;
+                    }
+                }
+                if (toRestore > 0) {
+                    const fallback = [...batches].reverse().find(b => b.godown === godown);
+                    if (fallback) { fallback.remQty += toRestore; fallback.origQty += toRestore; }
+                }
+                if (results[key]) results[key].outQty -= Number(sr.qty);
+            });
+
+            // Finalize closing values and balance quantities
+            keys.forEach(k => {
+                const res = results[k];
+                if (res) {
+                    let closingVal = 0;
+                    res.batches.forEach(b => { closingVal += b.remQty * b.rate; });
+                    res.closingValue = closingVal;
+                    res.balQty = res.batches.reduce((a, b) => a + b.remQty, 0);
+                }
+            });
+
             return results;
         }
 
@@ -3849,24 +3906,27 @@
         // Items in: { qty, ratePerUnit, discountPct, gstRate, ...rest }
         // Returns: { items (enriched), taxableTotal, cgstTotal, sgstTotal, igstTotal, grandTotal, gstType }
         function recalcGSTTotals(itemsList, gstType) {
+            const isNonGst = gstType === "non_gst";
             const isIntra = gstType === "cgst_sgst";
             const updated = (itemsList || []).map(item => {
                 const qty = Number(item.qty || 0);
                 const rate = Number(item.ratePerUnit || 0);
                 const discountPct = Number(item.discountPct || 0);
                 const taxable = Math.round(qty * rate * (1 - discountPct / 100) * 100) / 100;
-                const gstRate = Number(item.gstRate || 18);
+                const gstRate = isNonGst ? 0 : Number(item.gstRate || 18);
                 let cgstRate = 0, sgstRate = 0, igstRate = 0;
                 let cgstAmount = 0, sgstAmount = 0, igstAmount = 0;
-                if (isIntra) {
-                    cgstRate = gstRate / 2; sgstRate = gstRate / 2;
-                    cgstAmount = Math.round(taxable * (cgstRate / 100) * 100) / 100;
-                    sgstAmount = Math.round(taxable * (sgstRate / 100) * 100) / 100;
-                } else {
-                    igstRate = gstRate;
-                    igstAmount = Math.round(taxable * (igstRate / 100) * 100) / 100;
+                if (!isNonGst) {
+                    if (isIntra) {
+                        cgstRate = gstRate / 2; sgstRate = gstRate / 2;
+                        cgstAmount = Math.round(taxable * (cgstRate / 100) * 100) / 100;
+                        sgstAmount = Math.round(taxable * (sgstRate / 100) * 100) / 100;
+                    } else {
+                        igstRate = gstRate;
+                        igstAmount = Math.round(taxable * (igstRate / 100) * 100) / 100;
+                    }
                 }
-                return { ...item, taxableValue: taxable, cgstRate, cgstAmount, sgstRate, sgstAmount, igstRate, igstAmount, totalAmount: Math.round((taxable + cgstAmount + sgstAmount + igstAmount) * 100) / 100 };
+                return { ...item, gstRate, taxableValue: taxable, cgstRate, cgstAmount, sgstRate, sgstAmount, igstRate, igstAmount, totalAmount: Math.round((taxable + cgstAmount + sgstAmount + igstAmount) * 100) / 100 };
             });
             const taxableTotal = updated.reduce((s, x) => s + (x.taxableValue || 0), 0);
             const cgstTotal = updated.reduce((s, x) => s + (x.cgstAmount || 0), 0);
@@ -3913,6 +3973,8 @@
 
             const [selectedCashBillId, setSelectedCashBillId] = useState(null);
             const [cashBillFilter, setCashBillFilter] = useState({ dateFrom: "", dateTo: "", search: "" });
+            const [reportMonth, setReportMonth] = useState("All");
+            const [monthlyReportModal, setMonthlyReportModal] = useState(null);
 
             // ── Quotation module state ──────────────────────────────────────────────
             const [selectedQuotationId, setSelectedQuotationId] = useState(null);
@@ -4288,6 +4350,20 @@
                 return prefix + String(maxSeq + 1).padStart(3, "0");
             };
 
+            const getNextNonGstNo = () => {
+                const yr = new Date().getFullYear();
+                const prefix = "NGST-" + yr + "-";
+                let maxSeq = 0;
+                (state.stockOut || []).forEach(so => {
+                    const no = (so.billNo || "").trim();
+                    if (no.startsWith(prefix)) {
+                        const n = parseInt(no.slice(prefix.length), 10);
+                        if (!isNaN(n) && n > maxSeq) maxSeq = n;
+                    }
+                });
+                return prefix + String(maxSeq + 1).padStart(3, "0");
+            };
+
             const openM = (t, preset) => {
                 const autoBillNo = t === "stockOut" ? getNextBillNo() : "";
                 setModal(t);
@@ -4586,26 +4662,52 @@
                     return;
                 }
 
-                // Raw Material settlement: deduct from pool using combined taxable
+                // Raw Material settlement: deduct category component costs from raw material pool
                 if (form.settleMode === "rawMaterial") {
-                    const availableRawMats = (state.rawMaterialPayments || []).filter(r => (Number(r.amount) - (r.usedForStockIn || 0)) > 0.001);
-                    const totalRmAvail = availableRawMats.reduce((sum, r) => sum + (Number(r.amount) - (r.usedForStockIn || 0)), 0);
-                    if (grandTaxable > totalRmAvail + 0.001) {
-                        alert(`Insufficient raw material pool balance. Available: ₹${totalRmAvail.toFixed(2)} (excl. GST), Required: ₹${grandTaxable.toFixed(2)}`);
-                        return;
-                    }
-                    let needed = grandTaxable;
-                    const deductions = [];
-                    const updatedRawMaterialPayments = (state.rawMaterialPayments || []).map(r => {
-                        const avail = Number(r.amount) - (r.usedForStockIn || 0);
-                        if (needed <= 0 || avail <= 0) return r;
-                        const take = Math.min(needed, avail);
-                        needed -= take;
-                        deductions.push({ id: r.id, amount: take, rawMatType: r.rawMatType });
-                        return { ...r, usedForStockIn: (r.usedForStockIn || 0) + take };
+                    const reqCatAmounts = { "Conversion Cost": 0, "Cap": 0, "Label": 0, "Preform": 0 };
+                    siItems.forEach(it => {
+                        const q = Number(it.qty || 0);
+                        const bt = it.bottleType || "200ml";
+                        const rates = RAW_MAT_RATES[bt] || RAW_MAT_RATES["200ml"];
+                        Object.keys(reqCatAmounts).forEach(cat => {
+                            reqCatAmounts[cat] += q * (rates[cat] || 0);
+                        });
                     });
+
+                    const rawMatPayments = state.rawMaterialPayments || [];
+                    // Check category-wise availability
+                    for (const cat of Object.keys(reqCatAmounts)) {
+                        const req = reqCatAmounts[cat];
+                        if (req > 0) {
+                            const availForCat = rawMatPayments
+                                .filter(r => r.rawMatType === cat)
+                                .reduce((sum, r) => sum + (Number(r.amount) - (r.usedForStockIn || 0)), 0);
+                            if (req > availForCat + 0.001) {
+                                alert(`Insufficient balance in Raw Materials for '${cat}'.\nAvailable: ₹${availForCat.toFixed(2)} (excl. GST), Required: ₹${req.toFixed(2)} for ${siItems.reduce((a,b)=>a+Number(b.qty||0),0)} units.`);
+                                return;
+                            }
+                        }
+                    }
+
+                    const deductions = [];
+                    let currentRms = rawMatPayments.map(r => ({ ...r }));
+
+                    Object.keys(reqCatAmounts).forEach(cat => {
+                        let needed = reqCatAmounts[cat];
+                        if (needed <= 0) return;
+                        currentRms = currentRms.map(r => {
+                            if (r.rawMatType !== cat || needed <= 0) return r;
+                            const avail = Number(r.amount) - (r.usedForStockIn || 0);
+                            if (avail <= 0) return r;
+                            const take = Math.min(needed, avail);
+                            needed -= take;
+                            deductions.push({ id: r.id, amount: take, rawMatType: r.rawMatType });
+                            return { ...r, usedForStockIn: (r.usedForStockIn || 0) + take };
+                        });
+                    });
+
                     upd(p => {
-                        let np = { ...p, rawMaterialPayments: updatedRawMaterialPayments };
+                        let np = { ...p, rawMaterialPayments: currentRms };
                         siItems.forEach((it, idx) => {
                             const itTaxable = Number(it.qty) * Number(it.ratePerUnit);
                             const itGstAmt = itTaxable * (gstRate / 100);
@@ -4614,7 +4716,8 @@
                             const itSgst = itCgst;
                             const itIgst = hasGst && gstType === "igst" ? itGstAmt : 0;
                             const itId = gid();
-                            np.stockIn = [...np.stockIn, { id: itId, date, godown, bottleType: it.bottleType, category: it.category, batchNo: it.batchNo, qty: Number(it.qty), ratePerUnit: Number(it.ratePerUnit), totalAmount: itTotal, gstAmount: itGstAmt, gstRate, hsnCode, supplierGstin, supplierStateCode, settleMode: "rawMaterial", linkedPartyId: null, linkedPartyName: "Raw Material Pool", linkedRawMaterials: idx === 0 ? deductions : [], linkedRawMaterialId: deductions[0] ? deductions[0].id : null, isReturn: false, paidAmount: 0, gstType, cgstAmount: itCgst, sgstAmount: itSgst, igstAmount: itIgst }];
+                            const itemDesc = it.description || form.description || "";
+                            np.stockIn = [...np.stockIn, { id: itId, date, godown, bottleType: it.bottleType, category: it.category, batchNo: it.batchNo, qty: Number(it.qty), ratePerUnit: Number(it.ratePerUnit), description: itemDesc, totalAmount: itTotal, gstAmount: itGstAmt, gstRate, hsnCode, supplierGstin, supplierStateCode, settleMode: "rawMaterial", linkedPartyId: null, linkedPartyName: "Raw Material Pool", linkedRawMaterials: idx === 0 ? deductions : [], linkedRawMaterialId: deductions[0] ? deductions[0].id : null, isReturn: false, paidAmount: 0, gstType, cgstAmount: itCgst, sgstAmount: itSgst, igstAmount: itIgst }];
                             np = withLog(np, "CREATE", "stockIn", itId, `Added Stock In of ${it.qty} ${it.bottleType} (paid from Raw Material Pool)`);
                         });
                         return np;
@@ -4639,7 +4742,8 @@
                         const itSgst = itCgst;
                         const itIgst = hasGst && gstType === "igst" ? itGstAmt : 0;
                         const itId = idx === 0 ? firstId : gid();
-                        np.stockIn = [...np.stockIn, { id: itId, date, godown, bottleType: it.bottleType, category: it.category, batchNo: it.batchNo, qty: Number(it.qty), ratePerUnit: Number(it.ratePerUnit), totalAmount: itTotal, gstAmount: itGstAmt, gstRate, hsnCode, supplierGstin, supplierStateCode, settleMode: form.settleMode, linkedPartyId: res.partyId, linkedPartyName: res.partyName, createdCreditorId: idx === 0 ? res.createdCreditorId : null, isReturn: false, paidAmount: idx === 0 ? paidVal : 0, gstType, cgstAmount: itCgst, sgstAmount: itSgst, igstAmount: itIgst }];
+                        const itemDesc = it.description || form.description || "";
+                        np.stockIn = [...np.stockIn, { id: itId, date, godown, bottleType: it.bottleType, category: it.category, batchNo: it.batchNo, qty: Number(it.qty), ratePerUnit: Number(it.ratePerUnit), description: itemDesc, totalAmount: itTotal, gstAmount: itGstAmt, gstRate, hsnCode, supplierGstin, supplierStateCode, settleMode: form.settleMode, linkedPartyId: res.partyId, linkedPartyName: res.partyName, createdCreditorId: idx === 0 ? res.createdCreditorId : null, isReturn: false, paidAmount: idx === 0 ? paidVal : 0, gstType, cgstAmount: itCgst, sgstAmount: itSgst, igstAmount: itIgst }];
                         np = withLog(np, "CREATE", "stockIn", itId, `Added Stock In of ${it.qty} ${it.bottleType}`);
                     });
                     if (res.createdCreditorId) np.creditors = [...np.creditors, { id: res.createdCreditorId, name: form.newPartyName, date, amount: 0, creditPeriod: form.newPartyCredit || "", notified: false, checked: false }];
@@ -4723,10 +4827,26 @@
                 // Stock availability check per item
                 const currentFIFOVal = computeFIFO(si, so);
                 for (const it of soItems) {
-                    const inv = currentFIFOVal[it.bottleType + "_" + it.category] || { batches: [] };
-                    const avail = inv.batches.filter(b => b.godown === godown).reduce((a, b) => a + b.remQty, 0);
-                    if (avail <= 0) { alert(`⛔ No stock in ${godown} for ${it.bottleType} (${it.category}).`); return; }
-                    if (avail < Number(it.qty)) { alert(`⛔ Insufficient stock in ${godown} for ${it.bottleType} (${it.category}).\nAvailable: ${avail}, Requested: ${it.qty}`); return; }
+                    let avail = 0;
+                    if (it.bottleType === "Premium") {
+                        const batchesP = (currentFIFOVal["Premium_normal"]?.batches || []).concat(currentFIFOVal["Premium_customized"]?.batches || []);
+                        avail = batchesP.filter(b => b.godown === godown).reduce((a, b) => a + b.remQty, 0);
+                        if (avail <= 0) { alert(`⛔ No stock in ${godown} for Premium bottles.`); return; }
+                        if (avail < Number(it.qty)) { alert(`⛔ Insufficient stock in ${godown} for Premium bottles.\nAvailable: ${avail}, Requested: ${it.qty}.\nNote: Premium bottle stock out can only be done from Premium bottle stock.`); return; }
+                    } else if (it.category === "customized") {
+                        const invCustom = currentFIFOVal[it.bottleType + "_customized"] || { batches: [] };
+                        const invNormal = currentFIFOVal[it.bottleType + "_normal"] || { batches: [] };
+                        const availCustom = invCustom.batches.filter(b => b.godown === godown).reduce((a, b) => a + b.remQty, 0);
+                        const availNormal = invNormal.batches.filter(b => b.godown === godown).reduce((a, b) => a + b.remQty, 0);
+                        avail = availCustom + availNormal;
+                        if (avail <= 0) { alert(`⛔ No stock in ${godown} for ${it.bottleType} (${it.category}).`); return; }
+                        if (avail < Number(it.qty)) { alert(`⛔ Insufficient stock in ${godown} for ${it.bottleType} (${it.category}).\nAvailable (Customized + Normal): ${avail}, Requested: ${it.qty}`); return; }
+                    } else {
+                        const inv = currentFIFOVal[it.bottleType + "_" + it.category] || { batches: [] };
+                        avail = inv.batches.filter(b => b.godown === godown).reduce((a, b) => a + b.remQty, 0);
+                        if (avail <= 0) { alert(`⛔ No stock in ${godown} for ${it.bottleType} (${it.category}).`); return; }
+                        if (avail < Number(it.qty)) { alert(`⛔ Insufficient stock in ${godown} for ${it.bottleType} (${it.category}).\nAvailable: ${avail}, Requested: ${it.qty}`); return; }
+                    }
                 }
 
                 // ── Cash Discount Calculations ──
@@ -4776,10 +4896,11 @@
                         const itSgst = itCgst;
                         const itIgst = hasGst && gstType === "igst" ? itGstAmt : 0;
                         const itId = idx === 0 ? firstId : gid();
+                        const itemDesc = it.description || form.description || "";
                         
                         const soEntry = {
                             id: itId, date, godown, bottleType: it.bottleType, category: it.category,
-                            qty: Number(it.qty), ratePerUnit: Number(it.ratePerUnit), totalAmount: itTotal,
+                            qty: Number(it.qty), ratePerUnit: Number(it.ratePerUnit), description: itemDesc, totalAmount: itTotal,
                             gstAmount: itGstAmt, gstRate, hsnCode, clientGstin, clientStateCode,
                             settleMode: form.settleMode, linkedPartyId: res.partyId, linkedPartyName: res.partyName,
                             createdDebtorId: idx === 0 ? res.createdDebtorId : null, clientId, clientName,
@@ -5095,16 +5216,21 @@
                     totalAmount: Number(item.totalAmount || 0)
                 }));
 
+                const isNonGst = quot.gstType === "non_gst";
                 setGstInvForm({
-                    invoiceNo: getNextGstNo(), date: today(),
+                    invoiceNo: isNonGst ? getNextNonGstNo() : getNextGstNo(), date: today(),
                     clientId: quot.clientId, clientName: quot.clientName,
                     clientGstin: quot.clientGstin, clientStateCode: quot.clientStateCode,
                     clientAddress: quot.clientAddress, clientPhone: quot.clientPhone,
                     clientCreditPeriod: "30", godown: GODOWNS[0] || "",
                     settleMode: "debtor", gstType: quot.gstType || "cgst_sgst",
+                    enableGst: isNonGst ? "no" : "yes",
                     items: mappedItems,
-                    taxableTotal: quot.taxableTotal, cgstTotal: quot.cgstTotal,
-                    sgstTotal: quot.sgstTotal, igstTotal: quot.igstTotal, grandTotal: quot.grandTotal,
+                    taxableTotal: quot.taxableTotal,
+                    cgstTotal: isNonGst ? 0 : quot.cgstTotal,
+                    sgstTotal: isNonGst ? 0 : quot.sgstTotal,
+                    igstTotal: isNonGst ? 0 : quot.igstTotal,
+                    grandTotal: quot.grandTotal,
                     sourceQuotationId: quotId  // back-reference stored on the invoice
                 });
                 setQuoteAcceptModal(null);
@@ -5790,7 +5916,17 @@
                     {tab === "Trading A/C" && <div>
                         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
                             <div style={{ fontSize: 16, fontWeight: 800, color: C.teal }}>🔄 Trading Account</div>
-                            <div style={{ display: "flex", gap: 8 }}>
+                            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                                <select style={{ ...INP, marginBottom: 0, width: "auto", padding: "6px 12px" }} value={reportMonth} onChange={e => setReportMonth(e.target.value)}>
+                                    <option value="All">📅 All Months</option>
+                                    {["2026-04","2026-05","2026-06","2026-07","2026-08","2026-09","2026-10","2026-11","2026-12","2027-01","2027-02","2027-03"].map(m => {
+                                        const [y, mm] = m.split("-");
+                                        const d = new Date(Number(y), Number(mm)-1, 1);
+                                        const lbl = d.toLocaleString('en-US', { month: 'short', year: 'numeric' });
+                                        return <option key={m} value={m}>{lbl}</option>;
+                                    })}
+                                </select>
+                                <button style={BTNP("linear-gradient(90deg,#0ea5e9,#0284c7)")} onClick={() => setMonthlyReportModal("Trading A/C")}>📊 Monthly Report</button>
                                 {isAdmin && <button style={BTNP("linear-gradient(90deg,#0891b2,#0ea5e9)")} onClick={() => openM("openingStock")}>Set Opening Stock</button>}
                                 {isAdmin && <button style={BTNP()} onClick={() => openM("trading")}>+ Manual Entry</button>}
                             </div>
@@ -5982,8 +6118,8 @@
                             </select>
                         </div>
                         <div style={{ background: C.mid, borderRadius: 12, overflowX: "auto" }}>
-                            <table style={TBL}><thead><tr>{["Batch", "Type", "Date", "Godown", "Bottle", "Cat", "Qty", "Rate", "Total", "Mode", "Party", "Del"].map(h => <th key={h} style={THS}>{h}</th>)}</tr></thead>
-                                <tbody>{!si.length && <tr><td colSpan={12} style={{ ...TDS, textAlign: "center", color: C.muted }}>No entries</td></tr>}
+                            <table style={TBL}><thead><tr>{["Batch", "Type", "Date", "Godown", "Bottle", "Cat", "Qty", "Ex-GST Rate", "Ex-GST Total", "GST (Tax)", "Grand Total", "Mode", "Party", "Description", "Del"].map(h => <th key={h} style={THS}>{h}</th>)}</tr></thead>
+                                <tbody>{!si.length && <tr><td colSpan={15} style={{ ...TDS, textAlign: "center", color: C.muted }}>No entries</td></tr>}
                                     {
                                         si.filter(i => (
                                             (filterGodown === '' || i.godown === filterGodown) &&
@@ -5993,6 +6129,7 @@
                                             const key = e.bottleType + "_" + e.category;
                                             const batchInfo = fifo[key]?.batches?.find(b => b.batchNo === e.batchNo && b.godown === e.godown);
                                             const remQty = batchInfo ? batchInfo.remQty : null;
+                                            const exGstTotal = (Number(e.qty) || 0) * (Number(e.ratePerUnit) || 0);
                                             return <tr key={e.id}>
                                                 <td style={TDS}><span style={{ fontFamily: "monospace", color: "#818cf8", fontSize: 10 }}>{e.batchNo}</span></td>
                                                 <td style={TDS}><Badge label={e.isReturn ? "Return" : "Normal"} color={e.isReturn ? C.amber : C.teal} /></td>
@@ -6009,6 +6146,8 @@
                                                     )}
                                                 </td>
                                                 <td style={TDS}>{fc(e.ratePerUnit)}</td>
+                                                <td style={{ ...TDS, fontWeight: 700 }}>{fc(exGstTotal)}</td>
+                                                <td style={{ ...TDS, color: C.amber }}>{e.gstAmount ? `${fc(e.gstAmount)} (${e.gstRate || 0}%)` : "₹0"}</td>
                                                 <td style={{ ...TDS, fontWeight: 800, color: C.green }}>
                                                     {fc(e.totalAmount)}
                                                     {e.paidAmount > 0 && (
@@ -6031,11 +6170,12 @@
                                                     )}
                                                     {e.settleMode === "rawMaterial" && (
                                                         <span style={{ display: "block", fontSize: 9, color: C.teal, marginTop: 2, fontWeight: 700 }}>
-                                                            Total: {fc(e.qty * e.ratePerUnit)}
+                                                            Ex-GST: {fc(exGstTotal)}
                                                         </span>
                                                     )}
                                                 </td>
                                                 <td style={TDS}>{e.linkedPartyName || "—"}</td>
+                                                <td style={{ ...TDS, fontSize: 11, color: C.muted }}>{e.description || "—"}</td>
                                                 <td style={TDS}><button style={BTND} onClick={() => cascadeDelete("stockIn", e.id)}>Del</button></td>
                                             </tr>;
                                         })
@@ -6070,14 +6210,35 @@
                             </select>
                         </div>
                         <div style={{ background: C.mid, borderRadius: 12, overflowX: "auto" }}>
-                            <table style={TBL}><thead><tr>{["Date", "Bill No.", "Type", "Godown", "Bottle", "Cat", "Qty", "Rate", "Total", "Mode", "Party", "Client", "Del"].map(h => <th key={h} style={THS}>{h}</th>)}</tr></thead>
-                                <tbody>{!so.length && <tr><td colSpan={13} style={{ ...TDS, textAlign: "center", color: C.muted }}>No entries</td></tr>}
+                            <table style={TBL}><thead><tr>{["Date", "Bill No.", "Type", "Godown", "Bottle", "Cat", "Qty", "Ex-GST Rate", "Ex-GST Total", "GST (Tax)", "Grand Total", "Mode", "Party", "Client", "Description", "Del"].map(h => <th key={h} style={THS}>{h}</th>)}</tr></thead>
+                                <tbody>{!so.length && <tr><td colSpan={16} style={{ ...TDS, textAlign: "center", color: C.muted }}>No entries</td></tr>}
                                     {
                                         so.filter(i => (
                                             (filterGodown === '' || i.godown === filterGodown) &&
                                             (filterBottleType === '' || i.bottleType === filterBottleType) &&
                                             (filterReturn === null || i.isReturn === filterReturn)
-                                        )).map(e => { const cName = e.clientName || (e.clientId ? (clients.find(c => c.id === e.clientId) || {}).name : ""); return <tr key={e.id}><td style={TDS}>{e.date}</td><td style={{ ...TDS, fontWeight: 700, color: C.teal, whiteSpace: "nowrap" }}>{e.billNo || "—"}{(!e.isReturn && e.enableGst !== "yes" && e.billNo) && <span title="View Cash Bill" onClick={() => { setSelectedCashBillId(e.billNo); setTab("Cash Bills"); }} style={{ marginLeft: 6, cursor: "pointer", display: "inline-block", background: C.mid, border: "1px solid " + C.border, borderRadius: 4, padding: "1px 5px", fontSize: 9, color: C.blue, fontWeight: 800 }}>📄 Bill</span>}</td><td style={TDS}><Badge label={e.isReturn ? "Return" : "Normal"} color={e.isReturn ? C.amber : C.teal} /></td><td style={TDS}><Badge label={e.godown} color="#7c3aed" /></td><td style={TDS}><Badge label={e.bottleType} color="#6366f1" /></td><td style={TDS}><Badge label={e.category} color={e.category === "normal" ? "#0ea5e9" : C.amber} /></td><td style={{ ...TDS, fontWeight: 700 }}>{e.qty}</td><td style={TDS}>{fc(e.ratePerUnit)}</td><td style={{ ...TDS, fontWeight: 800, color: C.red }}>{fc(e.totalAmount)}{e.paidAmount > 0 && <span style={{ display: "block", fontSize: 9, color: C.muted, fontWeight: 500 }}>Paid Cash: {fc(e.paidAmount)}</span>}</td><td style={TDS}><Badge label={e.settleMode === "cash" ? "Cash" : e.settleMode === "debtor" ? "Debtor" : "Journal"} color={e.settleMode === "cash" ? C.green : C.violet} />{e.paidAmount > 0 && e.settleMode === "debtor" && <span style={{ display: "block", fontSize: 9, color: C.violet, marginTop: 2, fontWeight: 700 }}>Partial Cash</span>}</td><td style={TDS}>{e.linkedPartyName || "—"}</td><td style={TDS}>{cName ? <span style={{ color: C.teal, cursor: "pointer", fontWeight: 600 }} onClick={() => { setSelectedClient(e.clientId); setTab("Clients"); }}>{cName}</span> : "—"}</td><td style={TDS}><button style={BTND} onClick={() => cascadeDelete("stockOut", e.id)}>Del</button></td></tr>; })
+                                        )).map(e => {
+                                            const cName = e.clientName || (e.clientId ? (clients.find(c => c.id === e.clientId) || {}).name : "");
+                                            const exGstTotal = (Number(e.qty) || 0) * (Number(e.ratePerUnit) || 0);
+                                            return <tr key={e.id}>
+                                                <td style={TDS}>{e.date}</td>
+                                                <td style={{ ...TDS, fontWeight: 700, color: C.teal, whiteSpace: "nowrap" }}>{e.billNo || "—"}{(!e.isReturn && e.enableGst !== "yes" && e.billNo) && <span title="View Cash Bill" onClick={() => { setSelectedCashBillId(e.billNo); setTab("Cash Bills"); }} style={{ marginLeft: 6, cursor: "pointer", display: "inline-block", background: C.mid, border: "1px solid " + C.border, borderRadius: 4, padding: "1px 5px", fontSize: 9, color: C.blue, fontWeight: 800 }}>📄 Bill</span>}</td>
+                                                <td style={TDS}><Badge label={e.isReturn ? "Return" : "Normal"} color={e.isReturn ? C.amber : C.teal} /></td>
+                                                <td style={TDS}><Badge label={e.godown} color="#7c3aed" /></td>
+                                                <td style={TDS}><Badge label={e.bottleType} color="#6366f1" /></td>
+                                                <td style={TDS}><Badge label={e.category} color={e.category === "normal" ? "#0ea5e9" : C.amber} /></td>
+                                                <td style={{ ...TDS, fontWeight: 700 }}>{e.qty}</td>
+                                                <td style={TDS}>{fc(e.ratePerUnit)}</td>
+                                                <td style={{ ...TDS, fontWeight: 700 }}>{fc(exGstTotal)}</td>
+                                                <td style={{ ...TDS, color: C.amber }}>{e.gstAmount ? `${fc(e.gstAmount)} (${e.gstRate || 0}%)` : "₹0"}</td>
+                                                <td style={{ ...TDS, fontWeight: 800, color: C.red }}>{fc(e.totalAmount)}{e.paidAmount > 0 && <span style={{ display: "block", fontSize: 9, color: C.muted, fontWeight: 500 }}>Paid Cash: {fc(e.paidAmount)}</span>}</td>
+                                                <td style={TDS}><Badge label={e.settleMode === "cash" ? "Cash" : e.settleMode === "debtor" ? "Debtor" : "Journal"} color={e.settleMode === "cash" ? C.green : C.violet} />{e.paidAmount > 0 && e.settleMode === "debtor" && <span style={{ display: "block", fontSize: 9, color: C.violet, marginTop: 2, fontWeight: 700 }}>Partial Cash</span>}</td>
+                                                <td style={TDS}>{e.linkedPartyName || "—"}</td>
+                                                <td style={TDS}>{cName ? <span style={{ color: C.teal, cursor: "pointer", fontWeight: 600 }} onClick={() => { setSelectedClient(e.clientId); setTab("Clients"); }}>{cName}</span> : "—"}</td>
+                                                <td style={{ ...TDS, fontSize: 11, color: C.muted }}>{e.description || "—"}</td>
+                                                <td style={TDS}><button style={BTND} onClick={() => cascadeDelete("stockOut", e.id)}>Del</button></td>
+                                            </tr>;
+                                        })
                                     }
                                 </tbody>
                             </table>
@@ -7671,6 +7832,7 @@
                                         <select style={INP} value={quotForm.gstType||"cgst_sgst"} onChange={e => setQuotForm(p => { const t = e.target.value; const rec = recalcGSTTotals(p.items, t); return { ...p, gstType:t, ...rec }; })}>
                                             <option value="cgst_sgst">CGST + SGST (Intra-State)</option>
                                             <option value="igst">IGST (Inter-State)</option>
+                                            <option value="non_gst">Non-GST Quotation (0% Tax)</option>
                                         </select>
                                         <div style={{ fontWeight:800, fontSize:13, color:C.blue, margin:"14px 0 12px 0", borderBottom:"1px solid #334155", paddingBottom:6 }}>👤 Client (Recipient)</div>
                                         <select style={INP} value={quotForm.clientId} onChange={e => handleQuotClientSelect(e.target.value)}>
@@ -7824,7 +7986,19 @@
 
                         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
                             <div style={{ fontSize: 16, fontWeight: 800, color: "#10b981" }}>📈 Profit & Loss Account</div>
-                            {isAdmin && <button style={BTNP()} onClick={() => openM("pl")}>+ Add Entry</button>}
+                            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                                <select style={{ ...INP, marginBottom: 0, width: "auto", padding: "6px 12px" }} value={reportMonth} onChange={e => setReportMonth(e.target.value)}>
+                                    <option value="All">📅 All Months</option>
+                                    {["2026-04","2026-05","2026-06","2026-07","2026-08","2026-09","2026-10","2026-11","2026-12","2027-01","2027-02","2027-03"].map(m => {
+                                        const [y, mm] = m.split("-");
+                                        const d = new Date(Number(y), Number(mm)-1, 1);
+                                        const lbl = d.toLocaleString('en-US', { month: 'short', year: 'numeric' });
+                                        return <option key={m} value={m}>{lbl}</option>;
+                                    })}
+                                </select>
+                                <button style={BTNP("linear-gradient(90deg,#10b981,#059669)")} onClick={() => setMonthlyReportModal("P&L Account")}>📊 Monthly Report</button>
+                                {isAdmin && <button style={BTNP()} onClick={() => openM("pl")}>+ Add Entry</button>}
+                            </div>
                         </div>
                         <div style={{ background: "#0a1628", borderRadius: 10, padding: "8px 14px", marginBottom: 12, border: "1px solid #334155", fontSize: 10, color: "#64748b" }}>
                             ℹ️ <strong style={{ color: "#94a3b8" }}>Accounting Note:</strong> P&amp;L is derived from Trading Account (Gross Profit/Loss) + manual P&amp;L entries + Depreciation only. Cash Book entries do <em>not</em> feed into P&amp;L to prevent double-entry.
@@ -8335,7 +8509,19 @@
                     {tab === "Balance Sheet" && <div>
                         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
                             <div style={{ fontSize: 16, fontWeight: 800, color: C.blue }}>🏛️ Balance Sheet</div>
-                            {isAdmin && <button style={BTNP()} onClick={() => openM("bs")}>+ Manual Entry</button>}
+                            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                                <select style={{ ...INP, marginBottom: 0, width: "auto", padding: "6px 12px" }} value={reportMonth} onChange={e => setReportMonth(e.target.value)}>
+                                    <option value="All">📅 All Months</option>
+                                    {["2026-04","2026-05","2026-06","2026-07","2026-08","2026-09","2026-10","2026-11","2026-12","2027-01","2027-02","2027-03"].map(m => {
+                                        const [y, mm] = m.split("-");
+                                        const d = new Date(Number(y), Number(mm)-1, 1);
+                                        const lbl = d.toLocaleString('en-US', { month: 'short', year: 'numeric' });
+                                        return <option key={m} value={m}>{lbl}</option>;
+                                    })}
+                                </select>
+                                <button style={BTNP("linear-gradient(90deg,#8b5cf6,#7c3aed)")} onClick={() => setMonthlyReportModal("Balance Sheet")}>📊 Monthly Report</button>
+                                {isAdmin && <button style={BTNP()} onClick={() => openM("bs")}>+ Manual Entry</button>}
+                            </div>
                         </div>
                         <div style={{ background: "#0a1628", borderRadius: 10, padding: "10px 14px", marginBottom: 12, border: "1px solid #334155", fontSize: 10, color: "#64748b" }}>
                             <strong style={{ color: "#94a3b8" }}>ℹ️ Auto-populated items (read-only):</strong> Cash Balance, Closing Stock (FIFO), Trade Debtors, Accum. Depreciation, Trade Creditors, Net Profit/Loss — these are derived from other modules and <em>cannot be entered here</em>. Use <strong style={{ color: "#94a3b8" }}>+ Manual Entry</strong> for items like Fixed Assets, Share Capital, Long-term Loans, etc. Balance Sheet entries do <em>not</em> affect P&L.
@@ -8932,7 +9118,7 @@
                                         <div style={{ overflowX: "auto" }}>
                                             <table style={{ ...TBL, fontSize: 11 }}>
                                                 <thead><tr>
-                                                    {["Bottle", "Category", "Batch No", "Qty", "Rate/Unit", "Cost", ""].map(h => <th key={h} style={{ ...THS, fontSize: 10 }}>{h}</th>)}
+                                                    {["Bottle", "Category", "Batch No", "Description", "Qty", "Rate/Unit", "Cost", ""].map(h => <th key={h} style={{ ...THS, fontSize: 10 }}>{h}</th>)}
                                                 </tr></thead>
                                                 <tbody>
                                                     {siItems.map((it, idx) => {
@@ -8941,6 +9127,7 @@
                                                             <td style={{ ...TDS, padding: "4px" }}><select style={{ ...INP, marginBottom: 0, minWidth: 70, padding: "5px 6px", fontSize: 11 }} value={it.bottleType || ""} onChange={e => updateSiItem(idx, "bottleType", e.target.value)}><option value="">Type</option>{BOTTLE_TYPES.map(b => <option key={b}>{b}</option>)}</select></td>
                                                             <td style={{ ...TDS, padding: "4px" }}><select style={{ ...INP, marginBottom: 0, minWidth: 90, padding: "5px 6px", fontSize: 11 }} value={it.category || "normal"} onChange={e => updateSiItem(idx, "category", e.target.value)}><option value="normal">Normal</option><option value="customized">Custom</option></select></td>
                                                             <td style={{ ...TDS, padding: "4px" }}><input style={{ ...INP, marginBottom: 0, minWidth: 80, padding: "5px 6px", fontSize: 11 }} placeholder="Batch No" value={it.batchNo || ""} onChange={e => updateSiItem(idx, "batchNo", e.target.value)} /></td>
+                                                            <td style={{ ...TDS, padding: "4px" }}><input style={{ ...INP, marginBottom: 0, minWidth: 90, padding: "5px 6px", fontSize: 11 }} placeholder="Desc (Optional)" value={it.description || ""} onChange={e => updateSiItem(idx, "description", e.target.value)} /></td>
                                                             <td style={{ ...TDS, padding: "4px" }}><input type="number" style={{ ...INP, marginBottom: 0, minWidth: 60, padding: "5px 6px", fontSize: 11 }} placeholder="Qty" value={it.qty || ""} onChange={e => updateSiItem(idx, "qty", e.target.value)} /></td>
                                                             <td style={{ ...TDS, padding: "4px" }}><input type="number" style={{ ...INP, marginBottom: 0, minWidth: 70, padding: "5px 6px", fontSize: 11 }} placeholder="Rate" value={it.ratePerUnit || ""} onChange={e => updateSiItem(idx, "ratePerUnit", e.target.value)} /></td>
                                                             <td style={{ ...TDS, fontWeight: 700, color: C.green, whiteSpace: "nowrap" }}>{cost > 0 ? fc(cost) : "—"}</td>
@@ -8950,7 +9137,7 @@
                                                 </tbody>
                                                 <tfoot>
                                                     <tr style={{ background: "#0f2010" }}>
-                                                        <td colSpan={5} style={{ ...TDS, fontWeight: 800, fontSize: 11 }}>Grand Taxable</td>
+                                                        <td colSpan={6} style={{ ...TDS, fontWeight: 800, fontSize: 11 }}>Grand Taxable</td>
                                                         <td style={{ ...TDS, fontWeight: 800, color: C.green }}>{fc(siGrandTaxable)}</td>
                                                         <td style={TDS}></td>
                                                     </tr>
@@ -9139,7 +9326,7 @@
                                     <div style={{ overflowX: "auto" }}>
                                         <table style={{ ...TBL, fontSize: 11 }}>
                                             <thead><tr>
-                                                {["Bottle", "Category", "Qty", "Rate/Unit", "Cost", ""].map(h => <th key={h} style={{ ...THS, fontSize: 10 }}>{h}</th>)}
+                                                {["Bottle", "Category", "Description", "Qty", "Rate/Unit", "Cost", ""].map(h => <th key={h} style={{ ...THS, fontSize: 10 }}>{h}</th>)}
                                             </tr></thead>
                                             <tbody>
                                                 {soItems.map((it, idx) => {
@@ -9147,6 +9334,7 @@
                                                     return (<tr key={idx}>
                                                         <td style={{ ...TDS, padding: "4px" }}><select style={{ ...INP, marginBottom: 0, minWidth: 70, padding: "5px 6px", fontSize: 11 }} value={it.bottleType || ""} onChange={e => updateSoItem(idx, "bottleType", e.target.value)}><option value="">Type</option>{BOTTLE_TYPES.map(b => <option key={b}>{b}</option>)}</select></td>
                                                         <td style={{ ...TDS, padding: "4px" }}><select style={{ ...INP, marginBottom: 0, minWidth: 90, padding: "5px 6px", fontSize: 11 }} value={it.category || "normal"} onChange={e => updateSoItem(idx, "category", e.target.value)}><option value="normal">Normal</option><option value="customized">Custom</option></select></td>
+                                                        <td style={{ ...TDS, padding: "4px" }}><input style={{ ...INP, marginBottom: 0, minWidth: 90, padding: "5px 6px", fontSize: 11 }} placeholder="Desc (Optional)" value={it.description || ""} onChange={e => updateSoItem(idx, "description", e.target.value)} /></td>
                                                         <td style={{ ...TDS, padding: "4px" }}><input type="number" style={{ ...INP, marginBottom: 0, minWidth: 60, padding: "5px 6px", fontSize: 11 }} placeholder="Qty" value={it.qty || ""} onChange={e => updateSoItem(idx, "qty", e.target.value)} /></td>
                                                         <td style={{ ...TDS, padding: "4px" }}><input type="number" style={{ ...INP, marginBottom: 0, minWidth: 70, padding: "5px 6px", fontSize: 11 }} placeholder="Rate" value={it.ratePerUnit || ""} onChange={e => updateSoItem(idx, "ratePerUnit", e.target.value)} /></td>
                                                         <td style={{ ...TDS, fontWeight: 700, color: C.red, whiteSpace: "nowrap" }}>{cost > 0 ? fc(cost) : "—"}</td>
@@ -9156,7 +9344,7 @@
                                             </tbody>
                                             <tfoot>
                                                 <tr style={{ background: "#1a0808" }}>
-                                                    <td colSpan={4} style={{ ...TDS, fontWeight: 800, fontSize: 11 }}>Grand Taxable</td>
+                                                    <td colSpan={5} style={{ ...TDS, fontWeight: 800, fontSize: 11 }}>Grand Taxable</td>
                                                     <td style={{ ...TDS, fontWeight: 800, color: C.red }}>{fc(soGrandTaxable)}</td>
                                                     <td style={TDS}></td>
                                                 </tr>
@@ -9762,6 +9950,108 @@
                         <button onClick={closeM} style={{ width: "100%", marginTop: 8, background: C.mid, color: "#94a3b8", border: "none", borderRadius: 7, padding: "7px 0", cursor: "pointer", fontSize: 12 }}>Cancel</button>
                     </div>
                 </div>}
+
+                {/* ──── MONTHLY COMPARATIVE REPORT MODAL ──── */}
+                {monthlyReportModal && (() => {
+                    const monthsList = [
+                        "2026-04","2026-05","2026-06","2026-07","2026-08","2026-09",
+                        "2026-10","2026-11","2026-12","2027-01","2027-02","2027-03"
+                    ];
+                    const monthNames = ["Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec", "Jan", "Feb", "Mar"];
+
+                    const getMetrics = (mKey) => {
+                        const siM = si.filter(x => x.date && x.date.startsWith(mKey));
+                        const soM = so.filter(x => x.date && x.date.startsWith(mKey));
+                        const teM = te.filter(x => x.date && x.date.startsWith(mKey));
+                        const pleM = ple.filter(x => x.date && x.date.startsWith(mKey));
+                        const rmsM = (state.rawMaterialPayments || []).filter(x => x.date && x.date.startsWith(mKey));
+
+                        const grossPurchasesM = siM.filter(x => !x.isReturn).reduce((a, b) => a + Number(b.totalAmount - (b.gstAmount || 0)), 0);
+                        const purchReturnsM = siM.filter(x => x.isReturn).reduce((a, b) => a + Number(b.totalAmount - (b.gstAmount || 0)), 0);
+                        const netPurchasesM = grossPurchasesM - purchReturnsM;
+
+                        const grossSalesM = soM.filter(x => !x.isReturn).reduce((a, b) => a + Number(b.totalAmount - (b.gstAmount || 0)), 0);
+                        const salesReturnsM = soM.filter(x => x.isReturn).reduce((a, b) => a + Number(b.totalAmount - (b.gstAmount || 0)), 0);
+                        const netSalesM = grossSalesM - salesReturnsM;
+
+                        const rmCostsM = rmsM.reduce((sum, r) => sum + Math.max(0, Number(r.amount) - (r.usedForStockIn || 0)), 0);
+                        const teDrM = teM.filter(e => e.side === "dr" && e.sourceType !== "rawMaterial").reduce((a, b) => a + Number(b.amount), 0);
+                        const teCrM = teM.filter(e => e.side === "cr").reduce((a, b) => a + Number(b.amount), 0);
+
+                        const drM = netPurchasesM + rmCostsM + teDrM;
+                        const crM = netSalesM + teCrM;
+                        const grossProfitM = crM - drM;
+
+                        const plExpenseM = pleM.filter(e => e.side === "expense").reduce((a, b) => a + Number(b.amount), 0) + (grossProfitM < 0 ? Math.abs(grossProfitM) : 0);
+                        const plIncomeM = pleM.filter(e => e.side === "income").reduce((a, b) => a + Number(b.amount), 0) + (grossProfitM > 0 ? grossProfitM : 0);
+                        const netPLM = plIncomeM - plExpenseM;
+
+                        return {
+                            netSales: netSalesM,
+                            netPurchases: netPurchasesM,
+                            rmCosts: rmCostsM,
+                            teDr: teDrM,
+                            teCr: teCrM,
+                            drTotal: drM,
+                            crTotal: crM,
+                            grossProfit: grossProfitM,
+                            plExpense: plExpenseM,
+                            plIncome: plIncomeM,
+                            netPL: netPLM
+                        };
+                    };
+
+                    const monthData = monthsList.map(m => getMetrics(m));
+
+                    return (
+                        <div style={{ position:"fixed", inset:0, background:"#000000e0", display:"flex", alignItems:"center", justifyContent:"center", zIndex:400, overflowY:"auto" }}>
+                            <div style={{ background:"#0f172a", border:"2px solid "+C.teal, borderRadius:16, padding:24, width:"95vw", maxWidth:1100, maxHeight:"90vh", overflowY:"auto", boxShadow:"0 20px 60px rgba(0,0,0,0.8)" }}>
+                                <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:16, borderBottom:"1px solid #334155", paddingBottom:10 }}>
+                                    <div style={{ fontWeight:900, fontSize:18, color:C.teal }}>📊 Monthly Comparative Report — {monthlyReportModal} (FY 2026-27)</div>
+                                    <button onClick={() => setMonthlyReportModal(null)} style={BTND}>✕ Close</button>
+                                </div>
+
+                                <div style={{ overflowX:"auto" }}>
+                                    <table style={{ ...TBL, fontSize:11 }}>
+                                        <thead>
+                                            <tr>
+                                                <th style={THS}>Particulars</th>
+                                                {monthNames.map((m, i) => <th key={m} style={{ ...THS, textAlign:"right" }}>{m}</th>)}
+                                                <th style={{ ...THS, textAlign:"right", background:"#1e293b", color:C.teal }}>Total</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {monthlyReportModal === "Trading A/C" && (<>
+                                                <tr><td style={{ ...TDS, fontWeight:700, color:C.green }}>Sales (Net)</td>{monthData.map((d, i) => <td key={i} style={{ ...TDS, textAlign:"right" }}>{fc(d.netSales)}</td>)}<td style={{ ...TDS, textAlign:"right", fontWeight:800, color:C.green }}>{fc(monthData.reduce((s, x) => s + x.netSales, 0))}</td></tr>
+                                                <tr><td style={{ ...TDS, fontWeight:700, color:C.red }}>Purchases (Net)</td>{monthData.map((d, i) => <td key={i} style={{ ...TDS, textAlign:"right" }}>{fc(d.netPurchases)}</td>)}<td style={{ ...TDS, textAlign:"right", fontWeight:800, color:C.red }}>{fc(monthData.reduce((s, x) => s + x.netPurchases, 0))}</td></tr>
+                                                <tr><td style={{ ...TDS, color:C.muted }}>Raw Material Costs</td>{monthData.map((d, i) => <td key={i} style={{ ...TDS, textAlign:"right" }}>{fc(d.rmCosts)}</td>)}<td style={{ ...TDS, textAlign:"right", fontWeight:700 }}>{fc(monthData.reduce((s, x) => s + x.rmCosts, 0))}</td></tr>
+                                                <tr><td style={{ ...TDS, color:C.muted }}>Direct Expenses (Dr)</td>{monthData.map((d, i) => <td key={i} style={{ ...TDS, textAlign:"right" }}>{fc(d.teDr)}</td>)}<td style={{ ...TDS, textAlign:"right", fontWeight:700 }}>{fc(monthData.reduce((s, x) => s + x.teDr, 0))}</td></tr>
+                                                <tr style={{ background:"#1e293b", fontWeight:800 }}><td style={TDS}>Gross Profit / (Loss)</td>{monthData.map((d, i) => <td key={i} style={{ ...TDS, textAlign:"right", color: d.grossProfit >= 0 ? C.green : C.red }}>{fc(d.grossProfit)}</td>)}<td style={{ ...TDS, textAlign:"right", fontWeight:900, color: monthData.reduce((s, x) => s + x.grossProfit, 0) >= 0 ? C.green : C.red }}>{fc(monthData.reduce((s, x) => s + x.grossProfit, 0))}</td></tr>
+                                            </>)}
+
+                                            {monthlyReportModal === "P&L Account" && (<>
+                                                <tr><td style={{ ...TDS, fontWeight:700, color:C.teal }}>Gross Profit / (Loss)</td>{monthData.map((d, i) => <td key={i} style={{ ...TDS, textAlign:"right" }}>{fc(d.grossProfit)}</td>)}<td style={{ ...TDS, textAlign:"right", fontWeight:800, color:C.teal }}>{fc(monthData.reduce((s, x) => s + x.grossProfit, 0))}</td></tr>
+                                                <tr><td style={{ ...TDS, color:C.red }}>Operating Expenses (Dr)</td>{monthData.map((d, i) => <td key={i} style={{ ...TDS, textAlign:"right" }}>{fc(d.plExpense)}</td>)}<td style={{ ...TDS, textAlign:"right", fontWeight:700, color:C.red }}>{fc(monthData.reduce((s, x) => s + x.plExpense, 0))}</td></tr>
+                                                <tr><td style={{ ...TDS, color:C.green }}>Other Income (Cr)</td>{monthData.map((d, i) => <td key={i} style={{ ...TDS, textAlign:"right" }}>{fc(d.plIncome)}</td>)}<td style={{ ...TDS, textAlign:"right", fontWeight:700, color:C.green }}>{fc(monthData.reduce((s, x) => s + x.plIncome, 0))}</td></tr>
+                                                <tr style={{ background:"#1e293b", fontWeight:800 }}><td style={TDS}>Net Profit / (Loss)</td>{monthData.map((d, i) => <td key={i} style={{ ...TDS, textAlign:"right", color: d.netPL >= 0 ? C.green : C.red }}>{fc(d.netPL)}</td>)}<td style={{ ...TDS, textAlign:"right", fontWeight:900, color: monthData.reduce((s, x) => s + x.netPL, 0) >= 0 ? C.green : C.red }}>{fc(monthData.reduce((s, x) => s + x.netPL, 0))}</td></tr>
+                                            </>)}
+
+                                            {monthlyReportModal === "Balance Sheet" && (<>
+                                                <tr><td style={{ ...TDS, fontWeight:700, color:C.blue }}>Sales Revenue</td>{monthData.map((d, i) => <td key={i} style={{ ...TDS, textAlign:"right" }}>{fc(d.netSales)}</td>)}<td style={{ ...TDS, textAlign:"right", fontWeight:800, color:C.blue }}>{fc(monthData.reduce((s, x) => s + x.netSales, 0))}</td></tr>
+                                                <tr><td style={{ ...TDS, fontWeight:700, color:C.amber }}>Purchases Outflow</td>{monthData.map((d, i) => <td key={i} style={{ ...TDS, textAlign:"right" }}>{fc(d.netPurchases)}</td>)}<td style={{ ...TDS, textAlign:"right", fontWeight:800, color:C.amber }}>{fc(monthData.reduce((s, x) => s + x.netPurchases, 0))}</td></tr>
+                                                <tr><td style={{ ...TDS, fontWeight:700, color:C.violet }}>P&L Net Position</td>{monthData.map((d, i) => <td key={i} style={{ ...TDS, textAlign:"right", color: d.netPL >= 0 ? C.green : C.red }}>{fc(d.netPL)}</td>)}<td style={{ ...TDS, textAlign:"right", fontWeight:800, color: monthData.reduce((s, x) => s + x.netPL, 0) >= 0 ? C.green : C.red }}>{fc(monthData.reduce((s, x) => s + x.netPL, 0))}</td></tr>
+                                            </>)}
+                                        </tbody>
+                                    </table>
+                                </div>
+
+                                <div style={{ marginTop:16, textAlign:"right" }}>
+                                    <button onClick={() => setMonthlyReportModal(null)} style={{ ...BTNP(C.mid), border:"1px solid "+C.border }}>Close</button>
+                                </div>
+                            </div>
+                        </div>
+                    );
+                })()}
 
                 {/* ──── ACCEPT CHOICE MODAL ──── */}
                 {quoteAcceptModal && (() => {
