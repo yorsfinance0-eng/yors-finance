@@ -4664,14 +4664,14 @@
 
                 // Raw Material settlement: deduct category component costs from raw material pool
                 if (form.settleMode === "rawMaterial") {
-                    const reqCatAmounts = { "Conversion Cost": 0, "Cap": 0, "Label": 0, "Preform": 0 };
+                    const reqCatAmounts = { "Conversion Cost": 0, "Cap": 0, "Label": 0 };
                     siItems.forEach(it => {
                         const q = Number(it.qty || 0);
                         const bt = it.bottleType || "200ml";
                         const rates = RAW_MAT_RATES[bt] || RAW_MAT_RATES["200ml"];
-                        Object.keys(reqCatAmounts).forEach(cat => {
-                            reqCatAmounts[cat] += q * (rates[cat] || 0);
-                        });
+                        reqCatAmounts["Conversion Cost"] += q * ((rates["Conversion Cost"] || 0) + (rates["Preform"] || 0));
+                        reqCatAmounts["Cap"] += q * (rates["Cap"] || 0);
+                        reqCatAmounts["Label"] += q * (rates["Label"] || 0);
                     });
 
                     const rawMatPayments = state.rawMaterialPayments || [];
