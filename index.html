@@ -16,6 +16,9 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
     <!-- Babel for JSX in browser -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+    <!-- SheetJS for Excel Transport -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+
     <style>
         * {
             box-sizing: border-box;
@@ -175,7 +178,7 @@
         // ─── Constants ────────────────────────────────────────
         const BOTTLE_TYPES = ["200ml", "500ml", "1L", "Premium"];
         const GODOWNS = ["Hazra", "Dunlop", "Bhawanipur", "Alipore", "Gariahat"];
-        const TABS = ["Dashboard", "Inventory", "Stock In", "Stock Out", "Cash Bills", "GST Invoice", "Quotations", "Raw Materials", "Debtors", "Creditors", "Clients", "Cash Book", "Trading A/C", "P&L Account", "Balance Sheet", "Trial Balance", "Cash Flow", "Journal", "Audit Trail", "Depreciation", "Charts"];
+        const TABS = ["Dashboard", "Excel Transport", "Inventory", "Stock In", "Stock Out", "Cash Bills", "GST Invoice", "Quotations", "Raw Materials", "Debtors", "Creditors", "Clients", "Cash Book", "Trading A/C", "P&L Account", "Balance Sheet", "Trial Balance", "Cash Flow", "Journal", "Audit Trail", "Depreciation", "Charts"];
         // ── GST-REPORTABLE COLLECTIONS ────────────────────────────────────────────
         // ONLY these collections feed GST reports, Ledger, Trial Balance, P&L:
         //   gstInvoices  (Sales Invoices)
@@ -3976,6 +3979,923 @@
             const [reportMonth, setReportMonth] = useState("All");
             const [monthlyReportModal, setMonthlyReportModal] = useState(null);
 
+            // ── Excel Transport State & Requirements Parser ──────────────────────────
+            const [exportSearch, setExportSearch] = useState("");
+            const [exportDocTypes, setExportDocTypes] = useState({
+                gstInvoices: true,
+                quotations: true,
+                cashBills: true,
+                stockOut: true,
+                stockIn: true,
+                rawMaterialPayments: true,
+                debtors: true,
+                creditors: true,
+                clients: true,
+                plEntries: true,
+                tradingEntries: true
+            });
+            const [exportDateFrom, setExportDateFrom] = useState("");
+            const [exportDateTo, setExportDateTo] = useState("");
+            const [exportMinAmount, setExportMinAmount] = useState("");
+            const [exportMaxAmount, setExportMaxAmount] = useState("");
+            const [selectedExportIds, setSelectedExportIds] = useState(new Set());
+            const [exportModalOpen, setExportModalOpen] = useState(false);
+            const [exportMode, setExportMode] = useState("multi-sheet"); // "multi-sheet" | "consolidated"
+            const [exportCols, setExportCols] = useState({
+                docId: true,
+                date: true,
+                category: true,
+                partyName: true,
+                gstin: true,
+                phone: true,
+                description: true,
+                taxable: true,
+                tax: true,
+                total: true,
+                mode: true,
+                remarks: true
+            });
+
+            // Normalized dataset across accounting modules
+            const normalizedExportData = useMemo(() => {
+                const list = [];
+
+                // 1. GST Invoices
+                (state.gstInvoices || []).forEach(inv => {
+                    if (inv.deleted) return;
+                    const itemDescs = (inv.items || []).map(it => `${it.bt || it.bottleType || ''} x ${it.qty || 0} @ ₹${it.ratePerUnit || it.rate || 0}`).join('; ');
+                    list.push({
+                        id: inv.id || `inv-${inv.invoiceNo}`,
+                        category: "GST Invoice",
+                        catKey: "gstInvoices",
+                        docNo: inv.invoiceNo || "N/A",
+                        date: inv.date || "",
+                        partyName: inv.clientName || "Cash Client",
+                        gstin: inv.clientGstin || "N/A",
+                        phone: inv.clientPhone || "",
+                        description: itemDescs || "GST Invoice Sale",
+                        taxableAmount: Number(inv.taxableTotal || inv.taxableAmount || 0),
+                        taxAmount: Number(inv.cgstTotal || 0) + Number(inv.sgstTotal || 0) + Number(inv.igstTotal || 0),
+                        totalAmount: Number(inv.grandTotal || inv.totalAmount || 0),
+                        mode: inv.settleMode || "debtor",
+                        remarks: inv.notes || "",
+                        itemsCount: (inv.items || []).length,
+                        raw: inv
+                    });
+                });
+
+                // 2. Sales Quotations
+                (state.quotations || []).forEach(q => {
+                    if (q.deleted) return;
+                    const itemDescs = (q.items || []).map(it => `${it.bt || it.bottleType || ''} x ${it.qty || 0} @ ₹${it.ratePerUnit || it.rate || 0}`).join('; ');
+                    list.push({
+                        id: q.id || `q-${q.quotNo}`,
+                        category: "Sales Quotation",
+                        catKey: "quotations",
+                        docNo: q.quotNo || "N/A",
+                        date: q.date || "",
+                        partyName: q.clientName || "N/A",
+                        gstin: q.clientGstin || "N/A",
+                        phone: q.clientPhone || "",
+                        description: itemDescs || "Sales Quotation",
+                        taxableAmount: Number(q.taxableTotal || q.taxableAmount || 0),
+                        taxAmount: Number(q.cgstTotal || 0) + Number(q.sgstTotal || 0) + Number(q.igstTotal || 0),
+                        totalAmount: Number(q.grandTotal || q.totalAmount || 0),
+                        mode: q.status || "Draft",
+                        remarks: q.notes || "",
+                        itemsCount: (q.items || []).length,
+                        raw: q
+                    });
+                });
+
+                // 3. Stock Out
+                (state.stockOut || []).forEach(so => {
+                    if (so.deleted) return;
+                    const qty = Number(so.qty || so.quantity || 0);
+                    const rate = Number(so.ratePerUnit || so.rate || 0);
+                    const total = Number(so.totalAmount || so.total || so.amount || (qty * rate));
+                    list.push({
+                        id: so.id,
+                        category: so.isReturn ? "Sales Return" : "Stock Out",
+                        catKey: "stockOut",
+                        docNo: so.billNo || so.id,
+                        date: so.date || "",
+                        partyName: so.clientName || so.linkedPartyName || so.partyName || "Direct Sale",
+                        gstin: so.clientGstin || so.gstin || "N/A",
+                        phone: so.clientPhone || so.phone || "",
+                        description: `${so.bottleType || ''} (${so.godown || 'Godown'}) - Qty: ${qty}`,
+                        taxableAmount: Number(so.taxableAmount || total),
+                        taxAmount: Number(so.gstAmount || 0),
+                        totalAmount: total,
+                        mode: so.isReturn ? "Return" : (so.creditPeriod ? `Credit (${so.creditPeriod}d)` : (so.settleMode || "Cash")),
+                        remarks: `Rate: ₹${rate}/unit`,
+                        itemsCount: 1,
+                        raw: so
+                    });
+                });
+
+                // 4. Stock In
+                (state.stockIn || []).forEach(si => {
+                    if (si.deleted) return;
+                    const qty = Number(si.qty || si.quantity || 0);
+                    const rate = Number(si.ratePerUnit || si.rate || 0);
+                    const total = Number(si.totalAmount || si.total || si.amount || (qty * rate));
+                    list.push({
+                        id: si.id,
+                        category: si.isReturn ? "Purchase Return" : "Stock In",
+                        catKey: "stockIn",
+                        docNo: si.id,
+                        date: si.date || "",
+                        partyName: si.partyName || si.supplierName || "Supplier",
+                        gstin: si.gstin || "N/A",
+                        phone: si.phone || "",
+                        description: `${si.bottleType || ''} (${si.godown || 'Godown'}) - Qty: ${qty}`,
+                        taxableAmount: total,
+                        taxAmount: 0,
+                        totalAmount: total,
+                        mode: si.settleMode || "Cash",
+                        remarks: `Rate: ₹${rate}/unit`,
+                        itemsCount: 1,
+                        raw: si
+                    });
+                });
+
+                // 5. Cash Bills / Cash Entries
+                (state.cashEntries || []).forEach(ce => {
+                    list.push({
+                        id: ce.id,
+                        category: "Cash Entry",
+                        catKey: "cashBills",
+                        docNo: ce.id,
+                        date: ce.date || "",
+                        partyName: ce.description || ce.linkedPartyName || "Cash Account",
+                        gstin: "N/A",
+                        phone: "",
+                        description: `${ce.payType || 'Cash'} (${ce.dir === 'in' ? 'Receipt' : 'Payment'})`,
+                        taxableAmount: Number(ce.amount || 0),
+                        taxAmount: 0,
+                        totalAmount: Number(ce.amount || 0),
+                        mode: ce.dir === 'in' ? 'Inward' : 'Outward',
+                        remarks: ce.payType || "",
+                        itemsCount: 1,
+                        raw: ce
+                    });
+                });
+
+                // 6. Raw Material Payments
+                (state.rawMaterialPayments || []).forEach(rm => {
+                    list.push({
+                        id: rm.id,
+                        category: "Raw Material Purchase",
+                        catKey: "rawMaterialPayments",
+                        docNo: rm.id,
+                        date: rm.date || "",
+                        partyName: rm.linkedPartyName || rm.partyName || "Supplier",
+                        gstin: rm.gstin || "N/A",
+                        phone: rm.phone || "",
+                        description: rm.description || `Raw Material: ${rm.rawMatType || ''}`,
+                        taxableAmount: Number(rm.amount || rm.baseAmount || 0),
+                        taxAmount: Number(rm.gstAmount || 0),
+                        totalAmount: Number(rm.totalAmount || rm.amount || 0),
+                        mode: rm.settleMode || "cash",
+                        remarks: `GST: ${rm.gstRate || 0}%`,
+                        itemsCount: 1,
+                        raw: rm
+                    });
+                });
+
+                // 7. Debtors
+                (state.debtors || []).forEach(d => {
+                    list.push({
+                        id: d.id,
+                        category: "Debtor Ledger",
+                        catKey: "debtors",
+                        docNo: d.id,
+                        date: d.date || "",
+                        partyName: d.name || "Customer",
+                        gstin: d.gstin || "N/A",
+                        phone: d.phone || "",
+                        description: `Debtor Outstanding Balance`,
+                        taxableAmount: Number(d.amount || 0),
+                        taxAmount: 0,
+                        totalAmount: Number(d.amount || 0),
+                        mode: d.creditPeriod ? `Credit ${d.creditPeriod} days` : "Outstanding",
+                        remarks: d.checked ? "Verified" : "Pending",
+                        itemsCount: 1,
+                        raw: d
+                    });
+                });
+
+                // 8. Creditors
+                (state.creditors || []).forEach(c => {
+                    list.push({
+                        id: c.id,
+                        category: "Creditor Ledger",
+                        catKey: "creditors",
+                        docNo: c.id,
+                        date: c.date || "",
+                        partyName: c.name || "Supplier",
+                        gstin: c.gstin || "N/A",
+                        phone: c.phone || "",
+                        description: `Creditor Outstanding Balance`,
+                        taxableAmount: Number(c.amount || 0),
+                        taxAmount: 0,
+                        totalAmount: Number(c.amount || 0),
+                        mode: c.creditPeriod ? `Credit ${c.creditPeriod} days` : "Outstanding",
+                        remarks: c.checked ? "Verified" : "Pending",
+                        itemsCount: 1,
+                        raw: c
+                    });
+                });
+
+                // 9. Clients Directory
+                (state.clients || []).forEach(cl => {
+                    list.push({
+                        id: cl.id,
+                        category: "Client Directory",
+                        catKey: "clients",
+                        docNo: cl.id,
+                        date: "",
+                        partyName: cl.name || "Client",
+                        gstin: cl.gstin || "N/A",
+                        phone: cl.phone || "N/A",
+                        description: `Address: ${cl.address || 'N/A'}, Godown: ${cl.godown || 'All'}`,
+                        taxableAmount: 0,
+                        taxAmount: 0,
+                        totalAmount: Number(cl.balance || cl.amount || 0),
+                        mode: cl.type || "Debtor",
+                        remarks: `Cat: ${cl.category || 'Normal'}`,
+                        itemsCount: 1,
+                        raw: cl
+                    });
+                });
+
+                // 10. P&L Entries
+                (state.plEntries || []).forEach(pl => {
+                    list.push({
+                        id: pl.id,
+                        category: "P&L Entry",
+                        catKey: "plEntries",
+                        docNo: pl.id,
+                        date: pl.date || "",
+                        partyName: pl.linkedPartyName || "General P&L",
+                        gstin: "N/A",
+                        phone: "",
+                        description: `${pl.category || ''}: ${pl.description || ''}`,
+                        taxableAmount: Number(pl.amount || 0),
+                        taxAmount: 0,
+                        totalAmount: Number(pl.amount || 0),
+                        mode: pl.side || "expense",
+                        remarks: pl.settleMode || "cash",
+                        itemsCount: 1,
+                        raw: pl
+                    });
+                });
+
+                // 11. Trading Entries
+                (state.tradingEntries || []).forEach(tr => {
+                    list.push({
+                        id: tr.id,
+                        category: "Trading Entry",
+                        catKey: "tradingEntries",
+                        docNo: tr.id,
+                        date: tr.date || "",
+                        partyName: tr.linkedPartyName || "Trading A/C",
+                        gstin: "N/A",
+                        phone: "",
+                        description: tr.description || "Trading Entry",
+                        taxableAmount: Number(tr.amount || 0),
+                        taxAmount: 0,
+                        totalAmount: Number(tr.amount || 0),
+                        mode: tr.side || "dr",
+                        remarks: tr.settleMode || "cash",
+                        itemsCount: 1,
+                        raw: tr
+                    });
+                });
+
+                return list;
+            }, [state]);
+
+            // Search engine & natural requirement parser
+            const filteredExportData = useMemo(() => {
+                return normalizedExportData.filter(item => {
+                    if (!exportDocTypes[item.catKey]) return false;
+                    if (exportDateFrom && item.date && item.date < exportDateFrom) return false;
+                    if (exportDateTo && item.date && item.date > exportDateTo) return false;
+                    if (exportMinAmount !== "" && item.totalAmount < Number(exportMinAmount)) return false;
+                    if (exportMaxAmount !== "" && item.totalAmount > Number(exportMaxAmount)) return false;
+
+                    if (exportSearch.trim()) {
+                        const q = exportSearch.toLowerCase().trim();
+                        const matchDoc = item.docNo.toLowerCase().includes(q);
+                        const matchParty = item.partyName.toLowerCase().includes(q);
+                        const matchCat = item.category.toLowerCase().includes(q);
+                        const matchDesc = item.description.toLowerCase().includes(q);
+                        const matchGstin = item.gstin.toLowerCase().includes(q);
+                        const matchPhone = item.phone.toLowerCase().includes(q);
+                        const matchMode = item.mode.toLowerCase().includes(q);
+                        const matchRemarks = item.remarks.toLowerCase().includes(q);
+                        const matchAmt = item.totalAmount.toString().includes(q);
+
+                        if (!matchDoc && !matchParty && !matchCat && !matchDesc && !matchGstin && !matchPhone && !matchMode && !matchRemarks && !matchAmt) {
+                            return false;
+                        }
+                    }
+                    return true;
+                });
+            }, [normalizedExportData, exportDocTypes, exportDateFrom, exportDateTo, exportMinAmount, exportMaxAmount, exportSearch]);
+
+            // Auto select filtered IDs whenever filtered dataset changes
+            useEffect(() => {
+                const newSet = new Set();
+                filteredExportData.forEach(item => newSet.add(item.id));
+                setSelectedExportIds(newSet);
+            }, [filteredExportData, exportSearch, exportDateFrom, exportDateTo, exportDocTypes, exportMinAmount, exportMaxAmount]);
+
+            const getRecordsToExport = () => {
+                if (selectedExportIds.size > 0) {
+                    const sel = filteredExportData.filter(it => selectedExportIds.has(it.id));
+                    if (sel.length > 0) return sel;
+                }
+                return filteredExportData;
+            };
+
+            const toggleExportSelectAll = () => {
+                if (selectedExportIds.size === filteredExportData.length) {
+                    setSelectedExportIds(new Set());
+                } else {
+                    const newSet = new Set();
+                    filteredExportData.forEach(item => newSet.add(item.id));
+                    setSelectedExportIds(newSet);
+                }
+            };
+
+            const toggleExportItem = (id) => {
+                const newSet = new Set(selectedExportIds);
+                if (newSet.has(id)) newSet.delete(id);
+                else newSet.add(id);
+                setSelectedExportIds(newSet);
+            };
+
+                        const buildExpandedExcelRows = (recordsToExport) => {
+                const rows = [];
+                recordsToExport.forEach(item => {
+                    // Use raw (the original record object) if present, else fall back to item itself
+                    const raw = (item.raw && Object.keys(item.raw).length > 0) ? item.raw : item;
+                    const catKey = item.catKey;
+
+                    const num = (v, fallback = 0) => {
+                        const n = Number(v);
+                        return isNaN(n) ? fallback : Math.round(n * 100) / 100;
+                    };
+
+                    if (catKey === "gstInvoices") {
+                        const items = (raw.items && raw.items.length > 0) ? raw.items : [null];
+                        const invTaxable = num(raw.taxableTotal || raw.taxableAmount || raw.taxable);
+                        const invCgst = num(raw.cgstTotal || raw.cgstAmount);
+                        const invSgst = num(raw.sgstTotal || raw.sgstAmount);
+                        const invIgst = num(raw.igstTotal || raw.igstAmount);
+                        const invGrand = num(raw.grandTotal || raw.totalAmount || raw.total);
+
+                        items.forEach((it) => {
+                            const qty = it ? num(it.qty || it.quantity || it.units || 1) : 1;
+                            const rate = it ? num(it.ratePerUnit || it.rate || it.unitRate || 0) : 0;
+                            const taxable = it ? num(it.taxableValue || it.taxable || it.baseAmount || (qty * rate)) : invTaxable;
+                            const cgst = it ? num(it.cgstAmount || it.cgst) : invCgst;
+                            const sgst = it ? num(it.sgstAmount || it.sgst) : invSgst;
+                            const igst = it ? num(it.igstAmount || it.igst) : invIgst;
+                            const itemTotal = it ? num(it.totalAmount || it.amount || it.total || (taxable + cgst + sgst + igst)) : invGrand;
+
+                            rows.push({
+                                _category: "GST Invoice",
+                                "Document Category": "GST Tax Invoice",
+                                "Document / Invoice No": raw.invoiceNo || item.docNo || "N/A",
+                                "Date": raw.date || item.date || "N/A",
+                                "Credit Period": raw.clientCreditPeriod ? `${raw.clientCreditPeriod} Days` : "N/A",
+                                "Party / Client Name": raw.clientName || item.partyName || "N/A",
+                                "GSTIN": raw.clientGstin || item.gstin || "N/A",
+                                "Phone": raw.clientPhone || item.phone || "N/A",
+                                "Address": raw.clientAddress || "N/A",
+                                "Godown": raw.godown || "Main Godown",
+                                "Product / Bottle Type": it ? (it.bottleType || it.bt || "Water Product") : "Invoice Summary",
+                                "Quantity": qty,
+                                "Rate per Unit (₹)": rate,
+                                "Item Taxable Value (₹)": taxable,
+                                "GST Rate (%)": it ? `${it.gstRate || 18}%` : "18%",
+                                "CGST Amount (₹)": cgst,
+                                "SGST Amount (₹)": sgst,
+                                "IGST Amount (₹)": igst,
+                                "Total Item Tax (₹)": num(cgst + sgst + igst),
+                                "Item Total Amount (₹)": itemTotal,
+                                "Invoice Taxable Total (₹)": invTaxable,
+                                "Invoice Grand Total (₹)": invGrand,
+                                "Payment Mode": raw.settleMode || "Debtor Account",
+                                "Remarks / Notes": raw.notes || ""
+                            });
+                        });
+                    } else if (catKey === "quotations") {
+                        const items = (raw.items && raw.items.length > 0) ? raw.items : [null];
+                        const quotTaxable = num(raw.taxableTotal || raw.taxableAmount || raw.taxable);
+                        const quotCgst = num(raw.cgstTotal || raw.cgstAmount);
+                        const quotSgst = num(raw.sgstTotal || raw.sgstAmount);
+                        const quotIgst = num(raw.igstTotal || raw.igstAmount);
+                        const quotGrand = num(raw.grandTotal || raw.totalAmount || raw.total);
+
+                        items.forEach((it) => {
+                            const qty = it ? num(it.qty || it.quantity || it.units || 1) : 1;
+                            const rate = it ? num(it.ratePerUnit || it.rate || it.unitRate || 0) : 0;
+                            const taxable = it ? num(it.taxableValue || it.taxable || it.baseAmount || (qty * rate)) : quotTaxable;
+                            const cgst = it ? num(it.cgstAmount || it.cgst) : quotCgst;
+                            const sgst = it ? num(it.sgstAmount || it.sgst) : quotSgst;
+                            const igst = it ? num(it.igstAmount || it.igst) : quotIgst;
+                            const itemTotal = it ? num(it.totalAmount || it.amount || it.total || (taxable + cgst + sgst + igst)) : quotGrand;
+
+                            rows.push({
+                                _category: "Sales Quotation",
+                                "Document Category": "Sales Quotation",
+                                "Document / Invoice No": raw.quotNo || item.docNo || "N/A",
+                                "Date": raw.date || item.date || "N/A",
+                                "Valid Until": raw.validityDate || "N/A",
+                                "Party / Client Name": raw.clientName || item.partyName || "N/A",
+                                "GSTIN": raw.clientGstin || item.gstin || "N/A",
+                                "Phone": raw.clientPhone || item.phone || "N/A",
+                                "Address": raw.clientAddress || "N/A",
+                                "Godown": "N/A",
+                                "Product / Bottle Type": it ? (it.bottleType || it.bt || "Water Product") : "Quotation Summary",
+                                "Quantity": qty,
+                                "Rate per Unit (₹)": rate,
+                                "Item Taxable Value (₹)": taxable,
+                                "GST Rate (%)": it ? `${it.gstRate || 18}%` : "18%",
+                                "CGST Amount (₹)": cgst,
+                                "SGST Amount (₹)": sgst,
+                                "IGST Amount (₹)": igst,
+                                "Total Item Tax (₹)": num(cgst + sgst + igst),
+                                "Item Total Amount (₹)": itemTotal,
+                                "Quotation Taxable Total (₹)": quotTaxable,
+                                "Quotation Grand Total (₹)": quotGrand,
+                                "Payment Mode": raw.status || "Draft",
+                                "Remarks / Notes": raw.notes || raw.terms || ""
+                            });
+                        });
+                    } else if (catKey === "stockOut") {
+                        const qty = num(raw.qty || raw.quantity || raw.units || 0);
+                        const rate = num(raw.ratePerUnit || raw.rate || raw.unitRate || 0);
+                        const total = num(raw.totalAmount || raw.total || raw.amount || (qty * rate));
+                        const paid = num(raw.paidAmount || raw.paid || raw.cashPaid || 0);
+                        const bal = num(total - paid);
+                        const cgst = num(raw.cgstAmount || 0);
+                        const sgst = num(raw.sgstAmount || 0);
+                        const igst = num(raw.igstAmount || 0);
+                        const tax = num(raw.gstAmount || (cgst + sgst + igst));
+                        const taxable = num(raw.taxableAmount || raw.taxableValue || raw.taxable || (total - tax));
+
+                        rows.push({
+                            _category: raw.isReturn ? "Sales Return" : "Stock Out",
+                            "Document Category": raw.isReturn ? "Sales Return" : "Stock Out / Sale",
+                            "Document / Invoice No": raw.billNo || raw.invoiceNo || raw.id || item.docNo || "N/A",
+                            "Date": raw.date || item.date || "N/A",
+                            "Credit Period": raw.creditPeriod ? `${raw.creditPeriod} Days` : (raw.settleMode === "Credit" ? "Credit Account" : "Cash Sale"),
+                            "Party / Client Name": raw.clientName || raw.partyName || raw.linkedPartyName || item.partyName || "Direct Sale",
+                            "GSTIN": raw.clientGstin || raw.gstin || item.gstin || "N/A",
+                            "Phone": raw.clientPhone || raw.phone || item.phone || "N/A",
+                            "Address": raw.clientAddress || raw.address || "N/A",
+                            "Godown": raw.godown || "Default Godown",
+                            "Product / Bottle Type": raw.bottleType || raw.category || "Water Jar / Bottle",
+                            "Quantity": qty,
+                            "Rate per Unit (₹)": rate,
+                            "Item Taxable Value (₹)": taxable,
+                            "GST Rate (%)": raw.gstRate ? `${raw.gstRate}%` : (tax > 0 ? "GST Included" : "0%"),
+                            "CGST Amount (₹)": cgst,
+                            "SGST Amount (₹)": sgst,
+                            "IGST Amount (₹)": igst,
+                            "Total Item Tax (₹)": tax,
+                            "Item Total Amount (₹)": total,
+                            "Invoice Grand Total (₹)": total,
+                            "Paid Cash (₹)": paid,
+                            "Balance Due (₹)": bal,
+                            "Payment Mode": raw.isReturn ? "Return" : (raw.settleMode || (raw.creditPeriod ? "Credit Account" : "Cash")),
+                            "Remarks / Notes": raw.notes || `Stock Movement (${raw.godown || 'Main Godown'})`
+                        });
+                    } else if (catKey === "stockIn") {
+                        const qty = num(raw.qty || raw.quantity || 0);
+                        const rate = num(raw.rate || raw.ratePerUnit || 0);
+                        const total = num(raw.total || raw.totalAmount || raw.amount || (qty * rate));
+                        const paid = num(raw.paidAmount || raw.paid || 0);
+                        const bal = num(total - paid);
+
+                        rows.push({
+                            _category: raw.isReturn ? "Purchase Return" : "Stock In",
+                            "Document Category": raw.isReturn ? "Purchase Return" : "Stock Inward",
+                            "Document / Invoice No": raw.id || item.docNo || "N/A",
+                            "Date": raw.date || item.date || "N/A",
+                            "Credit Period": "N/A",
+                            "Party / Client Name": raw.partyName || item.partyName || "Supplier",
+                            "GSTIN": "N/A",
+                            "Phone": "N/A",
+                            "Address": "N/A",
+                            "Godown": raw.godown || "Default Godown",
+                            "Product / Bottle Type": raw.bottleType || "Water Product",
+                            "Quantity": qty,
+                            "Rate per Unit (₹)": rate,
+                            "Item Taxable Value (₹)": total,
+                            "GST Rate (%)": "0%",
+                            "CGST Amount (₹)": 0,
+                            "SGST Amount (₹)": 0,
+                            "IGST Amount (₹)": 0,
+                            "Total Item Tax (₹)": 0,
+                            "Item Total Amount (₹)": total,
+                            "Invoice Grand Total (₹)": total,
+                            "Paid Cash (₹)": paid,
+                            "Balance Due (₹)": bal,
+                            "Payment Mode": raw.settleMode || "Cash",
+                            "Remarks / Notes": `Stock Inward (${raw.godown || ''})`
+                        });
+                    } else if (catKey === "rawMaterialPayments") {
+                        const baseAmt = num(raw.amount || raw.baseAmount || 0);
+                        const gstAmt = num(raw.gstAmount || 0);
+                        const totalAmt = num(raw.totalAmount || (baseAmt + gstAmt));
+                        const paid = num(raw.paidAmount || 0);
+
+                        rows.push({
+                            _category: "Raw Materials",
+                            "Document Category": "Raw Material Purchase",
+                            "Document / Invoice No": raw.id || item.docNo || "N/A",
+                            "Date": raw.date || item.date || "N/A",
+                            "Credit Period": "N/A",
+                            "Party / Client Name": raw.linkedPartyName || item.partyName || "Supplier",
+                            "GSTIN": "N/A",
+                            "Phone": "N/A",
+                            "Address": "N/A",
+                            "Godown": "Factory / Stock",
+                            "Product / Bottle Type": raw.rawMatType || "Raw Material",
+                            "Quantity": 1,
+                            "Rate per Unit (₹)": baseAmt,
+                            "Item Taxable Value (₹)": baseAmt,
+                            "GST Rate (%)": `${raw.gstRate || 0}%`,
+                            "CGST Amount (₹)": num(raw.cgstAmount || 0),
+                            "SGST Amount (₹)": num(raw.sgstAmount || 0),
+                            "IGST Amount (₹)": num(raw.igstAmount || 0),
+                            "Total Item Tax (₹)": gstAmt,
+                            "Item Total Amount (₹)": totalAmt,
+                            "Invoice Grand Total (₹)": totalAmt,
+                            "Paid Cash (₹)": paid,
+                            "Balance Due (₹)": num(totalAmt - paid),
+                            "Payment Mode": raw.settleMode || "Creditor",
+                            "Remarks / Notes": raw.description || `Raw Material: ${raw.rawMatType || ''}`
+                        });
+                    } else if (catKey === "cashBills") {
+                        const amt = num(raw.amount || item.totalAmount || 0);
+
+                        rows.push({
+                            _category: "Cash Book",
+                            "Document Category": "Cash Book Entry",
+                            "Document / Invoice No": raw.id || item.docNo || "N/A",
+                            "Date": raw.date || item.date || "N/A",
+                            "Credit Period": "N/A",
+                            "Party / Client Name": raw.description || item.partyName || "Cash Account",
+                            "GSTIN": "N/A",
+                            "Phone": "N/A",
+                            "Address": "N/A",
+                            "Godown": "N/A",
+                            "Product / Bottle Type": raw.payType || "Cash Transaction",
+                            "Quantity": 1,
+                            "Rate per Unit (₹)": amt,
+                            "Item Taxable Value (₹)": amt,
+                            "GST Rate (%)": "0%",
+                            "CGST Amount (₹)": 0,
+                            "SGST Amount (₹)": 0,
+                            "IGST Amount (₹)": 0,
+                            "Total Item Tax (₹)": 0,
+                            "Item Total Amount (₹)": amt,
+                            "Invoice Grand Total (₹)": amt,
+                            "Paid Cash (₹)": amt,
+                            "Balance Due (₹)": 0,
+                            "Payment Mode": raw.dir === 'in' ? 'Cash Inward (Receipt)' : 'Cash Outward (Payment)',
+                            "Remarks / Notes": raw.payType || ""
+                        });
+                    } else if (catKey === "debtors") {
+                        const amt = num(raw.amount || item.totalAmount || 0);
+
+                        rows.push({
+                            _category: "Debtors",
+                            "Document Category": "Debtor Ledger Outstanding",
+                            "Document / Invoice No": raw.id || item.docNo || "N/A",
+                            "Date": raw.date || item.date || "N/A",
+                            "Credit Period": raw.creditPeriod ? `${raw.creditPeriod} Days` : "Outstanding",
+                            "Party / Client Name": raw.name || item.partyName || "Customer",
+                            "GSTIN": "N/A",
+                            "Phone": "N/A",
+                            "Address": "N/A",
+                            "Godown": "N/A",
+                            "Product / Bottle Type": "Debtor Balance Account",
+                            "Quantity": 1,
+                            "Rate per Unit (₹)": amt,
+                            "Item Taxable Value (₹)": amt,
+                            "GST Rate (%)": "0%",
+                            "CGST Amount (₹)": 0,
+                            "SGST Amount (₹)": 0,
+                            "IGST Amount (₹)": 0,
+                            "Total Item Tax (₹)": 0,
+                            "Item Total Amount (₹)": amt,
+                            "Invoice Grand Total (₹)": amt,
+                            "Paid Cash (₹)": 0,
+                            "Balance Due (₹)": amt,
+                            "Payment Mode": "Customer Account",
+                            "Remarks / Notes": raw.checked ? "Verified Account" : "Pending Reconciliation"
+                        });
+                    } else if (catKey === "creditors") {
+                        const amt = num(raw.amount || item.totalAmount || 0);
+
+                        rows.push({
+                            _category: "Creditors",
+                            "Document Category": "Creditor Ledger Outstanding",
+                            "Document / Invoice No": raw.id || item.docNo || "N/A",
+                            "Date": raw.date || item.date || "N/A",
+                            "Credit Period": raw.creditPeriod ? `${raw.creditPeriod} Days` : "Outstanding",
+                            "Party / Client Name": raw.name || item.partyName || "Supplier",
+                            "GSTIN": "N/A",
+                            "Phone": "N/A",
+                            "Address": "N/A",
+                            "Godown": "N/A",
+                            "Product / Bottle Type": "Creditor Balance Account",
+                            "Quantity": 1,
+                            "Rate per Unit (₹)": amt,
+                            "Item Taxable Value (₹)": amt,
+                            "GST Rate (%)": "0%",
+                            "CGST Amount (₹)": 0,
+                            "SGST Amount (₹)": 0,
+                            "IGST Amount (₹)": 0,
+                            "Total Item Tax (₹)": 0,
+                            "Item Total Amount (₹)": amt,
+                            "Invoice Grand Total (₹)": amt,
+                            "Paid Cash (₹)": 0,
+                            "Balance Due (₹)": amt,
+                            "Payment Mode": "Supplier Account",
+                            "Remarks / Notes": raw.checked ? "Verified Account" : "Pending Reconciliation"
+                        });
+                    } else if (catKey === "clients") {
+                        const bal = num(raw.balance || raw.amount || 0);
+
+                        rows.push({
+                            _category: "Clients",
+                            "Document Category": "Client Directory Record",
+                            "Document / Invoice No": raw.id || item.docNo || "N/A",
+                            "Date": "N/A",
+                            "Credit Period": "N/A",
+                            "Party / Client Name": raw.name || item.partyName || "Client",
+                            "GSTIN": raw.gstin || item.gstin || "N/A",
+                            "Phone": raw.phone || item.phone || "N/A",
+                            "Address": raw.address || "N/A",
+                            "Godown": raw.godown || "All Godowns",
+                            "Product / Bottle Type": `Client Type: ${raw.type || 'Debtor'}`,
+                            "Quantity": 1,
+                            "Rate per Unit (₹)": bal,
+                            "Item Taxable Value (₹)": bal,
+                            "GST Rate (%)": "0%",
+                            "CGST Amount (₹)": 0,
+                            "SGST Amount (₹)": 0,
+                            "IGST Amount (₹)": 0,
+                            "Total Item Tax (₹)": 0,
+                            "Item Total Amount (₹)": bal,
+                            "Invoice Grand Total (₹)": bal,
+                            "Paid Cash (₹)": 0,
+                            "Balance Due (₹)": bal,
+                            "Payment Mode": raw.type || "Debtor",
+                            "Remarks / Notes": `Category: ${raw.category || 'Normal'}`
+                        });
+                    } else {
+                        const amt = num(item.totalAmount || raw.amount || 0);
+                        const tax = num(item.taxAmount || 0);
+
+                        rows.push({
+                            _category: item.category || "General",
+                            "Document Category": item.category || "General Entry",
+                            "Document / Invoice No": item.docNo || raw.id || "N/A",
+                            "Date": item.date || raw.date || "N/A",
+                            "Credit Period": "N/A",
+                            "Party / Client Name": item.partyName || raw.linkedPartyName || "N/A",
+                            "GSTIN": item.gstin || "N/A",
+                            "Phone": item.phone || "N/A",
+                            "Address": "N/A",
+                            "Godown": "N/A",
+                            "Product / Bottle Type": item.description || raw.description || "General Entry",
+                            "Quantity": 1,
+                            "Rate per Unit (₹)": amt,
+                            "Item Taxable Value (₹)": num(item.taxableAmount || (amt - tax)),
+                            "GST Rate (%)": "0%",
+                            "CGST Amount (₹)": tax,
+                            "SGST Amount (₹)": 0,
+                            "IGST Amount (₹)": 0,
+                            "Total Item Tax (₹)": tax,
+                            "Item Total Amount (₹)": amt,
+                            "Invoice Grand Total (₹)": amt,
+                            "Paid Cash (₹)": 0,
+                            "Balance Due (₹)": amt,
+                            "Payment Mode": item.mode || raw.settleMode || "N/A",
+                            "Remarks / Notes": item.remarks || raw.description || ""
+                        });
+                    }
+                });
+
+                return rows;
+            };
+
+            const generateExcelHTMLString = (expandedRows) => {
+                let html = `<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40">`;
+                html += `<head><meta charset="utf-8"/><!--[if gte mso 9]><xml><x:ExcelWorkbook><x:ExcelWorksheets><x:ExcelWorksheet><x:Name>Financial Details</x:Name><x:WorksheetOptions><x:DisplayGridlines/></x:WorksheetOptions></x:ExcelWorksheet></x:ExcelWorksheets></x:ExcelWorkbook></xml><![endif]--></head>`;
+                html += `<body><table border="1"><thead><tr style="background:#1e293b;color:#ffffff;font-weight:bold;">`;
+                
+                if (expandedRows.length > 0) {
+                    const keys = Object.keys(expandedRows[0]).filter(k => k !== "_category");
+                    keys.forEach(k => {
+                        html += `<th style="padding:6px;background:#1e293b;color:#ffffff;">${k}</th>`;
+                    });
+                    html += `</tr></thead><tbody>`;
+
+                    expandedRows.forEach(row => {
+                        html += `<tr>`;
+                        keys.forEach(k => {
+                            const val = row[k] !== undefined && row[k] !== null ? row[k] : "";
+                            const isNum = typeof val === "number";
+                            if (isNum) {
+                                html += `<td style="padding:4px;text-align:right;" x:num="${val}">${val}</td>`;
+                            } else {
+                                html += `<td style="padding:4px;">${val}</td>`;
+                            }
+                        });
+                        html += `</tr>`;
+                    });
+                }
+
+                html += `</tbody></table></body></html>`;
+                return html;
+            };
+
+            const triggerDataUriDownload = (dataUri, filename) => {
+                const link = document.createElement("a");
+                link.style.display = "none";
+                link.href = dataUri;
+                link.setAttribute("download", filename);
+                link.download = filename;
+                document.body.appendChild(link);
+                link.click();
+                setTimeout(() => {
+                    if (document.body.contains(link)) {
+                        document.body.removeChild(link);
+                    }
+                }, 1000);
+            };
+
+            const executeExcelExport = (customRecords = null) => {
+                const recordsToExport = (customRecords && customRecords.length > 0) ? customRecords : getRecordsToExport();
+                if (recordsToExport.length === 0) {
+                    alert("⚠️ No document records found matching your search parameters to transport to Excel. Please check your search keywords or document categories.");
+                    return;
+                }
+
+                const compName = state.settings?.companyProfile?.name || "YORS_WATER";
+                const sanitizeName = String(compName).replace(/[^a-zA-Z0-9]/g, "_");
+                const fileName = `${sanitizeName}_Financial_Export_${today()}.xlsx`;
+
+                const expandedRows = buildExpandedExcelRows(recordsToExport);
+
+                // Strategy 1: Base64 Data URI via SheetJS (.xlsx)
+                if (window.XLSX) {
+                    try {
+                        const wb = XLSX.utils.book_new();
+
+                        if (exportMode === "multi-sheet") {
+                            const groups = {};
+                            expandedRows.forEach(row => {
+                                const cat = row._category || "General";
+                                if (!groups[cat]) groups[cat] = [];
+                                const cleanRow = { ...row };
+                                delete cleanRow._category;
+                                groups[cat].push(cleanRow);
+                            });
+
+                            Object.keys(groups).forEach(catName => {
+                                const wsData = groups[catName];
+                                const ws = XLSX.utils.json_to_sheet(wsData);
+                                const sheetName = String(catName || 'Export').replace(/[^a-zA-Z0-9 _-]/g, '_').substring(0, 30);
+                                XLSX.utils.book_append_sheet(wb, ws, sheetName);
+                            });
+                        } else {
+                            const cleanRows = expandedRows.map(r => {
+                                const cleanR = { ...r };
+                                delete cleanR._category;
+                                return cleanR;
+                            });
+                            const ws = XLSX.utils.json_to_sheet(cleanRows);
+                            XLSX.utils.book_append_sheet(wb, ws, "Master Financial Details");
+                        }
+
+                        const b64 = XLSX.write(wb, { bookType: 'xlsx', type: 'base64' });
+                        const dataUri = "data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64," + b64;
+                        triggerDataUriDownload(dataUri, fileName);
+
+                        setExportModalOpen(false);
+                        alert(`✅ Full Document Details Exported Successfully as Excel File!\n\nFile Name: ${fileName}\nTotal Detail Rows Exported: ${expandedRows.length}`);
+                        return;
+                    } catch (err) {
+                        console.error("XLSX SheetJS Base64 failed, using Native Excel Data URI:", err);
+                    }
+                }
+
+                // Strategy 2: Native Excel Spreadsheet Base64 Data URI (.xls)
+                try {
+                    const cleanRows = expandedRows.map(r => {
+                        const cleanR = { ...r };
+                        delete cleanR._category;
+                        return cleanR;
+                    });
+                    const htmlStr = generateExcelHTMLString(cleanRows);
+                    const base64Html = btoa(unescape(encodeURIComponent(htmlStr)));
+                    const dataUri = "data:application/vnd.ms-excel;charset=utf-8;base64," + base64Html;
+                    triggerDataUriDownload(dataUri, fileName.replace(".xlsx", ".xls"));
+                    setExportModalOpen(false);
+                    alert(`✅ Full Document Details Exported Successfully as Excel File!\n\nFile Name: ${fileName.replace(".xlsx", ".xls")}\nTotal Detail Rows Exported: ${expandedRows.length}`);
+                } catch (err2) {
+                    console.error("Native Excel Data URI failed, using CSV fallback:", err2);
+                    executeCSVExport(recordsToExport, fileName.replace('.xlsx', '.csv'));
+                }
+            };
+
+            const executeCSVExport = (recordsToExport = null, targetFileName = null) => {
+                const recs = (recordsToExport && recordsToExport.length > 0) ? recordsToExport : getRecordsToExport();
+                const compName = state.settings?.companyProfile?.name || "YORS_WATER";
+                const sanitizeName = String(compName).replace(/[^a-zA-Z0-9]/g, "_");
+                const fileName = targetFileName || `${sanitizeName}_Financial_Export_${today()}.csv`;
+
+                const expandedRows = buildExpandedExcelRows(recs);
+                if (expandedRows.length === 0) {
+                    alert("⚠️ No document records to export.");
+                    return;
+                }
+
+                const keys = Object.keys(expandedRows[0]).filter(k => k !== "_category");
+                const csvRows = [keys.map(k => `"${k.replace(/"/g, '""')}"`).join(",")];
+
+                expandedRows.forEach(r => {
+                    const rowVals = keys.map(k => {
+                        const val = r[k] !== undefined && r[k] !== null ? String(r[k]) : "";
+                        return `"${val.replace(/"/g, '""')}"`;
+                    });
+                    csvRows.push(rowVals.join(","));
+                });
+
+                const csvString = csvRows.join("\n");
+                const base64Csv = btoa(unescape(encodeURIComponent(csvString)));
+                const dataUri = "data:text/csv;charset=utf-8;base64," + base64Csv;
+                triggerDataUriDownload(dataUri, fileName);
+                setExportModalOpen(false);
+                alert(`✅ Full Details exported as CSV file: ${fileName}`);
+            };
+
+            const copyExcelDataToClipboard = () => {
+                const recs = getRecordsToExport();
+                const expandedRows = buildExpandedExcelRows(recs);
+                if (expandedRows.length === 0) {
+                    alert("⚠️ No records to copy.");
+                    return;
+                }
+                const keys = Object.keys(expandedRows[0]).filter(k => k !== "_category");
+                const lines = [keys.join("\t")];
+                expandedRows.forEach(r => {
+                    const rowVals = keys.map(k => {
+                        const val = r[k] !== undefined && r[k] !== null ? String(r[k]).replace(/\t/g, " ") : "";
+                        return val;
+                    });
+                    lines.push(rowVals.join("\t"));
+                });
+
+                const tsvString = lines.join("\n");
+                navigator.clipboard.writeText(tsvString).then(() => {
+                    alert(`📋 Copied ${expandedRows.length} Detail Rows to Clipboard!\n\nYou can now open Microsoft Excel and press Ctrl+V to paste all columns and numbers instantly.`);
+                }).catch(err => {
+                    console.error("Clipboard copy failed:", err);
+                    alert("Failed to copy automatically. Please use the Download Excel button.");
+                });
+            };
+
+            const openExcelTransportForCat = (catKey) => {
+                const newTypes = {
+                    gstInvoices: false, quotations: false, cashBills: false, stockOut: false,
+                    stockIn: false, rawMaterialPayments: false, debtors: false, creditors: false,
+                    clients: false, plEntries: false, tradingEntries: false
+                };
+                if (catKey) newTypes[catKey] = true;
+                setExportDocTypes(newTypes);
+                setExportSearch("");
+                setTab("Excel Transport");
+                
+                // Immediately trigger transport to Excel
+                setTimeout(() => {
+                    executeExcelExport();
+                }, 100);
+            };
+
             // ── Quotation module state ──────────────────────────────────────────────
             const [selectedQuotationId, setSelectedQuotationId] = useState(null);
             const [showCreateQuotation, setShowCreateQuotation] = useState(false);
@@ -5736,6 +6656,502 @@
 
             const sp = { form, setForm, creds, debs, rawMats: state.rawMaterialPayments || [] };
 
+            
+            // ── Render Smart Search & Excel Transport Tab ────────────────────────────
+            const renderExcelTransportTab = () => {
+                const categoryBreakdown = (() => {
+                    const counts = {};
+                    const totals = {};
+                    normalizedExportData.forEach(item => {
+                        counts[item.catKey] = (counts[item.catKey] || 0) + 1;
+                        totals[item.catKey] = (totals[item.catKey] || 0) + item.totalAmount;
+                    });
+                    return { counts, totals };
+                })();
+                const totalSelectedCount = selectedExportIds.size;
+                const selectedRecords = filteredExportData.filter(it => selectedExportIds.has(it.id));
+                const selectedTotalValue = selectedRecords.reduce((a, b) => a + (b.totalAmount || 0), 0);
+
+                const categoryLabels = [
+                    ["gstInvoices", "🧾 GST Invoices", C.purple],
+                    ["quotations", "📄 Sales Quotations", C.blue],
+                    ["cashBills", "💵 Cash Bills & Entries", C.teal],
+                    ["stockOut", "📦 Stock Out / Sales", C.green],
+                    ["stockIn", "📥 Stock In / Purchases", C.amber],
+                    ["rawMaterialPayments", "🧪 Raw Materials", C.rose],
+                    ["debtors", "👥 Debtors Ledger", "#8b5cf6"],
+                    ["creditors", "🤝 Creditors Ledger", "#f59e0b"],
+                    ["clients", "🏢 Client Directory", "#06b6d4"],
+                    ["plEntries", "📊 P&L Entries", "#ec4899"],
+                    ["tradingEntries", "⚖️ Trading Entries", "#a855f7"]
+                ];
+
+                return (
+                    <div style={{ background: C.mid, borderRadius: 16, padding: 20, border: "1px solid #334155" }}>
+                        {/* Title & Banner */}
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, flexWrap: "wrap", gap: 10 }}>
+                            <div>
+                                <div style={{ fontSize: 18, fontWeight: 900, color: C.purple, display: "flex", alignItems: "center", gap: 8 }}>
+                                    <span>📊</span> Smart Search & Excel Transport Studio
+                                </div>
+                                <div style={{ fontSize: 11, color: C.muted, marginTop: 2 }}>
+                                    Search required documents naturally or by requirement filters, review matching records, and transport info to Excel with your authorization.
+                                </div>
+                            </div>
+                            <div style={{ display: "flex", gap: 8 }}>
+                                <button
+                                    onClick={() => executeExcelExport()}
+                                    disabled={filteredExportData.length === 0}
+                                    style={{
+                                        ...BTNP(filteredExportData.length > 0 ? "linear-gradient(90deg,#10b981,#059669)" : "#334155"),
+                                        padding: "10px 18px",
+                                        fontSize: 13,
+                                        fontWeight: 800,
+                                        boxShadow: filteredExportData.length > 0 ? "0 4px 14px rgba(16,185,129,0.35)" : "none",
+                                        cursor: filteredExportData.length > 0 ? "pointer" : "not-allowed",
+                                        opacity: filteredExportData.length > 0 ? 1 : 0.6
+                                    }}
+                                >
+                                    📊 Transport to Excel Now ({selectedExportIds.size > 0 ? selectedExportIds.size : filteredExportData.length})
+                                </button>
+                                <button
+                                    onClick={() => setExportModalOpen(true)}
+                                    style={{
+                                        ...BTNP("transparent"),
+                                        border: "1px solid #7c3aed",
+                                        color: "#c4b5fd",
+                                        padding: "10px 14px",
+                                        fontSize: 11,
+                                        fontWeight: 700
+                                    }}
+                                >
+                                    ⚙️ Options & Columns
+                                </button>
+                            </div>
+                        </div>
+
+                        {/* Search Input Box */}
+                        <div style={{ background: "#0f172a", borderRadius: 12, padding: 14, marginBottom: 16, border: "1px solid #1e293b" }}>
+                            <label style={{ fontSize: 11, fontWeight: 800, color: "#c4b5fd", marginBottom: 6, display: "block" }}>
+                                🔍 Intelligent Requirement & Natural Search
+                            </label>
+                            <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                                <div style={{ position: "relative", flex: 1 }}>
+                                    <input
+                                        type="text"
+                                        style={{ ...INP, marginBottom: 0, paddingLeft: 36, fontSize: 13, background: "#1e293b", border: "1px solid #4f46e5" }}
+                                        placeholder="e.g. 'GST Invoice', 'Shree Jaganath', 'INV-2026', '20L Jar', '50000', 'Cash', 'Jar 1L'..."
+                                        value={exportSearch}
+                                        onChange={e => setExportSearch(e.target.value)}
+                                    />
+                                    <span style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", fontSize: 14 }}>🔍</span>
+                                    {exportSearch && (
+                                        <button onClick={() => setExportSearch("")} style={{ position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)", background: "transparent", border: "none", color: C.muted, cursor: "pointer", fontSize: 14 }}>✕</button>
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Filters Row: Categories + Date Range + Amount Range */}
+                        <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 14, marginBottom: 16 }}>
+                            {/* Document Categories Checkboxes */}
+                            <div style={{ background: "#0f172a", borderRadius: 12, padding: 14, border: "1px solid #1e293b" }}>
+                                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8, alignItems: "center" }}>
+                                    <span style={{ fontSize: 11, fontWeight: 800, color: "#94a3b8" }}>📂 Document Categories to Include:</span>
+                                    <div style={{ display: "flex", gap: 8 }}>
+                                        <button onClick={() => {
+                                            const allOn = {};
+                                            categoryLabels.forEach(([k]) => allOn[k] = true);
+                                            setExportDocTypes(allOn);
+                                        }} style={{ background: "transparent", border: "none", color: C.purple, fontSize: 10, cursor: "pointer", fontWeight: 700 }}>Select All</button>
+                                        <span style={{ color: C.muted }}>|</span>
+                                        <button onClick={() => {
+                                            const allOff = {};
+                                            categoryLabels.forEach(([k]) => allOff[k] = false);
+                                            setExportDocTypes(allOff);
+                                        }} style={{ background: "transparent", border: "none", color: C.muted, fontSize: 10, cursor: "pointer", fontWeight: 700 }}>Clear All</button>
+                                    </div>
+                                </div>
+                                <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                                    {categoryLabels.map(([k, label, color]) => {
+                                        const isChecked = !!exportDocTypes[k];
+                                        const count = categoryBreakdown.counts[k] || 0;
+                                        return (
+                                            <button
+                                                key={k}
+                                                onClick={() => setExportDocTypes(prev => ({ ...prev, [k]: !prev[k] }))}
+                                                style={{
+                                                    background: isChecked ? `${color}22` : "#1e293b",
+                                                    border: `1px solid ${isChecked ? color : "#334155"}`,
+                                                    color: isChecked ? "#fff" : "#94a3b8",
+                                                    borderRadius: 20,
+                                                    padding: "4px 10px",
+                                                    fontSize: 10,
+                                                    fontWeight: isChecked ? 700 : 500,
+                                                    cursor: "pointer",
+                                                    display: "flex",
+                                                    alignItems: "center",
+                                                    gap: 6
+                                                }}
+                                            >
+                                                <span>{isChecked ? "✓" : "+"}</span>
+                                                <span>{label}</span>
+                                                <span style={{ background: isChecked ? color : "#334155", color: "#fff", borderRadius: 10, padding: "1px 6px", fontSize: 9 }}>{count}</span>
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+                            </div>
+
+                            {/* Date & Amount Range Filters */}
+                            <div style={{ background: "#0f172a", borderRadius: 12, padding: 14, border: "1px solid #1e293b", display: "flex", flexDirection: "column", gap: 10 }}>
+                                <div style={{ fontSize: 11, fontWeight: 800, color: "#94a3b8" }}>📅 Date & Amount Filters</div>
+                                
+                                {/* Quick Date Presets */}
+                                <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                                    {[
+                                        ["All Time", "", ""],
+                                        ["Today", today(), today()],
+                                        ["This Month", `${today().substring(0,7)}-01`, today()]
+                                    ].map(([pLabel, dFrom, dTo]) => (
+                                        <button
+                                            key={pLabel}
+                                            onClick={() => { setExportDateFrom(dFrom); setExportDateTo(dTo); }}
+                                            style={{
+                                                background: (exportDateFrom === dFrom && exportDateTo === dTo) ? "#4f46e5" : "#1e293b",
+                                                color: "#fff",
+                                                border: "none",
+                                                borderRadius: 4,
+                                                padding: "3px 7px",
+                                                fontSize: 9,
+                                                cursor: "pointer",
+                                                fontWeight: 600
+                                            }}
+                                        >
+                                            {pLabel}
+                                        </button>
+                                    ))}
+                                </div>
+
+                                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+                                    <div>
+                                        <label style={{ fontSize: 9, color: C.muted, display: "block" }}>Date From</label>
+                                        <DateInput value={exportDateFrom} onChange={v => setExportDateFrom(v)} />
+                                    </div>
+                                    <div>
+                                        <label style={{ fontSize: 9, color: C.muted, display: "block" }}>Date To</label>
+                                        <DateInput value={exportDateTo} onChange={v => setExportDateTo(v)} />
+                                    </div>
+                                </div>
+
+                                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+                                    <div>
+                                        <label style={{ fontSize: 9, color: C.muted, display: "block" }}>Min Amount (₹)</label>
+                                        <input type="number" style={{ ...INP, marginBottom: 0, padding: "4px 8px", fontSize: 10 }} placeholder="Min ₹" value={exportMinAmount} onChange={e => setExportMinAmount(e.target.value)} />
+                                    </div>
+                                    <div>
+                                        <label style={{ fontSize: 9, color: C.muted, display: "block" }}>Max Amount (₹)</label>
+                                        <input type="number" style={{ ...INP, marginBottom: 0, padding: "4px 8px", fontSize: 10 }} placeholder="Max ₹" value={exportMaxAmount} onChange={e => setExportMaxAmount(e.target.value)} />
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Interactive Data Results Table Header */}
+                        <div style={{ background: "#0f172a", borderRadius: "12px 12px 0 0", padding: "12px 16px", display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid #334155", flexWrap: "wrap", gap: 10 }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                                <button
+                                    onClick={toggleExportSelectAll}
+                                    style={{ background: "#334155", border: "none", color: "#fff", borderRadius: 6, padding: "5px 10px", fontSize: 10, fontWeight: 700, cursor: "pointer" }}
+                                >
+                                    {selectedExportIds.size === filteredExportData.length ? "☑ Deselect All" : "☐ Select All Matching"}
+                                </button>
+                                <span style={{ fontSize: 12, fontWeight: 700, color: C.teal }}>
+                                    Found {filteredExportData.length} matching document records
+                                </span>
+                            </div>
+                            <div style={{ textAlign: "right" }}>
+                                <span style={{ fontSize: 11, color: C.muted, marginRight: 8 }}>Selected for Transport:</span>
+                                <strong style={{ fontSize: 13, color: "#86efac" }}>{totalSelectedCount} records</strong>
+                                <span style={{ fontSize: 11, color: C.muted, marginLeft: 8 }}>(Value: <strong style={{ color: "#fef08a" }}>{fc(selectedTotalValue)}</strong>)</span>
+                            </div>
+                        </div>
+
+                        {/* Results Data Grid */}
+                        <div style={{ overflowX: "auto", maxHeight: 480, overflowY: "auto", background: C.dark, borderRadius: "0 0 12px 12px", border: "1px solid #334155", borderTop: "none" }}>
+                            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
+                                <thead>
+                                    <tr style={{ background: "#1e293b", color: C.muted, position: "sticky", top: 0, zIndex: 10, textAlign: "left" }}>
+                                        <th style={{ padding: "8px 12px", width: 40 }}>Select</th>
+                                        <th style={{ padding: "8px 12px" }}>Category</th>
+                                        <th style={{ padding: "8px 12px" }}>Doc / Ref No</th>
+                                        <th style={{ padding: "8px 12px" }}>Date</th>
+                                        <th style={{ padding: "8px 12px" }}>Party / Client</th>
+                                        <th style={{ padding: "8px 12px" }}>Description / Items</th>
+                                        <th style={{ padding: "8px 12px", textAlign: "right" }}>Qty</th>
+                                        <th style={{ padding: "8px 12px", textAlign: "right" }}>Rate (₹)</th>
+                                        <th style={{ padding: "8px 12px", textAlign: "right" }}>Tax Amt (₹)</th>
+                                        <th style={{ padding: "8px 12px", textAlign: "right" }}>Total (₹)</th>
+                                        <th style={{ padding: "8px 12px", textAlign: "right" }}>Paid (₹)</th>
+                                        <th style={{ padding: "8px 12px", textAlign: "right" }}>Balance (₹)</th>
+                                        <th style={{ padding: "8px 12px" }}>Status / Mode</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {filteredExportData.length === 0 ? (
+                                        <tr>
+                                            <td colSpan={13} style={{ padding: 40, textAlign: "center", color: C.muted }}>
+                                                🔍 No records matching your requirement search parameters. Try adjusting search keywords or selecting document categories above.
+                                            </td>
+                                        </tr>
+                                    ) : (
+                                        filteredExportData.map((item, idx) => {
+                                            const isSelected = selectedExportIds.has(item.id);
+                                            return (
+                                                <tr
+                                                    key={item.id + "-" + idx}
+                                                    onClick={() => toggleExportItem(item.id)}
+                                                    style={{
+                                                        borderBottom: "1px solid #1e293b",
+                                                        background: isSelected ? "#1e1b4b" : (idx % 2 === 0 ? "transparent" : "#0f172a"),
+                                                        cursor: "pointer"
+                                                    }}
+                                                >
+                                                    <td style={{ padding: "8px 12px", textAlign: "center" }}>
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={isSelected}
+                                                            onChange={() => {}}
+                                                            style={{ cursor: "pointer" }}
+                                                        />
+                                                    </td>
+                                                    <td style={{ padding: "8px 12px" }}>
+                                                        <span style={{ background: "#334155", color: "#e2e8f0", borderRadius: 4, padding: "2px 6px", fontSize: 9, fontWeight: 700 }}>
+                                                            {item.category}
+                                                        </span>
+                                                    </td>
+                                                    <td style={{ padding: "8px 12px", fontWeight: 700, color: C.purple, fontFamily: "monospace" }}>{item.docNo}</td>
+                                                    <td style={{ padding: "8px 12px", color: C.muted }}>{item.date || "N/A"}</td>
+                                                    <td style={{ padding: "8px 12px", fontWeight: 600, color: C.text }}>{item.partyName}</td>
+                                                    <td style={{ padding: "8px 12px", color: C.muted, maxWidth: 200, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{item.description}</td>
+                                                    <td style={{ padding: "8px 12px", textAlign: "right", color: "#93c5fd" }}>
+                                                        {item.raw ? (Number(item.raw.qty || item.raw.quantity || item.raw.units || 0) || "-") : "-"}
+                                                    </td>
+                                                    <td style={{ padding: "8px 12px", textAlign: "right", color: "#fde68a" }}>
+                                                        {item.raw ? fc(Number(item.raw.ratePerUnit || item.raw.rate || item.raw.unitRate || 0)) : "-"}
+                                                    </td>
+                                                    <td style={{ padding: "8px 12px", textAlign: "right", color: C.amber }}>
+                                                        {fc(item.taxAmount || 0)}
+                                                    </td>
+                                                    <td style={{ padding: "8px 12px", textAlign: "right", fontWeight: 800, color: item.totalAmount >= 0 ? C.green : C.red }}>
+                                                        {fc(item.totalAmount)}
+                                                    </td>
+                                                    <td style={{ padding: "8px 12px", textAlign: "right", color: "#4ade80" }}>
+                                                        {item.raw ? fc(Number(item.raw.paidAmount || item.raw.paid || item.raw.cashPaid || (item.catKey === "cashBills" ? item.totalAmount : 0))) : "-"}
+                                                    </td>
+                                                    <td style={{ padding: "8px 12px", textAlign: "right", color: C.rose }}>
+                                                        {(() => {
+                                                            if (!item.raw) return "-";
+                                                            const total = item.totalAmount || 0;
+                                                            const paid = Number(item.raw.paidAmount || item.raw.paid || item.raw.cashPaid || (item.catKey === "cashBills" ? total : 0));
+                                                            const bal = total - paid;
+                                                            return bal > 0 ? fc(bal) : (bal < 0 ? fc(bal) : "₹0");
+                                                        })()}
+                                                    </td>
+                                                    <td style={{ padding: "8px 12px", color: C.amber, fontSize: 10 }}>{item.mode}</td>
+                                                </tr>
+                                            );
+                                        })
+                                    )}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                );
+            };
+
+            // ── Render Permission & Authorization Preview Modal ─────────────────────────
+            const renderExportPermissionModal = () => {
+                const selectedRecords = getRecordsToExport();
+                const totalValue = selectedRecords.reduce((a, b) => a + (b.totalAmount || 0), 0);
+
+                // Distinct category count
+                const distinctCats = Array.from(new Set(selectedRecords.map(r => r.category)));
+
+                return (
+                    <div style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.85)", backdropFilter: "blur(6px)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 9999, padding: 16 }}>
+                        <div style={{ background: "#1e293b", border: "1.5px solid #7c3aed", borderRadius: 20, maxWidth: 760, width: "100%", padding: 24, boxShadow: "0 25px 50px -12px rgba(124,58,237,0.35)", maxHeight: "90vh", display: "flex", flexDirection: "column" }}>
+                            
+                            {/* Modal Header */}
+                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+                                <div>
+                                    <div style={{ fontSize: 18, fontWeight: 900, color: "#fff", display: "flex", alignItems: "center", gap: 8 }}>
+                                        <span>🔒</span> Excel Transport Permission & Authorization
+                                    </div>
+                                    <div style={{ fontSize: 10, color: "#c4b5fd", marginTop: 2 }}>
+                                        Review requirements and confirm user permission before generating Microsoft Excel workbook.
+                                    </div>
+                                </div>
+                                <button onClick={() => setExportModalOpen(false)} style={{ background: "transparent", border: "none", color: C.muted, fontSize: 20, cursor: "pointer" }}>✕</button>
+                            </div>
+
+                            {/* Authorization Request Callout */}
+                            <div style={{ background: "linear-gradient(90deg,#2e1065,#1e1b4b)", border: "1px solid #6d28d9", borderRadius: 12, padding: "12px 16px", marginBottom: 16, color: "#e9d5ff", fontSize: 11, lineHeight: 1.5 }}>
+                                <strong>⚠️ Permission Request:</strong> The website has processed your search requirements and gathered <strong>{selectedRecords.length} records</strong> across <strong>{distinctCats.length} document categories</strong> (Total Monetary Value: <strong style={{ color: "#86efac" }}>{fc(totalValue)}</strong>). Please grant permission below to transfer this information to Excel.
+                            </div>
+
+                            {/* Scrollable Configuration Area */}
+                            <div style={{ overflowY: "auto", flex: 1, paddingRight: 4, display: "flex", flexDirection: "column", gap: 14 }}>
+                                
+                                {/* Workbook Structure Mode Selector */}
+                                <div style={{ background: "#0f172a", borderRadius: 12, padding: 14, border: "1px solid #334155" }}>
+                                    <div style={{ fontSize: 11, fontWeight: 800, color: C.teal, marginBottom: 8 }}>
+                                        📁 Excel Workbook Structure Mode:
+                                    </div>
+                                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                                        <label
+                                            onClick={() => setExportMode("multi-sheet")}
+                                            style={{
+                                                background: exportMode === "multi-sheet" ? "#2e1065" : "#1e293b",
+                                                border: `1.5px solid ${exportMode === "multi-sheet" ? "#a855f7" : "#334155"}`,
+                                                borderRadius: 10,
+                                                padding: 10,
+                                                cursor: "pointer",
+                                                display: "flex",
+                                                gap: 8,
+                                                alignItems: "flex-start"
+                                            }}
+                                        >
+                                            <input type="radio" name="exportMode" checked={exportMode === "multi-sheet"} onChange={() => setExportMode("multi-sheet")} style={{ marginTop: 2 }} />
+                                            <div>
+                                                <div style={{ fontSize: 11, fontWeight: 800, color: "#fff" }}>Multi-Sheet Workbook</div>
+                                                <div style={{ fontSize: 9, color: C.muted }}>Each document category gets its own tab worksheet (GST Invoices, Quotations, Stock, etc.)</div>
+                                            </div>
+                                        </label>
+
+                                        <label
+                                            onClick={() => setExportMode("consolidated")}
+                                            style={{
+                                                background: exportMode === "consolidated" ? "#2e1065" : "#1e293b",
+                                                border: `1.5px solid ${exportMode === "consolidated" ? "#a855f7" : "#334155"}`,
+                                                borderRadius: 10,
+                                                padding: 10,
+                                                cursor: "pointer",
+                                                display: "flex",
+                                                gap: 8,
+                                                alignItems: "flex-start"
+                                            }}
+                                        >
+                                            <input type="radio" name="exportMode" checked={exportMode === "consolidated"} onChange={() => setExportMode("consolidated")} style={{ marginTop: 2 }} />
+                                            <div>
+                                                <div style={{ fontSize: 11, fontWeight: 800, color: "#fff" }}>Consolidated Master Sheet</div>
+                                                <div style={{ fontSize: 9, color: C.muted }}>All matching items combined into one master spreadsheet table</div>
+                                            </div>
+                                        </label>
+                                    </div>
+                                </div>
+
+                                {/* Column Selection Checklist */}
+                                <div style={{ background: "#0f172a", borderRadius: 12, padding: 14, border: "1px solid #334155" }}>
+                                    <div style={{ fontSize: 11, fontWeight: 800, color: C.amber, marginBottom: 8 }}>
+                                        📋 Select Columns to Include in Excel File:
+                                    </div>
+                                    <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8 }}>
+                                        {[
+                                            ["docId", "Document / Ref No"],
+                                            ["date", "Date"],
+                                            ["category", "Category"],
+                                            ["partyName", "Party / Client Name"],
+                                            ["gstin", "GSTIN"],
+                                            ["phone", "Phone Number"],
+                                            ["description", "Items / Description"],
+                                            ["taxable", "Taxable Amount"],
+                                            ["tax", "Tax Amount"],
+                                            ["total", "Grand Total"],
+                                            ["mode", "Payment Mode / Status"],
+                                            ["remarks", "Remarks / Notes"]
+                                        ].map(([colKey, colLabel]) => (
+                                            <label key={colKey} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 10, color: C.text, cursor: "pointer" }}>
+                                                <input
+                                                    type="checkbox"
+                                                    checked={!!exportCols[colKey]}
+                                                    onChange={e => setExportCols(prev => ({ ...prev, [colKey]: e.target.checked }))}
+                                                />
+                                                <span>{colLabel}</span>
+                                            </label>
+                                        ))}
+                                    </div>
+                                </div>
+
+                                {/* Data Preview Table */}
+                                <div style={{ background: "#0f172a", borderRadius: 12, padding: 12, border: "1px solid #334155" }}>
+                                    <div style={{ fontSize: 10, fontWeight: 800, color: C.muted, marginBottom: 6 }}>
+                                        👀 Live Data Preview (First 5 records of {selectedRecords.length}):
+                                    </div>
+                                    <div style={{ overflowX: "auto" }}>
+                                        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 10 }}>
+                                            <thead>
+                                                <tr style={{ background: "#1e293b", color: C.muted, textAlign: "left" }}>
+                                                    <th style={{ padding: "4px 8px" }}>Doc #</th>
+                                                    <th style={{ padding: "4px 8px" }}>Date</th>
+                                                    <th style={{ padding: "4px 8px" }}>Category</th>
+                                                    <th style={{ padding: "4px 8px" }}>Party</th>
+                                                    <th style={{ padding: "4px 8px", textAlign: "right" }}>Total (₹)</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                {selectedRecords.slice(0, 5).map((r, i) => (
+                                                    <tr key={r.id + "-prev-" + i} style={{ borderBottom: "1px solid #1e293b" }}>
+                                                        <td style={{ padding: "4px 8px", fontWeight: 700, color: C.purple }}>{r.docNo}</td>
+                                                        <td style={{ padding: "4px 8px", color: C.muted }}>{r.date}</td>
+                                                        <td style={{ padding: "4px 8px" }}>{r.category}</td>
+                                                        <td style={{ padding: "4px 8px" }}>{r.partyName}</td>
+                                                        <td style={{ padding: "4px 8px", textAlign: "right", fontWeight: 700, color: C.green }}>{fc(r.totalAmount)}</td>
+                                                    </tr>
+                                                ))}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* Action Footer Buttons */}
+                            <div style={{ display: "flex", gap: 10, marginTop: 16, paddingTop: 12, borderTop: "1px solid #334155", flexWrap: "wrap" }}>
+                                <button
+                                    onClick={() => executeExcelExport()}
+                                    style={{ ...BTNP("linear-gradient(90deg,#10b981,#059669)"), flex: 2, minWidth: 200, padding: "12px", fontSize: 12, fontWeight: 800, boxShadow: "0 4px 14px rgba(16,185,129,0.4)" }}
+                                >
+                                    📊 Transport to Excel (.xlsx)
+                                </button>
+                                <button
+                                    onClick={copyExcelDataToClipboard}
+                                    style={{ ...BTNP("linear-gradient(90deg,#8b5cf6,#7c3aed)"), flex: 1.5, minWidth: 170, padding: "12px", fontSize: 12, fontWeight: 800 }}
+                                >
+                                    📋 Copy to Clipboard (Instant Paste)
+                                </button>
+                                <button
+                                    onClick={() => {
+                                        const compName = state.settings?.companyProfile?.name || "YORS_WATER";
+                                        executeCSVExport(selectedRecords, `${compName.replace(/\s+/g, '_')}_Export_${today()}.csv`);
+                                    }}
+                                    style={{ ...BTNP("linear-gradient(90deg,#0284c7,#0369a1)"), flex: 1, minWidth: 120, padding: "12px", fontSize: 12, fontWeight: 700 }}
+                                >
+                                    📄 Export CSV
+                                </button>
+                                <button
+                                    onClick={() => setExportModalOpen(false)}
+                                    style={{ ...BTNP("transparent"), border: "1px solid #475569", color: "#94a3b8", flex: 0.8, minWidth: 80, padding: "12px", fontSize: 12 }}
+                                >
+                                    Cancel
+                                </button>
+                            </div>
+
+                        </div>
+                    </div>
+                );
+            };
+
+
             if (loading) return <div style={{ minHeight: "100vh", background: "#0f172a", display: "flex", alignItems: "center", justifyContent: "center", color: "#a855f7", fontSize: 16, fontWeight: 700 }}>💧 Loading your data…</div>;
 
             return (<div id="app-root" style={{ minHeight: "100vh", background: "linear-gradient(135deg,#0f172a 60%,#1e1b4b)", color: C.text }}>
@@ -5756,6 +7172,7 @@
                                     compAddress: state.settings?.companyProfile?.address || "",
                                     compPhone: state.settings?.companyProfile?.phone || ""
                                 })} style={{ background: "transparent", border: "1px solid #7c3aed", color: "#c4b5fd", borderRadius: 5, padding: "2px 8px", cursor: "pointer", fontSize: 10 }}>⚙️</button>}
+                                <button onClick={() => setTab("Excel Transport")} title="Open Smart Search & Excel Transport Studio" style={{ background: "linear-gradient(90deg,#7c3aed,#9333ea)", border: "none", color: "#fff", borderRadius: 5, padding: "2px 10px", cursor: "pointer", fontSize: 10, fontWeight: 800 }}>📊 Excel Transport</button>
                                 <button onClick={exportBackup} title="Export JSON backup to your computer" style={{ background: "#059669", border: "none", color: "#fff", borderRadius: 5, padding: "2px 8px", cursor: "pointer", fontSize: 10, fontWeight: 700 }}>📥 Backup JSON</button>
                                 <button onClick={importBackup} title="Import JSON backup from file" style={{ background: "#0284c7", border: "none", color: "#fff", borderRadius: 5, padding: "2px 8px", cursor: "pointer", fontSize: 10, fontWeight: 700 }}>📤 Import JSON</button>
                                 <button onClick={() => auth.signOut()} style={{ background: "transparent", border: "1px solid #7c3aed", color: "#c4b5fd", borderRadius: 5, padding: "2px 8px", cursor: "pointer", fontSize: 10 }}>Sign Out</button>
@@ -5788,6 +7205,8 @@
                             <button onClick={toggleAdmin} style={{ ...BTNP("linear-gradient(90deg,#6366f1,#8b5cf6)"), padding: "6px 14px" }}>🔓 Enter Admin PIN</button>
                         </div>
                     )}
+
+                    {tab === "Excel Transport" && renderExcelTransportTab()}
 
                     {tab === "Dashboard" && <div>
                         <div style={{ fontSize: 16, fontWeight: 800, marginBottom: 14, color: C.purple }}>📊 Dashboard</div>
