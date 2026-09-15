@@ -6656,6 +6656,65 @@
                 });
             };
 
+            // One-time fix: refund the Preform portion that was over-deducted from Conversion Cost
+            // when Preform was temporarily merged into Conversion Cost rates.
+            const fixPreformRefund = () => {
+                if (!isAdmin) { alert("Locked 🔒: Admin only."); return; }
+                if (!window.confirm("This will add back the Preform portion (200ml=₹61.20, 500ml=₹44.88, 1L/Premium=₹36.72 per unit) that was over-deducted from Conversion Cost balance.\n\nThis is a one-time correction — run it only ONCE. Continue?")) return;
+
+                const PREFORM_RATES = { "200ml": 61.20, "500ml": 44.88, "1L": 36.72, "Premium": 36.72 };
+
+                upd(p => {
+                    let np = { ...p };
+                    let rms = (np.rawMaterialPayments || []).map(r => ({ ...r }));
+
+                    // All non-return stock-ins settled via rawMaterial
+                    const allSIs = (np.stockIn || []).filter(si => si.settleMode === "rawMaterial" && !si.isReturn);
+
+                    // Group by linkedRawMaterialId (batch key).
+                    // The FIRST item in each batch holds the linkedRawMaterials deductions array;
+                    // sibling items share the same linkedRawMaterialId but have empty arrays.
+                    const batches = {};
+                    allSIs.forEach(si => {
+                        const batchKey = si.linkedRawMaterialId || si.id;
+                        if (!batches[batchKey]) batches[batchKey] = { leader: null, totalPreform: 0 };
+                        // Mark leader — the one that actually carries deduction records
+                        if (si.linkedRawMaterials && si.linkedRawMaterials.length > 0) {
+                            batches[batchKey].leader = si;
+                        }
+                        batches[batchKey].totalPreform += (Number(si.qty) || 0) * (PREFORM_RATES[si.bottleType] || 0);
+                    });
+
+                    // For each batch refund preform portion from CC rawMaterialPayments
+                    Object.values(batches).forEach(batch => {
+                        if (!batch.leader || batch.totalPreform <= 0) return;
+
+                        let preformToRefund = batch.totalPreform;
+                        const linkedCCs = (batch.leader.linkedRawMaterials || [])
+                            .filter(lrm => lrm.rawMatType === "Conversion Cost");
+
+                        linkedCCs.forEach(lrm => {
+                            if (preformToRefund <= 0) return;
+                            const refund = Math.min(preformToRefund, lrm.amount);
+                            rms = rms.map(r => {
+                                if (r.id === lrm.id) {
+                                    const newUsed = Math.max(0, (r.usedForStockIn || 0) - refund);
+                                    return { ...r, usedForStockIn: newUsed };
+                                }
+                                return r;
+                            });
+                            preformToRefund -= refund;
+                        });
+                    });
+
+                    np.rawMaterialPayments = rms;
+                    np = withLog(np, "UPDATE", "rawMaterialPayments", null, "One-time fix: refunded Preform portion from Conversion Cost usedForStockIn");
+                    return np;
+                });
+
+                alert("Done! The Preform portion has been refunded back into the Conversion Cost available balance.");
+            };
+
             const sp = { form, setForm, creds, debs, rawMats: state.rawMaterialPayments || [] };
 
             
@@ -7274,7 +7333,10 @@
                     {tab === "Raw Materials" && <div>
                         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
                             <div style={{ fontSize: 16, fontWeight: 800, color: C.teal }}>🏭 Raw Material Payments</div>
-                            {isAdmin && <button style={BTNP("linear-gradient(90deg,#0891b2,#0ea5e9)")} onClick={() => openM("rawMaterial")}>+ Add Payment</button>}
+                            <div style={{ display: "flex", gap: 8 }}>
+                                {isAdmin && <button style={BTNP("linear-gradient(90deg,#dc2626,#b91c1c)")} onClick={fixPreformRefund} title="One-time fix: add back the Preform amount over-deducted from Conversion Cost">🔧 Refund Preform from Conv. Cost</button>}
+                                {isAdmin && <button style={BTNP("linear-gradient(90deg,#0891b2,#0ea5e9)")} onClick={() => openM("rawMaterial")}>+ Add Payment</button>}
+                            </div>
                         </div>
                         {(() => {
                             const rms = state.rawMaterialPayments || [];
