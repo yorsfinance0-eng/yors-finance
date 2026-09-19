@@ -5586,6 +5586,7 @@
 
                 // Raw Material settlement: deduct category component costs from raw material pool
                 if (form.settleMode === "rawMaterial") {
+                    // Required amounts per category in BASE terms (excl. GST)
                     const reqCatAmounts = { "Conversion Cost": 0, "Cap": 0, "Label": 0 };
                     siItems.forEach(it => {
                         const q = Number(it.qty || 0);
@@ -5597,34 +5598,63 @@
                     });
 
                     const rawMatPayments = state.rawMaterialPayments || [];
-                    // Check category-wise availability
+
+                    // ── Category-wise availability check ──────────────────────────────────────
+                    // IMPORTANT: usedForStockIn is tracked in TOTAL (incl. GST) terms.
+                    // Available  = totalAmount - usedForStockIn   (both total — consistent)
+                    // Required   = base_rate × (1 + gstRate/100) — scaled to total per entry
                     for (const cat of Object.keys(reqCatAmounts)) {
-                        const req = reqCatAmounts[cat];
-                        if (req > 0) {
-                            const availForCat = rawMatPayments
-                                .filter(r => r.rawMatType === cat)
-                                .reduce((sum, r) => sum + (Number(r.amount) - (r.usedForStockIn || 0)), 0);
-                            if (req > availForCat + 0.001) {
-                                alert(`Insufficient balance in Raw Materials for '${cat}'.\nAvailable: ₹${availForCat.toFixed(2)} (excl. GST), Required: ₹${req.toFixed(2)} for ${siItems.reduce((a,b)=>a+Number(b.qty||0),0)} units.`);
+                        const reqBase = reqCatAmounts[cat];
+                        if (reqBase > 0) {
+                            const catEntries = rawMatPayments.filter(r => r.rawMatType === cat);
+                            // Available in TOTAL terms
+                            const availForCat = catEntries.reduce((sum, r) => {
+                                const tot = Number(r.totalAmount !== undefined ? r.totalAmount : r.amount);
+                                return sum + Math.max(0, tot - (r.usedForStockIn || 0));
+                            }, 0);
+                            // Required in TOTAL terms (weight by each entry's GST rate)
+                            const weightedGstMult = catEntries.length > 0
+                                ? catEntries.reduce((s, r) => s + (1 + Number(r.gstRate || 0) / 100), 0) / catEntries.length
+                                : 1;
+                            const reqTotal = reqBase * weightedGstMult;
+
+                            if (reqTotal > availForCat + 0.001) {
+                                const totalUnits = siItems.reduce((a, b) => a + Number(b.qty || 0), 0);
+                                const noEntry = catEntries.length === 0;
+                                if (noEntry) {
+                                    alert(`⚠️ No Raw Material payment entry found for '${cat}'.\n\nGo to Raw Materials tab → + Add Payment → Select Type: ${cat}\n\nRequired: ₹${reqTotal.toFixed(2)} (incl. GST) for ${totalUnits} units.`);
+                                } else {
+                                    alert(`Insufficient balance in Raw Materials for '${cat}'.\nAvailable: ₹${availForCat.toFixed(2)} (incl. GST)\nRequired: ₹${reqTotal.toFixed(2)} (incl. GST) for ${totalUnits} units.\n\nPlease add more '${cat}' raw material payments.`);
+                                }
                                 return;
                             }
                         }
                     }
 
+                    // ── Deduction loop ────────────────────────────────────────────────────────
                     const deductions = [];
                     let currentRms = rawMatPayments.map(r => ({ ...r }));
 
                     Object.keys(reqCatAmounts).forEach(cat => {
-                        let needed = reqCatAmounts[cat];
-                        if (needed <= 0) return;
+                        let neededBase = reqCatAmounts[cat]; // base remaining to satisfy
+                        if (neededBase <= 0) return;
                         currentRms = currentRms.map(r => {
-                            if (r.rawMatType !== cat || needed <= 0) return r;
-                            const avail = Number(r.amount) - (r.usedForStockIn || 0);
-                            if (avail <= 0) return r;
-                            const take = Math.min(needed, avail);
-                            needed -= take;
-                            deductions.push({ id: r.id, amount: take, rawMatType: r.rawMatType });
-                            return { ...r, usedForStockIn: (r.usedForStockIn || 0) + take };
+                            if (r.rawMatType !== cat || neededBase <= 0) return r;
+                            const gstMult = 1 + (Number(r.gstRate || 0) / 100);
+                            const totalAvail = Number(r.totalAmount !== undefined ? r.totalAmount : r.amount);
+                            const availTotal = totalAvail - (r.usedForStockIn || 0); // total remaining
+                            if (availTotal <= 0) return r;
+                            // Convert base needed to total needed for this entry's GST rate
+                            const neededTotal = neededBase * gstMult;
+                            const takeTotal = Math.min(neededTotal, availTotal);  // take in total
+                            const takeBase = takeTotal / gstMult;                 // equivalent base
+                            neededBase -= takeBase;
+                            deductions.push({ id: r.id, amount: takeTotal, rawMatType: r.rawMatType });
+                            return {
+                                ...r,
+                                usedForStockIn: (r.usedForStockIn || 0) + takeTotal,      // total tracker
+                                usedForStockInBase: (r.usedForStockInBase || 0) + takeBase // base tracker for Trading A/C
+                            };
                         });
                     });
 
@@ -7340,25 +7370,28 @@
                         </div>
                         {(() => {
                             const rms = state.rawMaterialPayments || [];
+                            // usedForStockIn is tracked in TOTAL (incl. GST) terms
+                            // So available = totalAmount - usedForStockIn (both total — consistent)
                             const totalInvested = rms.reduce((a, b) => a + Number(b.totalAmount !== undefined ? b.totalAmount : b.amount), 0);
                             const totalUsed = rms.reduce((a, b) => a + Number(b.usedForStockIn || 0), 0);
-                            const totalAvailable = totalInvested - totalUsed;
+                            const totalAvail = totalInvested - totalUsed;
                             return (<>
                                 <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
                                     <div style={CARD("#0891b2,#0ea5e9")}><div style={{ fontSize: 9 }}>Total Invested (incl. GST)</div><div style={{ fontSize: 14, fontWeight: 900 }}>{fc(totalInvested)}</div></div>
-                                    <div style={CARD("#ef4444,#b91c1c")}><div style={{ fontSize: 9 }}>Used for Stock In</div><div style={{ fontSize: 14, fontWeight: 900 }}>{fc(totalUsed)}</div></div>
-                                    <div style={CARD("#22c55e,#16a34a")}><div style={{ fontSize: 9 }}>Available Balance</div><div style={{ fontSize: 14, fontWeight: 900 }}>{fc(totalAvailable)}</div></div>
+                                    <div style={CARD("#ef4444,#b91c1c")}><div style={{ fontSize: 9 }}>Used for Stock In (incl. GST)</div><div style={{ fontSize: 14, fontWeight: 900 }}>{fc(totalUsed)}</div></div>
+                                    <div style={CARD("#22c55e,#16a34a")}><div style={{ fontSize: 9 }}>Available (incl. GST)</div><div style={{ fontSize: 14, fontWeight: 900 }}>{fc(Math.max(0, totalAvail))}</div></div>
                                 </div>
                                 {RAW_MAT_TYPES.map(type => {
                                     const entries = rms.filter(r => r.rawMatType === type);
-                                    const invested = entries.reduce((a, b) => a + Number(b.totalAmount !== undefined ? b.totalAmount : b.amount), 0);
+                                    const investedTotal = entries.reduce((a, b) => a + Number(b.totalAmount !== undefined ? b.totalAmount : b.amount), 0);
                                     const used = entries.reduce((a, b) => a + Number(b.usedForStockIn || 0), 0);
-                                    if (invested === 0) return null;
+                                    const avail = investedTotal - used;
+                                    if (investedTotal === 0) return null;
                                     return <div key={type} style={{ display: "inline-flex", gap: 6, alignItems: "center", background: C.mid, borderRadius: 8, padding: "6px 12px", marginRight: 8, marginBottom: 8, border: "1px solid " + C.border }}>
                                         <span style={{ fontSize: 11, color: C.teal, fontWeight: 700 }}>{type}</span>
-                                        <span style={{ fontSize: 10, color: C.muted }}>Inv: {fc(invested)}</span>
+                                        <span style={{ fontSize: 10, color: C.muted }}>Inv: {fc(investedTotal)}</span>
                                         <span style={{ fontSize: 10, color: C.red }}>Used: {fc(used)}</span>
-                                        <span style={{ fontSize: 10, color: C.green, fontWeight: 700 }}>Avl: {fc(invested - used)}</span>
+                                        <span style={{ fontSize: 10, color: avail > 0 ? C.green : C.red, fontWeight: 700 }}>Avl: {fc(Math.max(0, avail))}</span>
                                     </div>;
                                 })}
                                 <div style={{ overflowX: "auto", marginTop: 12 }}>
@@ -7370,7 +7403,9 @@
                                             {rms.length === 0 ? <tr><td colSpan={11} style={{ ...TDS, textAlign: "center", color: C.muted }}>No raw material payments yet</td></tr> :
                                                 rms.sort((a, b) => (b.date || "").localeCompare(a.date || "")).map(r => {
                                                     const tot = r.totalAmount !== undefined ? r.totalAmount : r.amount;
-                                                    const rem = tot - (r.usedForStockIn || 0);
+                                                    // Remaining = totalAmount - usedForStockIn (both in total/GST-inclusive terms)
+                                                    const usedTotal = Number(r.usedForStockIn || 0);
+                                                    const remTotal = Math.max(0, tot - usedTotal);
                                                     return <tr key={r.id}>
                                                         <td style={TDS}>{r.date}</td>
                                                         <td style={TDS}><Badge label={r.rawMatType} color={C.teal} /></td>
@@ -7378,8 +7413,8 @@
                                                         <td style={TDS}>{fc(r.amount)}</td>
                                                         <td style={TDS}>{r.gstAmount ? `${fc(r.gstAmount)} (${r.gstRate}%)` : "—"}</td>
                                                         <td style={{ ...TDS, fontWeight: 800, color: C.text }}>{fc(tot)}</td>
-                                                        <td style={{ ...TDS, color: C.red, fontWeight: 600 }}>{fc(r.usedForStockIn || 0)}</td>
-                                                        <td style={{ ...TDS, color: rem > 0 ? C.green : C.muted, fontWeight: 700 }}>{fc(rem)}</td>
+                                                        <td style={{ ...TDS, color: C.red, fontWeight: 600 }}>{fc(usedTotal)}</td>
+                                                        <td style={{ ...TDS, color: remTotal > 0 ? C.green : C.muted, fontWeight: 700 }}>{fc(remTotal)}</td>
                                                         <td style={TDS}>
                                                             <Badge label={r.settleMode === "cash" ? "Cash" : r.settleMode === "creditor" ? "Creditor" : "Journal"} color={r.settleMode === "cash" ? C.green : C.amber} />
                                                             {r.paidAmount > 0 && r.settleMode === "creditor" && <span style={{ display: "block", fontSize: 9, color: C.amber, marginTop: 2, fontWeight: 700 }}>Partial: {fc(r.paidAmount)}</span>}
@@ -10684,24 +10719,85 @@
                                     );
                                 })()}
 
-                                {/* Raw Material Pool info-only: show total raw material payments available */}
+                                {/* Raw Material Pool info — shows per-category available vs required */}
                                 {(() => {
                                     const rms = state.rawMaterialPayments || [];
-                                    const totalRmBase = rms.reduce((s, r) => s + Number(r.amount || 0), 0);
+                                    if (rms.length === 0 || form.isReturn === "true") return null;
+
+                                    const siItems = form.siItems || [];
+                                    const totalRmInvested = rms.reduce((s, r) => s + Number(r.totalAmount !== undefined ? r.totalAmount : r.amount), 0);
                                     const totalRmGst = rms.reduce((s, r) => s + Number(r.gstAmount || 0), 0);
                                     const totalRmUsed = rms.reduce((s, r) => s + Number(r.usedForStockIn || 0), 0);
-                                    const totalRmAvail = rms.reduce((s, r) => s + (Number(r.totalAmount || r.amount) - Number(r.usedForStockIn || 0)), 0);
-                                    if (rms.length === 0 || form.isReturn === "true") return null;
+                                    // Available = totalAmount - usedForStockIn (both total terms)
+                                    const totalRmAvail = totalRmInvested - totalRmUsed;
+
+                                    // Compute what the current items require per category (base then scaled)
+                                    const reqCatAmounts = { "Conversion Cost": 0, "Cap": 0, "Label": 0 };
+                                    siItems.forEach(it => {
+                                        const q = Number(it.qty || 0);
+                                        const bt = it.bottleType || "";
+                                        if (!bt || !q) return;
+                                        const rates = RAW_MAT_RATES[bt] || RAW_MAT_RATES["200ml"];
+                                        reqCatAmounts["Conversion Cost"] += q * (rates["Conversion Cost"] || 0);
+                                        reqCatAmounts["Cap"] += q * (rates["Cap"] || 0);
+                                        reqCatAmounts["Label"] += q * (rates["Label"] || 0);
+                                    });
+
+                                    // Per-category: available (total) vs required (total after GST scale)
+                                    const catData = ["Conversion Cost", "Cap", "Label"].map(cat => {
+                                        const entries = rms.filter(r => r.rawMatType === cat);
+                                        const hasEntries = entries.length > 0;
+                                        // Available in total terms
+                                        const avail = entries.reduce((s, r) => {
+                                            const tot = Number(r.totalAmount !== undefined ? r.totalAmount : r.amount);
+                                            return s + Math.max(0, tot - Number(r.usedForStockIn || 0));
+                                        }, 0);
+                                        // Required scaled by entry GST rates
+                                        const wGstMult = entries.length > 0
+                                            ? entries.reduce((s, r) => s + (1 + Number(r.gstRate || 0) / 100), 0) / entries.length
+                                            : 1;
+                                        const req = reqCatAmounts[cat] * wGstMult; // total required
+                                        const sufficient = avail >= req - 0.001;
+                                        return { cat, avail, req, hasEntries, sufficient };
+                                    });
+
+                                    const anyInsufficient = catData.some(x => x.req > 0 && !x.sufficient);
+                                    const anyMissing = catData.some(x => x.req > 0 && !x.hasEntries);
+
                                     return (
-                                        <div style={{ background: "#0a1e1a", border: "1px solid #0d9488", borderRadius: 8, padding: "8px 12px", marginBottom: 9 }}>
-                                            <div style={{ fontSize: 10, color: C.teal, fontWeight: 800, marginBottom: 5 }}>🏭 Raw Materials Summary (for reference)</div>
-                                            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "3px 10px", fontSize: 10 }}>
-                                                <span style={{ color: "#94a3b8" }}>Total RM Base Cost:</span><span style={{ color: C.text, fontWeight: 700 }}>{fc(totalRmBase)}</span>
-                                                <span style={{ color: "#94a3b8" }}>Total RM GST (ITC):</span><span style={{ color: C.green, fontWeight: 700 }}>{fc(totalRmGst)}</span>
-                                                <span style={{ color: "#94a3b8" }}>Used in prev. Stock In:</span><span style={{ color: C.amber, fontWeight: 700 }}>{fc(totalRmUsed)}</span>
-                                                <span style={{ color: "#94a3b8" }}>Available Balance:</span><span style={{ color: totalRmAvail > 0 ? C.teal : C.muted, fontWeight: 700 }}>{fc(Math.max(0, totalRmAvail))}</span>
+                                        <div style={{ background: "#0a1e1a", border: "1px solid " + (anyInsufficient ? C.red : "#0d9488"), borderRadius: 8, padding: "8px 12px", marginBottom: 9 }}>
+                                            <div style={{ fontSize: 10, color: C.teal, fontWeight: 800, marginBottom: 5 }}>🏭 Raw Material Pool (incl. GST)</div>
+                                            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "3px 10px", fontSize: 10, marginBottom: 6 }}>
+                                                <span style={{ color: "#94a3b8" }}>Total Invested (incl. GST):</span><span style={{ color: C.text, fontWeight: 700 }}>{fc(totalRmInvested)}</span>
+                                                <span style={{ color: "#94a3b8" }}>GST (ITC):</span><span style={{ color: C.green, fontWeight: 700 }}>{fc(totalRmGst)}</span>
+                                                <span style={{ color: "#94a3b8" }}>Already Used:</span><span style={{ color: C.amber, fontWeight: 700 }}>{fc(totalRmUsed)}</span>
+                                                <span style={{ color: "#94a3b8" }}>Net Available:</span><span style={{ color: totalRmAvail > 0 ? C.teal : C.red, fontWeight: 700 }}>{fc(Math.max(0, totalRmAvail))}</span>
                                             </div>
-                                            <div style={{ fontSize: 9, color: "#64748b", marginTop: 4 }}>ℹ️ Select 'Raw Material' under Settle Mode below to pay using the available raw material pool balance (base cost excl. GST).</div>
+                                            {/* Per-category required vs available */}
+                                            <div style={{ fontSize: 9, color: C.muted, fontWeight: 700, marginBottom: 3, borderTop: "1px dashed #1e3a30", paddingTop: 5 }}>Category-wise check (Required → Available):</div>
+                                            <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                                                {catData.map(({ cat, avail, req, hasEntries, sufficient }) => {
+                                                    const noEntry = req > 0 && !hasEntries;
+                                                    const bgColor = noEntry ? "#3b1a00" : (!sufficient && req > 0 ? "#3b0f0f" : "#052e16");
+                                                    const txtColor = noEntry ? C.amber : (!sufficient && req > 0 ? C.red : C.green);
+                                                    return <div key={cat} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", background: bgColor, borderRadius: 4, padding: "3px 7px" }}>
+                                                        <span style={{ color: txtColor, fontWeight: 700, fontSize: 9 }}>{cat}</span>
+                                                        <span style={{ fontSize: 9, color: C.muted }}>
+                                                            {req > 0 ? <>Req: <span style={{ color: C.amber, fontWeight: 700 }}>{fc(req)}</span> / Avl: <span style={{ color: sufficient ? C.green : C.red, fontWeight: 700 }}>{fc(avail)}</span></> : <span style={{ color: C.muted }}>— not required</span>}
+                                                        </span>
+                                                        <span style={{ fontSize: 9, fontWeight: 800, color: noEntry ? C.amber : (sufficient || req === 0 ? C.green : C.red) }}>
+                                                            {req === 0 ? "✓" : noEntry ? "⚠ No entry!" : sufficient ? "✓ OK" : "✗ Insufficient"}
+                                                        </span>
+                                                    </div>;
+                                                })}
+                                            </div>
+                                            {anyMissing && <div style={{ fontSize: 9, color: C.amber, marginTop: 5, fontWeight: 700 }}>
+                                                ⚠️ One or more categories have no Raw Material payment recorded. Go to <strong>Raw Materials tab → + Add Payment</strong> and add an entry for those categories first.
+                                            </div>}
+                                            {!anyMissing && anyInsufficient && <div style={{ fontSize: 9, color: C.red, marginTop: 5, fontWeight: 700 }}>
+                                                ✗ Insufficient balance in one or more categories. Add more Raw Material payments first.
+                                            </div>}
+                                            <div style={{ fontSize: 9, color: "#64748b", marginTop: 4 }}>ℹ️ Select 'Raw Material' as Settle Mode below to pay from this pool.</div>
                                         </div>
                                     );
                                 })()}
