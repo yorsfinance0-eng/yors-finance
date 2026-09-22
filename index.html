@@ -3564,7 +3564,7 @@
             let mo = (now.getFullYear() - startDate.getFullYear()) * 12 + (now.getMonth() - startDate.getMonth());
             if (mo < 0) mo = 0;
             let totalDepr = 0;
-            if (asset.method === "Straight Line (SLM)") { const annual = cost * rate, md = annual / 12; if (asset.period === "Monthly") totalDepr = md * Math.max(1, Math.min(mo, 1)); else if (asset.period === "Half-Yearly") totalDepr = md * Math.max(1, Math.min(mo, 6)); else totalDepr = md * Math.max(1, Math.min(mo, 12)); }
+            if (asset.method === "Straight Line (SLM)") { const annual = cost * rate, md = annual / 12; totalDepr = md * Math.max(0, mo); }
             else { totalDepr = cost - cost * Math.pow(1 - rate, Math.max(mo / 12, 0)); }
             return { totalDepr: Math.min(Math.max(totalDepr, 0), cost), wdv: Math.max(0, cost - Math.min(Math.max(totalDepr, 0), cost)) };
         }
@@ -4963,10 +4963,10 @@
             const clients = state.clients || [];
             const fifo = useMemo(() => computeFIFO(si, so), [si, so]);
 
-            const totalPurchases = si.reduce((a, b) => a + Number(b.totalAmount - (b.gstAmount || 0)) * (b.isReturn ? -1 : 1), 0);
-            const totalSales = so.reduce((a, b) => a + Number(b.totalAmount - (b.gstAmount || 0)) * (b.isReturn ? -1 : 1), 0);
-            const getCGST = e => e.cgstAmount !== undefined ? Number(e.cgstAmount) : (e.igstAmount !== undefined ? 0 : Number(e.gstAmount || 0) / 2);
-            const getSGST = e => e.sgstAmount !== undefined ? Number(e.sgstAmount) : (e.igstAmount !== undefined ? 0 : Number(e.gstAmount || 0) / 2);
+            const totalPurchases = si.reduce((a, b) => a + (Number(b.totalAmount || 0) - Number(b.gstAmount || 0)) * (b.isReturn ? -1 : 1), 0);
+            const totalSales = so.reduce((a, b) => a + (Number(b.totalAmount || 0) - Number(b.gstAmount || 0)) * (b.isReturn ? -1 : 1), 0);
+            const getCGST = e => { if (e.cgstAmount !== undefined) return Number(e.cgstAmount); if (e.igstAmount && Number(e.igstAmount) > 0) return 0; return Number(e.gstAmount || 0) / 2; };
+            const getSGST = e => { if (e.sgstAmount !== undefined) return Number(e.sgstAmount); if (e.igstAmount && Number(e.igstAmount) > 0) return 0; return Number(e.gstAmount || 0) / 2; };
             const getIGST = e => e.igstAmount !== undefined ? Number(e.igstAmount) : 0;
 
             const cgstOutput =
@@ -5033,17 +5033,18 @@
             const cgstPayable = cgstOutput - cgstInput - cgstPaid;
             const sgstPayable = sgstOutput - sgstInput - sgstPaid;
             const igstPayable = igstOutput - igstInput - igstPaid;
-            const grossPurchases = si.filter(x => !x.isReturn).reduce((a, b) => a + Number(b.totalAmount - (b.gstAmount || 0)), 0);
-            const purchaseReturnsAmt = si.filter(x => x.isReturn).reduce((a, b) => a + Number(b.totalAmount - (b.gstAmount || 0)), 0);
-            const grossSales = so.filter(x => !x.isReturn).reduce((a, b) => a + Number(b.totalAmount - (b.gstAmount || 0)), 0);
-            const salesReturnsAmt = so.filter(x => x.isReturn).reduce((a, b) => a + Number(b.totalAmount - (b.gstAmount || 0)), 0);
+            const grossPurchases = si.filter(x => !x.isReturn).reduce((a, b) => a + (Number(b.totalAmount || 0) - Number(b.gstAmount || 0)), 0);
+            const purchaseReturnsAmt = si.filter(x => x.isReturn).reduce((a, b) => a + (Number(b.totalAmount || 0) - Number(b.gstAmount || 0)), 0);
+            const grossSales = so.filter(x => !x.isReturn).reduce((a, b) => a + (Number(b.totalAmount || 0) - Number(b.gstAmount || 0)), 0);
+            const salesReturnsAmt = so.filter(x => x.isReturn).reduce((a, b) => a + (Number(b.totalAmount || 0) - Number(b.gstAmount || 0)), 0);
             const fifoCOGS = Object.values(fifo).reduce((a, b) => a + b.cogs, 0);
             const fifoClosing = Object.values(fifo).reduce((a, b) => a + b.closingValue, 0);
             const openingStockAmt = Number(state.openingStock?.amount || 0);
             // rawMaterialCosts: remaining RM base cost (excl. GST) not yet allocated to stock-in.
-            // Using r.amount (base excl. GST) prevents double-counting because GST is already
-            // claimed separately as GST ITC Receivable on the asset side of the Balance Sheet.
-            const rawMaterialCosts = (state.rawMaterialPayments || []).reduce((sum, r) => sum + Math.max(0, Number(r.amount) - (r.usedForStockIn || 0)), 0);
+            // Uses usedForStockInBase (base-only tracker) — NOT usedForStockIn (total incl. GST) —
+            // so the deduction is always in the same unit as r.amount (base excl. GST).
+            // GST on raw materials is separately claimed as GST ITC Receivable on the asset side of the Balance Sheet.
+            const rawMaterialCosts = (state.rawMaterialPayments || []).reduce((sum, r) => sum + Math.max(0, Number(r.amount || 0) - (r.usedForStockInBase || 0)), 0);
             const tradingDr = totalPurchases + openingStockAmt + rawMaterialCosts + te.filter(e => e.side === "dr" && e.sourceType !== "rawMaterial").reduce((a, b) => a + Number(b.amount), 0);
             const tradingCr = totalSales + fifoClosing + te.filter(e => e.side === "cr").reduce((a, b) => a + Number(b.amount), 0);
             const grossProfit = tradingCr - tradingDr;
@@ -6424,7 +6425,7 @@
 
                 const hasGst = form.enableGst === "yes";
                 const gstRate = hasGst ? Number(form.gstRate || 18) : 0;
-                const gstAmount = hasGst ? Math.round(baseAmt * gstRate) / 100 : 0;
+                const gstAmount = hasGst ? Math.round(baseAmt * (gstRate / 100) * 100) / 100 : 0;
                 const total = baseAmt + gstAmount;
 
                 const gstType = hasGst ? (form.gstType || "cgst_sgst") : "";
