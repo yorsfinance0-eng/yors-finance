@@ -3475,9 +3475,11 @@
                             b.remQty -= Number(r.qty);
                         }
                     });
-                    results[key] = { batches, cogs: 0, closingValue: 0, inQty: batches.reduce((a, b) => a + b.origQty, 0), outQty: 0, balQty: 0 };
+                    results[key] = { batches, cogs: 0, closingValue: 0, inQty: batches.reduce((a, b) => a + b.origQty, 0), outQty: 0, balQty: 0, unfulfilledQty: 0 };
                 });
             });
+
+            const norm = g => (g || "").toString().trim().toLowerCase();
 
             // Process Stock Out entries in chronological order
             const outs = (stockOut || []).filter(x => !x.isReturn).sort((a, b) => new Date(a.date) - new Date(b.date));
@@ -3485,13 +3487,15 @@
                 let needed = Number(out.qty);
                 const bt = out.bottleType || "200ml";
                 const cat = out.category || "normal";
-                const godown = out.godown;
+                const godown = norm(out.godown);
 
                 // Priority 1: Primary category key (e.g. 200ml_customized or 200ml_normal or Premium_normal)
                 const primaryKey = bt + "_" + cat;
                 const primaryBatches = results[primaryKey]?.batches || [];
+
+                // Pass 1A: Exact godown match in primary category
                 for (let i = 0; i < primaryBatches.length && needed > 0; i++) {
-                    if (primaryBatches[i].godown !== godown) continue;
+                    if (godown && norm(primaryBatches[i].godown) !== godown) continue;
                     const take = Math.min(primaryBatches[i].remQty, needed);
                     if (take > 0) {
                         if (results[primaryKey]) results[primaryKey].cogs += take * primaryBatches[i].rate;
@@ -3500,12 +3504,26 @@
                     }
                 }
 
+                // Pass 1B: Fallback across godowns in primary category if stock in target godown was insufficient
+                if (needed > 0 && godown) {
+                    for (let i = 0; i < primaryBatches.length && needed > 0; i++) {
+                        const take = Math.min(primaryBatches[i].remQty, needed);
+                        if (take > 0) {
+                            if (results[primaryKey]) results[primaryKey].cogs += take * primaryBatches[i].rate;
+                            primaryBatches[i].remQty -= take;
+                            needed -= take;
+                        }
+                    }
+                }
+
                 // Priority 2: For customized stock out (non-Premium), fallback to normal stock of same bottle type
                 if (needed > 0 && cat === "customized" && bt !== "Premium") {
                     const fallbackKey = bt + "_normal";
                     const fallbackBatches = results[fallbackKey]?.batches || [];
+
+                    // Pass 2A: Exact godown match in fallback category
                     for (let i = 0; i < fallbackBatches.length && needed > 0; i++) {
-                        if (fallbackBatches[i].godown !== godown) continue;
+                        if (godown && norm(fallbackBatches[i].godown) !== godown) continue;
                         const take = Math.min(fallbackBatches[i].remQty, needed);
                         if (take > 0) {
                             if (results[primaryKey]) results[primaryKey].cogs += take * fallbackBatches[i].rate;
@@ -3513,24 +3531,48 @@
                             needed -= take;
                         }
                     }
+
+                    // Pass 2B: Fallback across godowns in fallback category
+                    if (needed > 0) {
+                        for (let i = 0; i < fallbackBatches.length && needed > 0; i++) {
+                            const take = Math.min(fallbackBatches[i].remQty, needed);
+                            if (take > 0) {
+                                if (results[primaryKey]) results[primaryKey].cogs += take * fallbackBatches[i].rate;
+                                fallbackBatches[i].remQty -= take;
+                                needed -= take;
+                            }
+                        }
+                    }
                 }
 
                 if (results[primaryKey]) {
                     results[primaryKey].outQty += Number(out.qty);
+                    if (needed > 0) {
+                        results[primaryKey].unfulfilledQty = (results[primaryKey].unfulfilledQty || 0) + needed;
+                    }
                 }
             });
 
             // Process Sales Returns
-            const salesReturns = (stockOut || []).filter(x => x.isReturn);
+            const salesReturns = (stockOut || []).filter(x => x.isReturn).sort((a, b) => new Date(a.date) - new Date(b.date));
             salesReturns.forEach(sr => {
                 const bt = sr.bottleType || "200ml";
                 const cat = sr.category || "normal";
                 const key = bt + "_" + cat;
                 const batches = results[key]?.batches || [];
-                const godown = sr.godown;
+                const godown = norm(sr.godown);
                 let toRestore = Number(sr.qty);
+
+                // Offset unfulfilled deficit first
+                if (results[key] && results[key].unfulfilledQty > 0) {
+                    const offset = Math.min(toRestore, results[key].unfulfilledQty);
+                    results[key].unfulfilledQty -= offset;
+                    toRestore -= offset;
+                }
+
+                // Restore to batches (matching godown first)
                 for (let i = batches.length - 1; i >= 0 && toRestore > 0; i--) {
-                    if (batches[i].godown !== godown) continue;
+                    if (godown && norm(batches[i].godown) !== godown) continue;
                     const restoreAmt = Math.min(toRestore, batches[i].origQty - batches[i].remQty);
                     if (restoreAmt > 0) {
                         batches[i].remQty += restoreAmt;
@@ -3538,7 +3580,16 @@
                     }
                 }
                 if (toRestore > 0) {
-                    const fallback = [...batches].reverse().find(b => b.godown === godown);
+                    for (let i = batches.length - 1; i >= 0 && toRestore > 0; i--) {
+                        const restoreAmt = Math.min(toRestore, batches[i].origQty - batches[i].remQty);
+                        if (restoreAmt > 0) {
+                            batches[i].remQty += restoreAmt;
+                            toRestore -= restoreAmt;
+                        }
+                    }
+                }
+                if (toRestore > 0) {
+                    const fallback = [...batches].reverse().find(b => !godown || norm(b.godown) === godown) || batches[batches.length - 1];
                     if (fallback) { fallback.remQty += toRestore; fallback.origQty += toRestore; }
                 }
                 if (results[key]) results[key].outQty -= Number(sr.qty);
@@ -3551,7 +3602,7 @@
                     let closingVal = 0;
                     res.batches.forEach(b => { closingVal += b.remQty * b.rate; });
                     res.closingValue = closingVal;
-                    res.balQty = res.batches.reduce((a, b) => a + b.remQty, 0);
+                    res.balQty = res.inQty - res.outQty;
                 }
             });
 
@@ -7518,26 +7569,29 @@
                         /* ── Compute filtered totals across all FIFO groups ── */
                         const filteredGroups = Object.keys(fifo).filter(k => {
                             const [bt, cat] = k.split("_");
-                            if (!fifo[k].inQty) return false;
+                            if (!fifo[k].inQty && !fifo[k].outQty && (!fifo[k].batches || fifo[k].batches.length === 0)) return false;
                             if (invFilter.bt !== "All" && bt !== invFilter.bt) return false;
                             if (invFilter.cat !== "All" && cat !== invFilter.cat) return false;
                             return true;
                         }).map(k => {
                             const [bt, cat] = k.split("_"), f = fifo[k];
                             const fb = getFilteredBatches(f.batches);
-                            const filteredInQty = fb.reduce((a, b) => a + b.origQty, 0);
-                            const filteredOutQty = fb.reduce((a, b) => a + (b.origQty - b.remQty), 0);
+                            const filteredInQty = f.inQty;
+                            const filteredOutQty = f.outQty;
                             const filteredClosing = fb.reduce((a, b) => a + b.remQty * b.rate, 0);
-                            const filteredCogs = fb.reduce((a, b) => a + (b.origQty - b.remQty) * b.rate, 0);
+                            const filteredCogs = f.cogs;
                             const filteredPurchased = fb.reduce((a, b) => a + b.origQty * b.rate, 0);
-                            return { key: k, bt, cat, f, fb, filteredInQty, filteredOutQty, filteredClosing, filteredCogs, filteredPurchased };
+                            const filteredBalQty = f.balQty;
+                            const unfulfilledQty = f.unfulfilledQty || 0;
+                            return { key: k, bt, cat, f, fb, filteredInQty, filteredOutQty, filteredClosing, filteredCogs, filteredPurchased, filteredBalQty, unfulfilledQty };
                         });
 
                         const fTotalPurchased = filteredGroups.reduce((a, g) => a + g.filteredPurchased, 0);
                         const fTotalSold = filteredGroups.reduce((a, g) => a + g.filteredCogs, 0);
                         const fTotalCOGS = filteredGroups.reduce((a, g) => a + g.filteredCogs, 0);
                         const fTotalClosing = filteredGroups.reduce((a, g) => a + g.filteredClosing, 0);
-                        const fTotalUnits = filteredGroups.reduce((a, g) => a + g.filteredInQty - g.filteredOutQty, 0);
+                        const fTotalUnits = filteredGroups.reduce((a, g) => a + g.filteredBalQty, 0);
+                        const fTotalUnfulfilled = filteredGroups.reduce((a, g) => a + g.unfulfilledQty, 0);
                         const hasActiveFilter = invFilter.bt !== "All" || invFilter.cat !== "All" || invFilter.godown !== "All" || invFilter.dateFrom || invFilter.dateTo || invFilter.status !== "All" || invFilter.search;
 
                         return <div>
@@ -7545,10 +7599,16 @@
 
                             {/* ── Summary Cards ── */}
                             <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
-                                {[["Purchased", fc(fTotalPurchased), "#6366f1,#8b5cf6"], ["COGS", fc(fTotalCOGS), "#f59e0b,#d97706"], ["Closing Value", fc(fTotalClosing), "#8b5cf6,#7c3aed"], ["Balance", fTotalUnits + " units", "#0ea5e9,#0284c7"]].map(([l, v, g]) => (
+                                {[["Purchased", fc(fTotalPurchased), "#6366f1,#8b5cf6"], ["COGS", fc(fTotalCOGS), "#f59e0b,#d97706"], ["Closing Value", fc(fTotalClosing), "#8b5cf6,#7c3aed"], ["Balance", (fTotalUnits >= 0 ? fTotalUnits : `⚠️ Deficit ${fTotalUnits}`) + " units", fTotalUnits >= 0 ? "#0ea5e9,#0284c7" : "#ef4444,#dc2626"]].map(([l, v, g]) => (
                                     <div key={l} style={CARD(g)}><div style={{ fontSize: 9 }}>{l}{hasActiveFilter ? " (filtered)" : ""}</div><div style={{ fontSize: 13, fontWeight: 900 }}>{v}</div></div>
                                 ))}
                             </div>
+
+                            {fTotalUnfulfilled > 0 && (
+                                <div style={{ background: "#451a03", border: "1px solid #f59e0b", borderRadius: 10, padding: "10px 14px", marginBottom: 14, color: "#fef3c7", fontSize: 11, fontWeight: 600 }}>
+                                    ⚠️ <strong>Stock Deficit Warning:</strong> Total Stock Out exceeds available Stock In by {fTotalUnfulfilled} unit(s)! Please add Stock In entries to replenish inventory.
+                                </div>
+                            )}
 
                             {/* ── Filter Bar ── */}
                             <div style={{ background: C.mid, borderRadius: 12, padding: 14, marginBottom: 14, border: "1px solid " + C.border }}>
@@ -7585,30 +7645,72 @@
                             </div>
 
                             {/* ── FIFO Groups ── */}
-                            {filteredGroups.map(({ key: k, bt, cat, f, fb, filteredInQty, filteredOutQty, filteredClosing, filteredCogs }) => {
-                                if (fb.length === 0) return null;
-                                return (<div key={k} style={{ background: C.mid, borderRadius: 14, padding: 16, marginBottom: 14, borderLeft: "4px solid #818cf8" }}>
+                            {filteredGroups.map(({ key: k, bt, cat, f, fb, filteredInQty, filteredOutQty, filteredClosing, filteredCogs, filteredBalQty, unfulfilledQty }) => {
+                                return (<div key={k} style={{ background: C.mid, borderRadius: 14, padding: 16, marginBottom: 14, borderLeft: "4px solid " + (filteredBalQty < 0 || unfulfilledQty > 0 ? "#ef4444" : "#818cf8") }}>
                                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, flexWrap: "wrap", gap: 6 }}>
-                                        <div style={{ display: "flex", gap: 8, alignItems: "center" }}><span style={{ fontSize: 13, fontWeight: 900, color: "#818cf8" }}>💧 {bt}</span><Badge label={cat.toUpperCase()} color={cat === "normal" ? "#0ea5e9" : C.amber} />{hasActiveFilter && <span style={{ fontSize: 9, color: C.muted, fontStyle: "italic" }}>({fb.length}/{f.batches.length} batches)</span>}</div>
+                                        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                                            <span style={{ fontSize: 13, fontWeight: 900, color: "#818cf8" }}>💧 {bt}</span>
+                                            <Badge label={cat.toUpperCase()} color={cat === "normal" ? "#0ea5e9" : C.amber} />
+                                            {unfulfilledQty > 0 && <Badge label={`⚠️ ${unfulfilledQty} units unfulfilled (Deficit)`} color="#ef4444" />}
+                                            {hasActiveFilter && <span style={{ fontSize: 9, color: C.muted, fontStyle: "italic" }}>({fb.length}/{f.batches.length} batches)</span>}
+                                        </div>
                                         <div style={{ display: "flex", gap: 8 }}>
-                                            {[["Bal", (filteredInQty - filteredOutQty) + " units", C.text], ["Value", fc(filteredClosing), C.violet], ["COGS", fc(filteredCogs), C.amber]].map(([l, v, c]) => (
+                                            {[["In", filteredInQty + " units", C.text], ["Out", filteredOutQty + " units", C.red], ["Bal", filteredBalQty + " units", filteredBalQty < 0 ? C.red : C.green], ["Value", fc(filteredClosing), C.violet], ["COGS", fc(filteredCogs), C.amber]].map(([l, v, c]) => (
                                                 <div key={l} style={{ background: C.dark, borderRadius: 7, padding: "4px 9px", fontSize: 11 }}><span style={{ color: C.muted }}>{l}: </span><span style={{ fontWeight: 800, color: c }}>{v}</span></div>
                                             ))}
                                         </div>
                                     </div>
-                                    <table style={TBL}><thead><tr>{["Batch", "Date", "Godown", "Orig", "Rate", "Issued", "Rem", "Rem Val", "Status"].map(h => <th key={h} style={THS}>{h}</th>)}</tr></thead>
-                                        <tbody>{fb.map(b => {
-                                            const issued = b.origQty - b.remQty, pct = b.origQty > 0 ? Math.round((issued / b.origQty) * 100) : 0, st = b.remQty === 0 ? "Exhausted" : b.remQty === b.origQty ? "Untouched" : "Partial " + pct + "%", sc = b.remQty === 0 ? C.red : b.remQty === b.origQty ? C.green : C.amber;
-                                            return (<tr key={b.batchNo}><td style={TDS}><span style={{ fontFamily: "monospace", color: "#818cf8", fontSize: 10 }}>{b.batchNo}</span></td><td style={TDS}>{b.date}</td><td style={TDS}><Badge label={b.godown} color="#7c3aed" /></td><td style={TDS}>{b.origQty}</td><td style={TDS}>{fc(b.rate)}</td><td style={{ ...TDS, color: C.red }}>{issued}</td><td style={{ ...TDS, fontWeight: 700, color: b.remQty > 0 ? C.green : C.muted }}>{b.remQty}</td><td style={{ ...TDS, color: C.violet }}>{fc(b.remQty * b.rate)}</td><td style={TDS}><Badge label={st} color={sc} /></td></tr>);
-                                        })}</tbody>
-                                    </table>
+                                    {cat === "customized" && f.inQty === 0 && f.outQty > 0 && (
+                                        <div style={{ fontSize: 11, color: C.amber, marginBottom: 8, fontStyle: "italic" }}>
+                                            ℹ️ Stock Out for Customized category was fulfilled using Normal category batches.
+                                        </div>
+                                    )}
+                                    {fb.length > 0 ? (
+                                        <table style={TBL}><thead><tr>{["Batch", "Date", "Godown", "Orig", "Rate", "Issued", "Rem", "Rem Val", "Status"].map(h => <th key={h} style={THS}>{h}</th>)}</tr></thead>
+                                            <tbody>{fb.map(b => {
+                                                const issued = b.origQty - b.remQty, pct = b.origQty > 0 ? Math.round((issued / b.origQty) * 100) : 0, st = b.remQty === 0 ? "Exhausted" : b.remQty === b.origQty ? "Untouched" : "Partial " + pct + "%", sc = b.remQty === 0 ? C.red : b.remQty === b.origQty ? C.green : C.amber;
+                                                return (<tr key={b.batchNo}><td style={TDS}><span style={{ fontFamily: "monospace", color: "#818cf8", fontSize: 10 }}>{b.batchNo}</span></td><td style={TDS}>{b.date}</td><td style={TDS}><Badge label={b.godown} color="#7c3aed" /></td><td style={TDS}>{b.origQty}</td><td style={TDS}>{fc(b.rate)}</td><td style={{ ...TDS, color: C.red }}>{issued}</td><td style={{ ...TDS, fontWeight: 700, color: b.remQty > 0 ? C.green : C.muted }}>{b.remQty}</td><td style={{ ...TDS, color: C.violet }}>{fc(b.remQty * b.rate)}</td><td style={TDS}><Badge label={st} color={sc} /></td></tr>);
+                                            })}</tbody>
+                                        </table>
+                                    ) : (
+                                        <div style={{ fontSize: 11, color: C.muted, padding: "8px 0" }}>No direct Stock In batches recorded for this category.</div>
+                                    )}
                                 </div>);
                             })}
-                            {filteredGroups.every(g => g.fb.length === 0) && <div style={{ background: C.mid, borderRadius: 12, padding: 32, textAlign: "center", color: C.muted }}>
+                            {filteredGroups.every(g => g.fb.length === 0 && !g.f.outQty) && <div style={{ background: C.mid, borderRadius: 12, padding: 32, textAlign: "center", color: C.muted }}>
                                 <div style={{ fontSize: 28, marginBottom: 8 }}>🔍</div>
                                 <div style={{ fontSize: 13, fontWeight: 600 }}>No batches match your filters</div>
                                 <div style={{ fontSize: 11, marginTop: 4 }}>Try adjusting your filter criteria or <span style={{ color: "#818cf8", cursor: "pointer" }} onClick={() => setInvFilter({ bt: "All", cat: "All", godown: "All", dateFrom: "", dateTo: "", status: "All", search: "" })}>clear all filters</span></div>
                             </div>}
+
+                            {/* ── FIFO Debug Inspector ── */}
+                            {(() => {
+                                const ml200StockIn = si.filter(x => x.bottleType === "200ml");
+                                const ml200StockOut = so.filter(x => x.bottleType === "200ml");
+                                const fifoDebug200n = fifo["200ml_normal"] || { batches: [], inQty: 0, outQty: 0, balQty: 0, cogs: 0 };
+                                const fifoDebug200c = fifo["200ml_customized"] || { batches: [], inQty: 0, outQty: 0, balQty: 0, cogs: 0 };
+                                const codeStyle = { fontFamily: "monospace", fontSize: 10, color: "#fcd34d", whiteSpace: "pre-wrap", wordBreak: "break-all", background: "#000", padding: 8, borderRadius: 6, marginTop: 4, maxHeight: 220, overflowY: "auto", display: "block" };
+                                return (
+                                    <details style={{ background: "#0a0f1e", border: "1px solid #f59e0b", borderRadius: 10, padding: 14, marginTop: 16 }}>
+                                        <summary style={{ fontWeight: 800, fontSize: 12, color: "#f59e0b", cursor: "pointer", userSelect: "none" }}>🛠️ FIFO Debug Inspector (200ml) — Click to expand/collapse</summary>
+                                        <div style={{ marginTop: 10, color: "#94a3b8", fontSize: 10, fontWeight: 700 }}>📥 200ml STOCK IN entries ({ml200StockIn.length})</div>
+                                        <pre style={codeStyle}>{ml200StockIn.length === 0 ? "NO STOCK IN ENTRIES FOR 200ml" : ml200StockIn.map((e, i) => `[${i}] batchNo="${e.batchNo}" godown="${e.godown}" category="${e.category || "normal"}" qty=${e.qty} rate=${e.ratePerUnit} isReturn=${e.isReturn} date=${e.date}`).join("\n")}</pre>
+
+                                        <div style={{ marginTop: 8, color: "#94a3b8", fontSize: 10, fontWeight: 700 }}>📤 200ml STOCK OUT entries ({ml200StockOut.length})</div>
+                                        <pre style={codeStyle}>{ml200StockOut.length === 0 ? "NO STOCK OUT ENTRIES FOR 200ml" : ml200StockOut.map((e, i) => `[${i}] godown="${e.godown}" category="${e.category || "normal"}" qty=${e.qty} isReturn=${e.isReturn} date=${e.date} billNo="${e.billNo || ""}"`).join("\n")}</pre>
+
+                                        <div style={{ marginTop: 8, color: "#94a3b8", fontSize: 10, fontWeight: 700 }}>🧮 FIFO Result: 200ml_normal (inQty={fifoDebug200n.inQty} outQty={fifoDebug200n.outQty} balQty={fifoDebug200n.balQty} unfulfilledQty={fifoDebug200n.unfulfilledQty || 0})</div>
+                                        <pre style={codeStyle}>{fifoDebug200n.batches.length === 0 ? "NO BATCHES COMPUTED" : fifoDebug200n.batches.map((b, i) => `[${i}] batch="${b.batchNo}" godown="${b.godown}" origQty=${b.origQty} remQty=${b.remQty} issued=${b.origQty - b.remQty} rate=${b.rate}`).join("\n")}</pre>
+
+                                        <div style={{ marginTop: 8, color: "#94a3b8", fontSize: 10, fontWeight: 700 }}>🧮 FIFO Result: 200ml_customized (inQty={fifoDebug200c.inQty} outQty={fifoDebug200c.outQty} balQty={fifoDebug200c.balQty} unfulfilledQty={fifoDebug200c.unfulfilledQty || 0})</div>
+                                        <pre style={codeStyle}>{fifoDebug200c.batches.length === 0 ? "NO BATCHES COMPUTED" : fifoDebug200c.batches.map((b, i) => `[${i}] batch="${b.batchNo}" godown="${b.godown}" origQty=${b.origQty} remQty=${b.remQty} issued=${b.origQty - b.remQty} rate=${b.rate}`).join("\n")}</pre>
+
+                                        <div style={{ marginTop: 8, padding: "6px 10px", background: "#1e0f00", borderRadius: 6, fontSize: 10, color: "#fcd34d" }}>
+                                            ⚠️ If balQty is negative or unfulfilledQty &gt; 0, your total Stock Out entries exceed total Stock In entries! Add Stock In entries to replenish inventory.
+                                        </div>
+                                    </details>
+                                );
+                            })()}
                         </div>;
                     })()}
 
