@@ -3457,26 +3457,31 @@
             const results = {};
             const keys = [];
             BOTTLE_TYPES.forEach(bt => {
-                ["normal", "customized"].forEach(cat => {
-                    const key = bt + "_" + cat;
-                    keys.push(key);
-                    const batches = (stockIn || [])
-                        .filter(x => (x.bottleType === bt || (bt === "Premium" && x.bottleType === "Premium")) && (x.category || "normal") === cat && !x.isReturn)
-                        .sort((a, b) => new Date(a.date) - new Date(b.date))
-                        .map(x => ({ ...x, origQty: Number(x.qty), remQty: Number(x.qty), rate: Number(x.ratePerUnit), batchNo: x.batchNo, godown: x.godown }));
-                    const returns = (stockIn || []).filter(x => (x.bottleType === bt || (bt === "Premium" && x.bottleType === "Premium")) && (x.category || "normal") === cat && x.isReturn);
-                    returns.forEach(r => {
-                        let b = batches.find(x => x.batchNo === r.batchNo && x.godown === r.godown);
-                        if (!b) b = batches.find(x => x.godown === r.godown && x.remQty >= Number(r.qty));
-                        if (!b) b = batches.find(x => x.godown === r.godown && x.remQty > 0);
-                        if (!b) b = batches.find(x => x.godown === r.godown);
-                        if (b) {
-                            b.origQty -= Number(r.qty);
-                            b.remQty -= Number(r.qty);
-                        }
-                    });
-                    results[key] = { batches, cogs: 0, closingValue: 0, inQty: batches.reduce((a, b) => a + b.origQty, 0), outQty: 0, balQty: 0, unfulfilledQty: 0 };
+                const normalKey = bt + "_normal";
+                const customKey = bt + "_customized";
+                keys.push(normalKey);
+                keys.push(customKey);
+
+                // All Stock In for this bottle type (regardless of category attribute) goes into normal stock in batches
+                const batches = (stockIn || [])
+                    .filter(x => (x.bottleType === bt || (bt === "Premium" && x.bottleType === "Premium")) && !x.isReturn)
+                    .sort((a, b) => new Date(a.date) - new Date(b.date))
+                    .map(x => ({ ...x, origQty: Number(x.qty), remQty: Number(x.qty), rate: Number(x.ratePerUnit), batchNo: x.batchNo, godown: x.godown }));
+
+                const returns = (stockIn || []).filter(x => (x.bottleType === bt || (bt === "Premium" && x.bottleType === "Premium")) && x.isReturn);
+                returns.forEach(r => {
+                    let b = batches.find(x => x.batchNo === r.batchNo && x.godown === r.godown);
+                    if (!b) b = batches.find(x => x.godown === r.godown && x.remQty >= Number(r.qty));
+                    if (!b) b = batches.find(x => x.godown === r.godown && x.remQty > 0);
+                    if (!b) b = batches.find(x => x.godown === r.godown);
+                    if (b) {
+                        b.origQty -= Number(r.qty);
+                        b.remQty -= Number(r.qty);
+                    }
                 });
+
+                results[normalKey] = { batches, cogs: 0, closingValue: 0, inQty: batches.reduce((a, b) => a + b.origQty, 0), outQty: 0, balQty: 0, unfulfilledQty: 0 };
+                results[customKey] = { batches: [], cogs: 0, closingValue: 0, inQty: 0, outQty: 0, balQty: 0, unfulfilledQty: 0 };
             });
 
             const norm = g => (g || "").toString().trim().toLowerCase();
@@ -3486,69 +3491,39 @@
             outs.forEach(out => {
                 let needed = Number(out.qty);
                 const bt = out.bottleType || "200ml";
-                const cat = out.category || "normal";
                 const godown = norm(out.godown);
 
-                // Priority 1: Primary category key (e.g. 200ml_customized or 200ml_normal or Premium_normal)
-                const primaryKey = bt + "_" + cat;
-                const primaryBatches = results[primaryKey]?.batches || [];
+                // All stock out entries (whether normal or customized) deduct directly from normal stock in batches
+                const targetKey = bt + "_normal";
+                const targetBatches = results[targetKey]?.batches || [];
 
-                // Pass 1A: Exact godown match in primary category
-                for (let i = 0; i < primaryBatches.length && needed > 0; i++) {
-                    if (godown && norm(primaryBatches[i].godown) !== godown) continue;
-                    const take = Math.min(primaryBatches[i].remQty, needed);
+                // Pass 1: Exact godown match in normal batches
+                for (let i = 0; i < targetBatches.length && needed > 0; i++) {
+                    if (godown && norm(targetBatches[i].godown) !== godown) continue;
+                    const take = Math.min(targetBatches[i].remQty, needed);
                     if (take > 0) {
-                        if (results[primaryKey]) results[primaryKey].cogs += take * primaryBatches[i].rate;
-                        primaryBatches[i].remQty -= take;
+                        if (results[targetKey]) results[targetKey].cogs += take * targetBatches[i].rate;
+                        targetBatches[i].remQty -= take;
                         needed -= take;
                     }
                 }
 
-                // Pass 1B: Fallback across godowns in primary category if stock in target godown was insufficient
-                if (needed > 0 && godown) {
-                    for (let i = 0; i < primaryBatches.length && needed > 0; i++) {
-                        const take = Math.min(primaryBatches[i].remQty, needed);
+                // Pass 2: Fallback across godowns in normal batches if stock in target godown was insufficient
+                if (needed > 0) {
+                    for (let i = 0; i < targetBatches.length && needed > 0; i++) {
+                        const take = Math.min(targetBatches[i].remQty, needed);
                         if (take > 0) {
-                            if (results[primaryKey]) results[primaryKey].cogs += take * primaryBatches[i].rate;
-                            primaryBatches[i].remQty -= take;
+                            if (results[targetKey]) results[targetKey].cogs += take * targetBatches[i].rate;
+                            targetBatches[i].remQty -= take;
                             needed -= take;
                         }
                     }
                 }
 
-                // Priority 2: For customized stock out (non-Premium), fallback to normal stock of same bottle type
-                if (needed > 0 && cat === "customized" && bt !== "Premium") {
-                    const fallbackKey = bt + "_normal";
-                    const fallbackBatches = results[fallbackKey]?.batches || [];
-
-                    // Pass 2A: Exact godown match in fallback category
-                    for (let i = 0; i < fallbackBatches.length && needed > 0; i++) {
-                        if (godown && norm(fallbackBatches[i].godown) !== godown) continue;
-                        const take = Math.min(fallbackBatches[i].remQty, needed);
-                        if (take > 0) {
-                            if (results[primaryKey]) results[primaryKey].cogs += take * fallbackBatches[i].rate;
-                            fallbackBatches[i].remQty -= take;
-                            needed -= take;
-                        }
-                    }
-
-                    // Pass 2B: Fallback across godowns in fallback category
+                if (results[targetKey]) {
+                    results[targetKey].outQty += Number(out.qty);
                     if (needed > 0) {
-                        for (let i = 0; i < fallbackBatches.length && needed > 0; i++) {
-                            const take = Math.min(fallbackBatches[i].remQty, needed);
-                            if (take > 0) {
-                                if (results[primaryKey]) results[primaryKey].cogs += take * fallbackBatches[i].rate;
-                                fallbackBatches[i].remQty -= take;
-                                needed -= take;
-                            }
-                        }
-                    }
-                }
-
-                if (results[primaryKey]) {
-                    results[primaryKey].outQty += Number(out.qty);
-                    if (needed > 0) {
-                        results[primaryKey].unfulfilledQty = (results[primaryKey].unfulfilledQty || 0) + needed;
+                        results[targetKey].unfulfilledQty = (results[targetKey].unfulfilledQty || 0) + needed;
                     }
                 }
             });
@@ -3557,8 +3532,7 @@
             const salesReturns = (stockOut || []).filter(x => x.isReturn).sort((a, b) => new Date(a.date) - new Date(b.date));
             salesReturns.forEach(sr => {
                 const bt = sr.bottleType || "200ml";
-                const cat = sr.category || "normal";
-                const key = bt + "_" + cat;
+                const key = bt + "_normal";
                 const batches = results[key]?.batches || [];
                 const godown = norm(sr.godown);
                 let toRestore = Number(sr.qty);
@@ -5831,26 +5805,10 @@
                 // Stock availability check per item
                 const currentFIFOVal = computeFIFO(si, so);
                 for (const it of soItems) {
-                    let avail = 0;
-                    if (it.bottleType === "Premium") {
-                        const batchesP = (currentFIFOVal["Premium_normal"]?.batches || []).concat(currentFIFOVal["Premium_customized"]?.batches || []);
-                        avail = batchesP.filter(b => b.godown === godown).reduce((a, b) => a + b.remQty, 0);
-                        if (avail <= 0) { alert(`⛔ No stock in ${godown} for Premium bottles.`); return; }
-                        if (avail < Number(it.qty)) { alert(`⛔ Insufficient stock in ${godown} for Premium bottles.\nAvailable: ${avail}, Requested: ${it.qty}.\nNote: Premium bottle stock out can only be done from Premium bottle stock.`); return; }
-                    } else if (it.category === "customized") {
-                        const invCustom = currentFIFOVal[it.bottleType + "_customized"] || { batches: [] };
-                        const invNormal = currentFIFOVal[it.bottleType + "_normal"] || { batches: [] };
-                        const availCustom = invCustom.batches.filter(b => b.godown === godown).reduce((a, b) => a + b.remQty, 0);
-                        const availNormal = invNormal.batches.filter(b => b.godown === godown).reduce((a, b) => a + b.remQty, 0);
-                        avail = availCustom + availNormal;
-                        if (avail <= 0) { alert(`⛔ No stock in ${godown} for ${it.bottleType} (${it.category}).`); return; }
-                        if (avail < Number(it.qty)) { alert(`⛔ Insufficient stock in ${godown} for ${it.bottleType} (${it.category}).\nAvailable (Customized + Normal): ${avail}, Requested: ${it.qty}`); return; }
-                    } else {
-                        const inv = currentFIFOVal[it.bottleType + "_" + it.category] || { batches: [] };
-                        avail = inv.batches.filter(b => b.godown === godown).reduce((a, b) => a + b.remQty, 0);
-                        if (avail <= 0) { alert(`⛔ No stock in ${godown} for ${it.bottleType} (${it.category}).`); return; }
-                        if (avail < Number(it.qty)) { alert(`⛔ Insufficient stock in ${godown} for ${it.bottleType} (${it.category}).\nAvailable: ${avail}, Requested: ${it.qty}`); return; }
-                    }
+                    const invNormal = currentFIFOVal[it.bottleType + "_normal"] || { batches: [] };
+                    const avail = invNormal.batches.filter(b => b.godown === godown).reduce((a, b) => a + b.remQty, 0);
+                    if (avail <= 0) { alert(`⛔ No stock in ${godown} for ${it.bottleType}.`); return; }
+                    if (avail < Number(it.qty)) { alert(`⛔ Insufficient stock in ${godown} for ${it.bottleType}.\nAvailable: ${avail}, Requested: ${it.qty}`); return; }
                 }
 
                 // ── Cash Discount Calculations ──
@@ -5951,11 +5909,11 @@
                 // Check stock availability for all items before proceeding
                 const currentFifo = computeFIFO(state.stockIn || [], state.stockOut || []);
                 for (const item of items) {
-                    const invKey = item.bottleType + "_" + item.category;
+                    const invKey = item.bottleType + "_normal";
                     const batchInfo = currentFifo[invKey] || { batches: [] };
                     const available = batchInfo.batches.filter(b => b.godown === godown).reduce((a, b) => a + b.remQty, 0);
                     if (available < item.qty) {
-                        alert(`Insufficient stock in ${godown} godown for item ${item.bottleType} (${item.category}). Available: ${available}, Required: ${item.qty}`);
+                        alert(`Insufficient stock in ${godown} godown for item ${item.bottleType}. Available: ${available}, Required: ${item.qty}`);
                         return false;
                     }
                 }
@@ -7702,8 +7660,9 @@
                                         <div style={{ marginTop: 8, color: "#94a3b8", fontSize: 10, fontWeight: 700 }}>🧮 FIFO Result: 200ml_normal (inQty={fifoDebug200n.inQty} outQty={fifoDebug200n.outQty} balQty={fifoDebug200n.balQty} unfulfilledQty={fifoDebug200n.unfulfilledQty || 0})</div>
                                         <pre style={codeStyle}>{fifoDebug200n.batches.length === 0 ? "NO BATCHES COMPUTED" : fifoDebug200n.batches.map((b, i) => `[${i}] batch="${b.batchNo}" godown="${b.godown}" origQty=${b.origQty} remQty=${b.remQty} issued=${b.origQty - b.remQty} rate=${b.rate}`).join("\n")}</pre>
 
-                                        <div style={{ marginTop: 8, color: "#94a3b8", fontSize: 10, fontWeight: 700 }}>🧮 FIFO Result: 200ml_customized (inQty={fifoDebug200c.inQty} outQty={fifoDebug200c.outQty} balQty={fifoDebug200c.balQty} unfulfilledQty={fifoDebug200c.unfulfilledQty || 0})</div>
-                                        <pre style={codeStyle}>{fifoDebug200c.batches.length === 0 ? "NO BATCHES COMPUTED" : fifoDebug200c.batches.map((b, i) => `[${i}] batch="${b.batchNo}" godown="${b.godown}" origQty=${b.origQty} remQty=${b.remQty} issued=${b.origQty - b.remQty} rate=${b.rate}`).join("\n")}</pre>
+                                        <div style={{ marginTop: 8, padding: "6px 10px", background: "#064e3b", borderRadius: 6, fontSize: 10, color: "#a7f3d0" }}>
+                                            ℹ️ <strong>Unified Inventory:</strong> Customized Stock Out entries deduct directly from Normal Stock In batches for the bottle type.
+                                        </div>
 
                                         <div style={{ marginTop: 8, padding: "6px 10px", background: "#1e0f00", borderRadius: 6, fontSize: 10, color: "#fcd34d" }}>
                                             ⚠️ If balQty is negative or unfulfilledQty &gt; 0, your total Stock Out entries exceed total Stock In entries! Add Stock In entries to replenish inventory.
