@@ -3466,7 +3466,7 @@
                 const batches = (stockIn || [])
                     .filter(x => (x.bottleType === bt || (bt === "Premium" && x.bottleType === "Premium")) && !x.isReturn)
                     .sort((a, b) => new Date(a.date) - new Date(b.date))
-                    .map(x => ({ ...x, origQty: Number(x.qty), remQty: Number(x.qty), rate: Number(x.ratePerUnit), batchNo: x.batchNo, godown: x.godown }));
+                    .map(x => ({ ...x, origQty: Number(x.qty), remQty: Number(x.qty), rate: Number(x.ratePerUnit), batchNo: x.batchNo, godown: x.godown, cogs: 0, salesValue: 0, profit: 0 }));
 
                 const returns = (stockIn || []).filter(x => (x.bottleType === bt || (bt === "Premium" && x.bottleType === "Premium")) && x.isReturn);
                 returns.forEach(r => {
@@ -3480,8 +3480,8 @@
                     }
                 });
 
-                results[normalKey] = { batches, cogs: 0, closingValue: 0, inQty: batches.reduce((a, b) => a + b.origQty, 0), outQty: 0, balQty: 0, unfulfilledQty: 0 };
-                results[customKey] = { batches: [], cogs: 0, closingValue: 0, inQty: 0, outQty: 0, balQty: 0, unfulfilledQty: 0 };
+                results[normalKey] = { batches, cogs: 0, salesValue: 0, profit: 0, closingValue: 0, inQty: batches.reduce((a, b) => a + b.origQty, 0), outQty: 0, balQty: 0, unfulfilledQty: 0 };
+                results[customKey] = { batches: [], cogs: 0, salesValue: 0, profit: 0, closingValue: 0, inQty: 0, outQty: 0, balQty: 0, unfulfilledQty: 0 };
             });
 
             const norm = g => (g || "").toString().trim().toLowerCase();
@@ -3492,6 +3492,18 @@
                 let needed = Number(out.qty);
                 const bt = out.bottleType || "200ml";
                 const godown = norm(out.godown);
+                const outQty = Number(out.qty) || 1;
+
+                // Derive exact sale rate per unit for Stock Out entry
+                let outSaleRate = Number(out.ratePerUnit || 0);
+                if (!outSaleRate) {
+                    const netTotal = Number(out.totalAmount || 0) - Number(out.gstAmount || 0);
+                    if (netTotal > 0) {
+                        outSaleRate = netTotal / outQty;
+                    } else if (out.totalAmount) {
+                        outSaleRate = Number(out.totalAmount || 0) / outQty;
+                    }
+                }
 
                 // All stock out entries (whether normal or customized) deduct directly from normal stock in batches
                 const targetKey = bt + "_normal";
@@ -3502,7 +3514,11 @@
                     if (godown && norm(targetBatches[i].godown) !== godown) continue;
                     const take = Math.min(targetBatches[i].remQty, needed);
                     if (take > 0) {
-                        if (results[targetKey]) results[targetKey].cogs += take * targetBatches[i].rate;
+                        if (results[targetKey]) {
+                            results[targetKey].cogs += take * targetBatches[i].rate;
+                            results[targetKey].salesValue += take * outSaleRate;
+                        }
+                        targetBatches[i].salesValue = (targetBatches[i].salesValue || 0) + (take * outSaleRate);
                         targetBatches[i].remQty -= take;
                         needed -= take;
                     }
@@ -3513,7 +3529,11 @@
                     for (let i = 0; i < targetBatches.length && needed > 0; i++) {
                         const take = Math.min(targetBatches[i].remQty, needed);
                         if (take > 0) {
-                            if (results[targetKey]) results[targetKey].cogs += take * targetBatches[i].rate;
+                            if (results[targetKey]) {
+                                results[targetKey].cogs += take * targetBatches[i].rate;
+                                results[targetKey].salesValue += take * outSaleRate;
+                            }
+                            targetBatches[i].salesValue = (targetBatches[i].salesValue || 0) + (take * outSaleRate);
                             targetBatches[i].remQty -= take;
                             needed -= take;
                         }
@@ -3536,6 +3556,17 @@
                 const batches = results[key]?.batches || [];
                 const godown = norm(sr.godown);
                 let toRestore = Number(sr.qty);
+                const srQty = Number(sr.qty) || 1;
+
+                let srSaleRate = Number(sr.ratePerUnit || 0);
+                if (!srSaleRate) {
+                    const netTotal = Number(sr.totalAmount || 0) - Number(sr.gstAmount || 0);
+                    if (netTotal > 0) {
+                        srSaleRate = netTotal / srQty;
+                    } else if (sr.totalAmount) {
+                        srSaleRate = Number(sr.totalAmount || 0) / srQty;
+                    }
+                }
 
                 // Offset unfulfilled deficit first
                 if (results[key] && results[key].unfulfilledQty > 0) {
@@ -3550,6 +3581,8 @@
                     const restoreAmt = Math.min(toRestore, batches[i].origQty - batches[i].remQty);
                     if (restoreAmt > 0) {
                         batches[i].remQty += restoreAmt;
+                        batches[i].salesValue = Math.max(0, (batches[i].salesValue || 0) - (restoreAmt * srSaleRate));
+                        if (results[key]) results[key].salesValue = Math.max(0, (results[key].salesValue || 0) - (restoreAmt * srSaleRate));
                         toRestore -= restoreAmt;
                     }
                 }
@@ -3558,24 +3591,38 @@
                         const restoreAmt = Math.min(toRestore, batches[i].origQty - batches[i].remQty);
                         if (restoreAmt > 0) {
                             batches[i].remQty += restoreAmt;
+                            batches[i].salesValue = Math.max(0, (batches[i].salesValue || 0) - (restoreAmt * srSaleRate));
+                            if (results[key]) results[key].salesValue = Math.max(0, (results[key].salesValue || 0) - (restoreAmt * srSaleRate));
                             toRestore -= restoreAmt;
                         }
                     }
                 }
                 if (toRestore > 0) {
                     const fallback = [...batches].reverse().find(b => !godown || norm(b.godown) === godown) || batches[batches.length - 1];
-                    if (fallback) { fallback.remQty += toRestore; fallback.origQty += toRestore; }
+                    if (fallback) {
+                        fallback.remQty += toRestore;
+                        fallback.origQty += toRestore;
+                        fallback.salesValue = Math.max(0, (fallback.salesValue || 0) - (toRestore * srSaleRate));
+                        if (results[key]) results[key].salesValue = Math.max(0, (results[key].salesValue || 0) - (toRestore * srSaleRate));
+                    }
                 }
                 if (results[key]) results[key].outQty -= Number(sr.qty);
             });
 
-            // Finalize closing values and balance quantities
+            // Finalize closing values, COGS, salesValue, profit, and balance quantities
             keys.forEach(k => {
                 const res = results[k];
                 if (res) {
                     let closingVal = 0;
-                    res.batches.forEach(b => { closingVal += b.remQty * b.rate; });
+                    res.batches.forEach(b => {
+                        b.cogs = (b.origQty - b.remQty) * b.rate;
+                        b.profit = (b.salesValue || 0) - b.cogs;
+                        closingVal += b.remQty * b.rate;
+                    });
                     res.closingValue = closingVal;
+                    res.cogs = res.batches.reduce((a, b) => a + (b.cogs || 0), 0);
+                    res.salesValue = res.batches.reduce((a, b) => a + (b.salesValue || 0), 0);
+                    res.profit = res.salesValue - res.cogs;
                     res.balQty = res.inQty - res.outQty;
                 }
             });
@@ -7537,16 +7584,19 @@
                             const filteredInQty = f.inQty;
                             const filteredOutQty = f.outQty;
                             const filteredClosing = fb.reduce((a, b) => a + b.remQty * b.rate, 0);
-                            const filteredCogs = f.cogs;
+                            const filteredCogs = fb.reduce((a, b) => a + (b.cogs || 0), 0);
+                            const filteredSalesVal = fb.reduce((a, b) => a + (b.salesValue || 0), 0);
+                            const filteredProfit = filteredSalesVal - filteredCogs;
                             const filteredPurchased = fb.reduce((a, b) => a + b.origQty * b.rate, 0);
                             const filteredBalQty = f.balQty;
                             const unfulfilledQty = f.unfulfilledQty || 0;
-                            return { key: k, bt, cat, f, fb, filteredInQty, filteredOutQty, filteredClosing, filteredCogs, filteredPurchased, filteredBalQty, unfulfilledQty };
+                            return { key: k, bt, cat, f, fb, filteredInQty, filteredOutQty, filteredClosing, filteredCogs, filteredSalesVal, filteredProfit, filteredPurchased, filteredBalQty, unfulfilledQty };
                         });
 
                         const fTotalPurchased = filteredGroups.reduce((a, g) => a + g.filteredPurchased, 0);
-                        const fTotalSold = filteredGroups.reduce((a, g) => a + g.filteredCogs, 0);
+                        const fTotalSalesValue = filteredGroups.reduce((a, g) => a + g.filteredSalesVal, 0);
                         const fTotalCOGS = filteredGroups.reduce((a, g) => a + g.filteredCogs, 0);
+                        const fTotalProfit = fTotalSalesValue - fTotalCOGS;
                         const fTotalClosing = filteredGroups.reduce((a, g) => a + g.filteredClosing, 0);
                         const fTotalUnits = filteredGroups.reduce((a, g) => a + g.filteredBalQty, 0);
                         const fTotalUnfulfilled = filteredGroups.reduce((a, g) => a + g.unfulfilledQty, 0);
@@ -7557,7 +7607,7 @@
 
                             {/* ── Summary Cards ── */}
                             <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
-                                {[["Purchased", fc(fTotalPurchased), "#6366f1,#8b5cf6"], ["COGS", fc(fTotalCOGS), "#f59e0b,#d97706"], ["Closing Value", fc(fTotalClosing), "#8b5cf6,#7c3aed"], ["Balance", (fTotalUnits >= 0 ? fTotalUnits : `⚠️ Deficit ${fTotalUnits}`) + " units", fTotalUnits >= 0 ? "#0ea5e9,#0284c7" : "#ef4444,#dc2626"]].map(([l, v, g]) => (
+                                {[["Purchased", fc(fTotalPurchased), "#6366f1,#8b5cf6"], ["Sales Value", fc(fTotalSalesValue), "#10b981,#059669"], ["COGS", fc(fTotalCOGS), "#f59e0b,#d97706"], ["Profit Generated", fc(fTotalProfit), fTotalProfit >= 0 ? "#10b981,#059669" : "#ef4444,#dc2626"], ["Closing Value", fc(fTotalClosing), "#8b5cf6,#7c3aed"], ["Balance", (fTotalUnits >= 0 ? fTotalUnits : `⚠️ Deficit ${fTotalUnits}`) + " units", fTotalUnits >= 0 ? "#0ea5e9,#0284c7" : "#ef4444,#dc2626"]].map(([l, v, g]) => (
                                     <div key={l} style={CARD(g)}><div style={{ fontSize: 9 }}>{l}{hasActiveFilter ? " (filtered)" : ""}</div><div style={{ fontSize: 13, fontWeight: 900 }}>{v}</div></div>
                                 ))}
                             </div>
@@ -7603,7 +7653,7 @@
                             </div>
 
                             {/* ── FIFO Groups ── */}
-                            {filteredGroups.map(({ key: k, bt, cat, f, fb, filteredInQty, filteredOutQty, filteredClosing, filteredCogs, filteredBalQty, unfulfilledQty }) => {
+                            {filteredGroups.map(({ key: k, bt, cat, f, fb, filteredInQty, filteredOutQty, filteredClosing, filteredCogs, filteredSalesVal, filteredProfit, filteredBalQty, unfulfilledQty }) => {
                                 return (<div key={k} style={{ background: C.mid, borderRadius: 14, padding: 16, marginBottom: 14, borderLeft: "4px solid " + (filteredBalQty < 0 || unfulfilledQty > 0 ? "#ef4444" : "#818cf8") }}>
                                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, flexWrap: "wrap", gap: 6 }}>
                                         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
@@ -7613,7 +7663,7 @@
                                             {hasActiveFilter && <span style={{ fontSize: 9, color: C.muted, fontStyle: "italic" }}>({fb.length}/{f.batches.length} batches)</span>}
                                         </div>
                                         <div style={{ display: "flex", gap: 8 }}>
-                                            {[["In", filteredInQty + " units", C.text], ["Out", filteredOutQty + " units", C.red], ["Bal", filteredBalQty + " units", filteredBalQty < 0 ? C.red : C.green], ["Value", fc(filteredClosing), C.violet], ["COGS", fc(filteredCogs), C.amber]].map(([l, v, c]) => (
+                                            {[["In", filteredInQty + " units", C.text], ["Out", filteredOutQty + " units", C.red], ["Bal", filteredBalQty + " units", filteredBalQty < 0 ? C.red : C.green], ["Sales Val", fc(filteredSalesVal), C.green], ["COGS", fc(filteredCogs), C.amber], ["Profit", fc(filteredProfit), filteredProfit >= 0 ? C.green : C.red], ["Value", fc(filteredClosing), C.violet]].map(([l, v, c]) => (
                                                 <div key={l} style={{ background: C.dark, borderRadius: 7, padding: "4px 9px", fontSize: 11 }}><span style={{ color: C.muted }}>{l}: </span><span style={{ fontWeight: 800, color: c }}>{v}</span></div>
                                             ))}
                                         </div>
@@ -7624,10 +7674,11 @@
                                         </div>
                                     )}
                                     {fb.length > 0 ? (
-                                        <table style={TBL}><thead><tr>{["Batch", "Date", "Godown", "Orig", "Rate", "Issued", "Rem", "Rem Val", "Status"].map(h => <th key={h} style={THS}>{h}</th>)}</tr></thead>
+                                        <table style={TBL}><thead><tr>{["Batch", "Date", "Godown", "Orig", "Rate", "Issued", "Sales Val", "COGS", "Profit", "Rem", "Rem Val", "Status"].map(h => <th key={h} style={THS}>{h}</th>)}</tr></thead>
                                             <tbody>{fb.map(b => {
                                                 const issued = b.origQty - b.remQty, pct = b.origQty > 0 ? Math.round((issued / b.origQty) * 100) : 0, st = b.remQty === 0 ? "Exhausted" : b.remQty === b.origQty ? "Untouched" : "Partial " + pct + "%", sc = b.remQty === 0 ? C.red : b.remQty === b.origQty ? C.green : C.amber;
-                                                return (<tr key={b.batchNo}><td style={TDS}><span style={{ fontFamily: "monospace", color: "#818cf8", fontSize: 10 }}>{b.batchNo}</span></td><td style={TDS}>{b.date}</td><td style={TDS}><Badge label={b.godown} color="#7c3aed" /></td><td style={TDS}>{b.origQty}</td><td style={TDS}>{fc(b.rate)}</td><td style={{ ...TDS, color: C.red }}>{issued}</td><td style={{ ...TDS, fontWeight: 700, color: b.remQty > 0 ? C.green : C.muted }}>{b.remQty}</td><td style={{ ...TDS, color: C.violet }}>{fc(b.remQty * b.rate)}</td><td style={TDS}><Badge label={st} color={sc} /></td></tr>);
+                                                const bProfit = b.profit || 0;
+                                                return (<tr key={b.batchNo}><td style={TDS}><span style={{ fontFamily: "monospace", color: "#818cf8", fontSize: 10 }}>{b.batchNo}</span></td><td style={TDS}>{b.date}</td><td style={TDS}><Badge label={b.godown} color="#7c3aed" /></td><td style={TDS}>{b.origQty}</td><td style={TDS}>{fc(b.rate)}</td><td style={{ ...TDS, color: C.red }}>{issued}</td><td style={{ ...TDS, color: C.green, fontWeight: 700 }}>{fc(b.salesValue || 0)}</td><td style={{ ...TDS, color: C.amber, fontWeight: 600 }}>{fc(b.cogs || 0)}</td><td style={{ ...TDS, color: bProfit >= 0 ? C.green : C.red, fontWeight: 800 }}>{fc(bProfit)}</td><td style={{ ...TDS, fontWeight: 700, color: b.remQty > 0 ? C.green : C.muted }}>{b.remQty}</td><td style={{ ...TDS, color: C.violet }}>{fc(b.remQty * b.rate)}</td><td style={TDS}><Badge label={st} color={sc} /></td></tr>);
                                             })}</tbody>
                                         </table>
                                     ) : (
