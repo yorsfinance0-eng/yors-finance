@@ -5838,18 +5838,21 @@
                     }
 
                     const id = gid();
-                    const cl = form.returnClientId ? (state.clients || []).find(c => c.id === form.returnClientId) : null;
-                    const clientId = form.returnClientId || null, clientName = cl ? cl.name : "";
-                    const linkedDeb = clientId ? ((state.debtors || []).find(d => d.clientId === clientId)
-                        || (clientName ? (state.debtors || []).find(d => d.name.trim().toLowerCase() === clientName.trim().toLowerCase()) : null)) : null;
+                    const selId = form.returnClientId || "";
+                    const debDirect = selId ? (state.debtors || []).find(d => d.id === selId) : null;
+                    const clDirect = selId ? (state.clients || []).find(c => c.id === selId) : null;
+                    const linkedDeb = debDirect || (clDirect ? ((state.debtors || []).find(d => d.clientId === clDirect.id || (clDirect.name && d.name && d.name.trim().toLowerCase() === clDirect.name.trim().toLowerCase()))) : (selId ? (state.debtors || []).find(d => d.name && d.name.trim().toLowerCase() === selId.trim().toLowerCase()) : null));
+
+                    const clientId = clDirect ? clDirect.id : (linkedDeb && linkedDeb.clientId ? linkedDeb.clientId : null);
+                    const clientName = clDirect ? clDirect.name : (linkedDeb ? linkedDeb.name : "");
                     const settleMode = form.returnSettleMode;
                     const linkedPartyId = settleMode === "debtor" && linkedDeb ? linkedDeb.id : null;
-                    const linkedPartyName = settleMode === "debtor" && linkedDeb ? linkedDeb.name : clientName;
+                    const linkedPartyName = settleMode === "debtor" && linkedDeb ? linkedDeb.name : (clientName || "");
                     upd(p => {
                         let np = { ...p, stockOut: [...p.stockOut, { id, date, godown: returnGodown, bottleType, category, qty: qtyVal, ratePerUnit: rateVal, totalAmount: total, gstAmount, gstRate, hsnCode, clientGstin, clientStateCode, settleMode, linkedPartyId, linkedPartyName, clientId, clientName, billNo: returnBillNo, isReturn: true, gstType, cgstAmount, sgstAmount, igstAmount }] };
-                        if (settleMode === "debtor" && linkedDeb && !linkedDeb.clientId) { np.debtors = np.debtors.map(d => d.id === linkedDeb.id ? { ...d, clientId } : d); }
-                        if (settleMode === "cash") { np.cashEntries = [...np.cashEntries, { id: gid(), dir: "out", payType: "Sales Return Refund", description: `Sales Return Refund: ${bottleType} (${category}) — ${clientName}${returnBillNo ? " | Bill: " + returnBillNo : ""}`, amount: total, date, sourceId: id, linkedId: null }]; }
-                        np = withLog(np, "CREATE", "stockOut", id, `Added Sales Return of ${qty} ${bottleType} to godown: ${returnGodown}`);
+                        if (settleMode === "debtor" && linkedDeb && !linkedDeb.clientId && clientId) { np.debtors = np.debtors.map(d => d.id === linkedDeb.id ? { ...d, clientId } : d); }
+                        if (settleMode === "cash") { np.cashEntries = [...np.cashEntries, { id: gid(), dir: "out", payType: "Sales Return Refund", description: `Sales Return Refund: ${bottleType} (${category}) — ${linkedPartyName || clientName}${returnBillNo ? " | Bill: " + returnBillNo : ""}`, amount: total, date, sourceId: id, linkedId: null }]; }
+                        np = withLog(np, "CREATE", "stockOut", id, `Added Sales Return of ${qty} ${bottleType} to godown: ${returnGodown} for debtor: ${linkedPartyName || clientName}`);
                         return np;
                     });
                     closeM();
@@ -11009,7 +11012,7 @@
                                             <div>
                                                 <select style={INP} value={form.returnCreditorId || ""} onChange={e => setForm(f => ({ ...f, returnCreditorId: e.target.value }))}>
                                                     <option value="">Select Creditor *</option>
-                                                    {(state.creditors || []).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                                                    {(state.creditors || []).map(c => <option key={c.id} value={c.id}>{c.name} — Bal: {fc(creditorBal(c))}</option>)}
                                                 </select>
                                             </div>
                                         )}
@@ -11065,7 +11068,24 @@
                                 <select style={INP} value={form.category || ""} onChange={e => setForm(f => ({ ...f, category: e.target.value }))}><option value="">Category *</option><option>normal</option><option>customized</option></select>
                                 {/* ── Bill No. for Sales Return ── */}
                                 <div style={{ position: "relative", marginBottom: 9 }}>
-                                    <input style={{ ...INP, marginBottom: 0, paddingRight: 72 }} placeholder="Bill No. (Optional)" value={form.billNo || ""} onChange={e => setForm(f => ({ ...f, billNo: e.target.value }))} />
+                                    <input style={{ ...INP, marginBottom: 0, paddingRight: 72 }} placeholder="Bill No. (Optional)" value={form.billNo || ""} onChange={e => {
+                                        const bNo = e.target.value;
+                                        const originalSale = (state.stockOut || []).find(x => x.billNo === bNo && !x.isReturn);
+                                        if (originalSale) {
+                                            setForm(f => ({
+                                                ...f,
+                                                billNo: bNo,
+                                                godown: originalSale.godown || f.godown,
+                                                bottleType: originalSale.bottleType || f.bottleType,
+                                                category: originalSale.category || f.category,
+                                                ratePerUnit: originalSale.ratePerUnit ? String(originalSale.ratePerUnit) : f.ratePerUnit,
+                                                returnClientId: originalSale.linkedPartyId || originalSale.clientId || f.returnClientId,
+                                                returnSettleMode: "debtor"
+                                            }));
+                                        } else {
+                                            setForm(f => ({ ...f, billNo: bNo }));
+                                        }
+                                    }} />
                                     <span style={{ position: "absolute", right: 6, top: "50%", transform: "translateY(-50%)", display: "flex", gap: 4 }}>
                                         {form._autoBillNo && (
                                             <button title="Reset to auto-generated" onClick={() => setForm(f => ({ ...f, billNo: f._autoBillNo }))} style={{ background: "#1e3a5f", border: "1px solid #2563eb", color: "#60a5fa", borderRadius: 5, padding: "2px 7px", fontSize: 10, cursor: "pointer", fontWeight: 700, lineHeight: 1.4 }}>🔄 Auto</button>
@@ -11239,26 +11259,43 @@
                                     {form.returnSettleMode === "debtor" && (
                                         <div>
                                             <select style={INP} value={form.returnClientId || ""} onChange={e => setForm(f => ({ ...f, returnClientId: e.target.value }))}>
-                                                <option value="">Select Client *</option>
-                                                {(state.clients || []).map(c => <option key={c.id} value={c.id}>{c.name} ({c.type})</option>)}
+                                                <option value="">Select Debtor / Client *</option>
+                                                {debs.length > 0 && (
+                                                    <optgroup label="📋 Trade Debtors">
+                                                        {debs.map(d => <option key={"deb_" + d.id} value={d.id}>{d.name} — Bal: {fc(debtorBal(d))}</option>)}
+                                                    </optgroup>
+                                                )}
+                                                {(state.clients || []).length > 0 && (
+                                                    <optgroup label="👤 Clients">
+                                                        {(state.clients || []).map(c => <option key={"cl_" + c.id} value={c.id}>{c.name} ({c.type || "Client"})</option>)}
+                                                    </optgroup>
+                                                )}
                                             </select>
                                         </div>
                                     )}
 
                                     {(() => {
-                                        const cl = form.returnClientId ? (state.clients || []).find(c => c.id === form.returnClientId) : null;
-                                        const clName = cl ? cl.name : "";
-                                        const deb = clName ? (debs.find(d => d.clientId === form.returnClientId) || debs.find(d => d.name.trim().toLowerCase() === clName.trim().toLowerCase())) : null;
+                                        const selId = form.returnClientId || "";
+                                        const debDirect = selId ? debs.find(d => d.id === selId) : null;
+                                        const clDirect = selId ? (state.clients || []).find(c => c.id === selId) : null;
+                                        const deb = debDirect || (clDirect ? (debs.find(d => d.clientId === clDirect.id || (clDirect.name && d.name && d.name.trim().toLowerCase() === clDirect.name.trim().toLowerCase()))) : (selId ? debs.find(d => d.name && d.name.trim().toLowerCase() === selId.trim().toLowerCase()) : null));
+                                        const debtorName = deb ? deb.name : (clDirect ? clDirect.name : "");
                                         const bal = deb ? debtorBal(deb) : 0;
                                         const returnAmt = Number(form.qty || 0) * Number(form.ratePerUnit || 0);
                                         return <div>
-                                            {form.returnSettleMode === "debtor" && deb && (
-                                                <div style={{ fontSize: 10, color: C.teal, marginTop: 6, background: "#042f2e", padding: "6px 10px", borderRadius: 6 }}>✓ Debtor found: <strong>{deb.name}</strong> | Current Balance: {fc(bal)} | Return Amt: {fc(returnAmt)}</div>
+                                            {form.returnSettleMode === "debtor" && debtorName && (
+                                                <div style={{ fontSize: 10, color: C.teal, marginTop: 6, background: "#042f2e", padding: "6px 10px", borderRadius: 6 }}>
+                                                    ✓ Debtor found: <strong>{debtorName}</strong> {deb ? `| Current Balance: ${fc(bal)}` : ""} | Return Amt: {fc(returnAmt)}
+                                                </div>
                                             )}
-                                            {form.returnSettleMode === "debtor" && form.returnClientId && !deb && (
-                                                <div style={{ fontSize: 10, color: C.amber, marginTop: 4, marginBottom: 6 }}>⚠️ No debtor found matching "{clName}"</div>
+                                            {form.returnSettleMode === "debtor" && selId && !debtorName && (
+                                                <div style={{ fontSize: 10, color: C.amber, marginTop: 4, marginBottom: 6 }}>⚠️ No debtor found matching selection</div>
                                             )}
-                                            {form.returnSettleMode === "debtor" && deb && <div style={{ fontSize: 10, color: C.violet, marginTop: 4 }}>Will reduce <strong>{deb.name}</strong>'s outstanding by {fc(returnAmt)}</div>}
+                                            {form.returnSettleMode === "debtor" && debtorName && (
+                                                <div style={{ fontSize: 10, color: C.violet, marginTop: 4 }}>
+                                                    Will reduce <strong>{debtorName}</strong>'s outstanding balance by {fc(returnAmt)}
+                                                </div>
+                                            )}
                                             {form.returnSettleMode === "cash" && <div style={{ fontSize: 10, color: C.red, marginTop: 4 }}>💵 Cash Out of {fc(returnAmt)} will be recorded in Cash Book as refund</div>}
                                             {form.returnSettleMode === "journal" && <div style={{ fontSize: 10, color: C.muted, marginTop: 4 }}>Entry recorded in Trading A/C only — no debtor/cash effect</div>}
                                         </div>;
