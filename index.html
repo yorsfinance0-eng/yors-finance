@@ -3466,7 +3466,7 @@
                 const batches = (stockIn || [])
                     .filter(x => (x.bottleType === bt || (bt === "Premium" && x.bottleType === "Premium")) && !x.isReturn)
                     .sort((a, b) => new Date(a.date) - new Date(b.date))
-                    .map(x => ({ ...x, origQty: Number(x.qty), remQty: Number(x.qty), rate: Number(x.ratePerUnit), batchNo: x.batchNo, godown: x.godown, cogs: 0, salesValue: 0, profit: 0 }));
+                    .map(x => ({ ...x, origQty: Number(x.qty), remQty: Number(x.qty), rate: Number(x.ratePerUnit), batchNo: x.batchNo, godown: x.godown, cogs: 0, salesValue: 0, profit: 0, depletions: [] }));
 
                 const returns = (stockIn || []).filter(x => (x.bottleType === bt || (bt === "Premium" && x.bottleType === "Premium")) && x.isReturn);
                 returns.forEach(r => {
@@ -3494,20 +3494,31 @@
                 const godown = norm(out.godown);
                 const outQty = Number(out.qty) || 1;
 
-                // Derive exact sale rate per unit for Stock Out entry
-                let outSaleRate = Number(out.ratePerUnit || 0);
-                if (!outSaleRate) {
-                    const netTotal = Number(out.totalAmount || 0) - Number(out.gstAmount || 0);
-                    if (netTotal > 0) {
-                        outSaleRate = netTotal / outQty;
-                    } else if (out.totalAmount) {
-                        outSaleRate = Number(out.totalAmount || 0) / outQty;
+                // Derive effective sale rate per unit for this Stock Out entry.
+                // Stored totalAmount is the final total sales value including GST. If available (>0), use totalAmount / qty.
+                const outSaleRateBase  = Number(out.ratePerUnit || 0);
+                const outGstRatePct   = Number(out.gstRate || 0);
+                const outStoredTotal  = Number(out.totalAmount || 0);
+                const outEffFromTotal = (outStoredTotal > 0 && outQty > 0) ? outStoredTotal / outQty : 0;
+                let outSaleRate = 0;
+                if (outStoredTotal > 0 && outQty > 0) {
+                    outSaleRate = outEffFromTotal;
+                } else if (outSaleRateBase > 0) {
+                    outSaleRate = outSaleRateBase * (outGstRatePct > 0 ? (1 + outGstRatePct / 100) : 1);
+                } else {
+                    const outGstAmtStored = Number(out.gstAmount || 0);
+                    const outCgst = Number(out.cgstAmount || 0);
+                    const outSgst = Number(out.sgstAmount || 0);
+                    const outIgst = Number(out.igstAmount || 0);
+                    const computedGst = outCgst + outSgst + outIgst || outGstAmtStored;
+                    if (computedGst > 0 && outStoredTotal > computedGst && outQty > 0) {
+                        outSaleRate = outStoredTotal / outQty;
                     }
                 }
-
-                // All stock out entries (whether normal or customized) deduct directly from normal stock in batches
                 const targetKey = bt + "_normal";
                 const targetBatches = results[targetKey]?.batches || [];
+
+                const depletionRecord = { billNo: out.billNo || "—", date: out.date, category: out.category || "normal", totalQty: outQty, ratePerUnit: outSaleRateBase, gstRate: outGstRatePct, storedTotal: outStoredTotal, usedRate: outSaleRate };
 
                 // Pass 1: Exact godown match in normal batches
                 for (let i = 0; i < targetBatches.length && needed > 0; i++) {
@@ -3519,6 +3530,8 @@
                             results[targetKey].salesValue += take * outSaleRate;
                         }
                         targetBatches[i].salesValue = (targetBatches[i].salesValue || 0) + (take * outSaleRate);
+                        if (!targetBatches[i].depletions) targetBatches[i].depletions = [];
+                        targetBatches[i].depletions.push({ ...depletionRecord, take, contrib: take * outSaleRate });
                         targetBatches[i].remQty -= take;
                         needed -= take;
                     }
@@ -3534,11 +3547,14 @@
                                 results[targetKey].salesValue += take * outSaleRate;
                             }
                             targetBatches[i].salesValue = (targetBatches[i].salesValue || 0) + (take * outSaleRate);
+                            if (!targetBatches[i].depletions) targetBatches[i].depletions = [];
+                            targetBatches[i].depletions.push({ ...depletionRecord, take, contrib: take * outSaleRate, pass2: true });
                             targetBatches[i].remQty -= take;
                             needed -= take;
                         }
                     }
                 }
+
 
                 if (results[targetKey]) {
                     results[targetKey].outQty += Number(out.qty);
@@ -3558,14 +3574,15 @@
                 let toRestore = Number(sr.qty);
                 const srQty = Number(sr.qty) || 1;
 
-                let srSaleRate = Number(sr.ratePerUnit || 0);
-                if (!srSaleRate) {
-                    const netTotal = Number(sr.totalAmount || 0) - Number(sr.gstAmount || 0);
-                    if (netTotal > 0) {
-                        srSaleRate = netTotal / srQty;
-                    } else if (sr.totalAmount) {
-                        srSaleRate = Number(sr.totalAmount || 0) / srQty;
-                    }
+                const srSaleRateBase  = Number(sr.ratePerUnit || 0);
+                const srGstRatePct   = Number(sr.gstRate || 0);
+                const srStoredTotal  = Number(sr.totalAmount || 0);
+                const srEffFromTotal = (srStoredTotal > 0 && srQty > 0) ? srStoredTotal / srQty : 0;
+                let srSaleRate = 0;
+                if (srStoredTotal > 0 && srQty > 0) {
+                    srSaleRate = srEffFromTotal;
+                } else if (srSaleRateBase > 0) {
+                    srSaleRate = srSaleRateBase * (srGstRatePct > 0 ? (1 + srGstRatePct / 100) : 1);
                 }
 
                 // Offset unfulfilled deficit first
@@ -5939,6 +5956,57 @@
                     return np;
                 }); closeM();
             };
+            const applyEditStockOut = () => {
+                const { id, date, godown, bottleType, category, qty, ratePerUnit, totalAmount, gstRate, enableGst, description, billNo } = form;
+                const qtyVal = Number(qty || 0);
+                let rateVal = Number(ratePerUnit || 0);
+                let totalVal = Number(totalAmount || 0);
+                if (!id || qtyVal <= 0) { alert("Please specify a valid Quantity > 0"); return; }
+                
+                const hasGst = enableGst === "yes";
+                const gstPct = hasGst ? Number(gstRate || 18) : 0;
+                
+                if (totalVal <= 0 && rateVal > 0) {
+                    const taxable = qtyVal * rateVal;
+                    const gstAmt = taxable * (gstPct / 100);
+                    totalVal = taxable + gstAmt;
+                } else if (totalVal > 0 && rateVal <= 0) {
+                    rateVal = hasGst ? (totalVal / qtyVal) / (1 + gstPct / 100) : (totalVal / qtyVal);
+                }
+                
+                const derivedGstAmt = hasGst ? totalVal - (totalVal / (1 + gstPct / 100)) : 0;
+                const derivedCgst = hasGst ? derivedGstAmt / 2 : 0;
+                const derivedSgst = hasGst ? derivedGstAmt / 2 : 0;
+
+                upd(p => {
+                    const nextSo = (p.stockOut || []).map(e => {
+                        if (e.id === id) {
+                            return {
+                                ...e,
+                                date: date || e.date,
+                                godown: godown || e.godown,
+                                bottleType: bottleType || e.bottleType,
+                                category: category || e.category || "normal",
+                                qty: qtyVal,
+                                ratePerUnit: rateVal,
+                                totalAmount: totalVal,
+                                gstAmount: derivedGstAmt,
+                                cgstAmount: derivedCgst,
+                                sgstAmount: derivedSgst,
+                                gstRate: gstPct,
+                                enableGst: enableGst || "no",
+                                description: description !== undefined ? description : e.description,
+                                billNo: billNo !== undefined ? billNo : e.billNo
+                            };
+                        }
+                        return e;
+                    });
+                    let np = { ...p, stockOut: nextSo };
+                    np = withLog(np, "UPDATE", "stockOut", id, `Updated Stock Out ${id}: Qty ${qtyVal}, Rate ₹${rateVal}, Total ₹${totalVal}`);
+                    return np;
+                });
+                closeM();
+            };
             const applyGstInvoice = (inv) => {
                 const { invoiceNo, date, clientId, clientName, clientGstin, clientStateCode, clientAddress, clientPhone, godown, settleMode, items, grandTotal, taxableTotal, cgstTotal, sgstTotal, igstTotal } = inv;
 
@@ -7678,7 +7746,8 @@
                                             <tbody>{fb.map(b => {
                                                 const issued = b.origQty - b.remQty, pct = b.origQty > 0 ? Math.round((issued / b.origQty) * 100) : 0, st = b.remQty === 0 ? "Exhausted" : b.remQty === b.origQty ? "Untouched" : "Partial " + pct + "%", sc = b.remQty === 0 ? C.red : b.remQty === b.origQty ? C.green : C.amber;
                                                 const bProfit = b.profit || 0;
-                                                return (<tr key={b.batchNo}><td style={TDS}><span style={{ fontFamily: "monospace", color: "#818cf8", fontSize: 10 }}>{b.batchNo}</span></td><td style={TDS}>{b.date}</td><td style={TDS}><Badge label={b.godown} color="#7c3aed" /></td><td style={TDS}>{b.origQty}</td><td style={TDS}>{fc(b.rate)}</td><td style={{ ...TDS, color: C.red }}>{issued}</td><td style={{ ...TDS, color: C.green, fontWeight: 700 }}>{fc(b.salesValue || 0)}</td><td style={{ ...TDS, color: C.amber, fontWeight: 600 }}>{fc(b.cogs || 0)}</td><td style={{ ...TDS, color: bProfit >= 0 ? C.green : C.red, fontWeight: 800 }}>{fc(bProfit)}</td><td style={{ ...TDS, fontWeight: 700, color: b.remQty > 0 ? C.green : C.muted }}>{b.remQty}</td><td style={{ ...TDS, color: C.violet }}>{fc(b.remQty * b.rate)}</td><td style={TDS}><Badge label={st} color={sc} /></td></tr>);
+                                                const depletions = b.depletions || [];
+                                                return (<tr key={b.batchNo}><td style={TDS}><span style={{ fontFamily: "monospace", color: "#818cf8", fontSize: 10 }}>{b.batchNo}</span></td><td style={TDS}>{b.date}</td><td style={TDS}><Badge label={b.godown} color="#7c3aed" /></td><td style={TDS}>{b.origQty}</td><td style={TDS}>{fc(b.rate)}</td><td style={{ ...TDS, color: C.red }}>{issued}</td><td style={{ ...TDS, color: C.green, fontWeight: 700, whiteSpace: "nowrap" }}>{fc(b.salesValue || 0)}{issued > 0 && <button title="Edit Sales Value for Stock Out from this Batch" onClick={() => { const dep = depletions[0]; const matchingSo = dep ? (state.stockOut || []).find(x => !x.isReturn && (x.billNo === dep.billNo || x.date === dep.date)) : (state.stockOut || []).find(x => !x.isReturn && x.bottleType === bt); if (matchingSo) openM("editStockOut", matchingSo); else { const firstSo = (state.stockOut || []).find(x => !x.isReturn && x.bottleType === bt); if (firstSo) openM("editStockOut", firstSo); else alert("No Stock Out record found for this batch."); } }} style={{ marginLeft: 5, background: "#1e3a5f", border: "1px solid #3b82f6", color: "#60a5fa", borderRadius: 4, padding: "1px 5px", fontSize: 9, cursor: "pointer", fontWeight: 700 }}>✏️ Edit</button>}</td><td style={{ ...TDS, color: C.amber, fontWeight: 600 }}>{fc(b.cogs || 0)}</td><td style={{ ...TDS, color: bProfit >= 0 ? C.green : C.red, fontWeight: 800 }}>{fc(bProfit)}</td><td style={{ ...TDS, fontWeight: 700, color: b.remQty > 0 ? C.green : C.muted }}>{b.remQty}</td><td style={{ ...TDS, color: C.violet }}>{fc(b.remQty * b.rate)}</td><td style={TDS}><Badge label={st} color={sc} /></td></tr>);
                                             })}</tbody>
                                         </table>
                                     ) : (
@@ -7705,11 +7774,23 @@
                                         <div style={{ marginTop: 10, color: "#94a3b8", fontSize: 10, fontWeight: 700 }}>📥 200ml STOCK IN entries ({ml200StockIn.length})</div>
                                         <pre style={codeStyle}>{ml200StockIn.length === 0 ? "NO STOCK IN ENTRIES FOR 200ml" : ml200StockIn.map((e, i) => `[${i}] batchNo="${e.batchNo}" godown="${e.godown}" category="${e.category || "normal"}" qty=${e.qty} rate=${e.ratePerUnit} isReturn=${e.isReturn} date=${e.date}`).join("\n")}</pre>
 
-                                        <div style={{ marginTop: 8, color: "#94a3b8", fontSize: 10, fontWeight: 700 }}>📤 200ml STOCK OUT entries ({ml200StockOut.length})</div>
-                                        <pre style={codeStyle}>{ml200StockOut.length === 0 ? "NO STOCK OUT ENTRIES FOR 200ml" : ml200StockOut.map((e, i) => `[${i}] godown="${e.godown}" category="${e.category || "normal"}" qty=${e.qty} isReturn=${e.isReturn} date=${e.date} billNo="${e.billNo || ""}"`).join("\n")}</pre>
+                                        <div style={{ marginTop: 8, color: "#94a3b8", fontSize: 10, fontWeight: 700 }}>📤 200ml STOCK OUT entries ({ml200StockOut.length}) — rate validation per entry</div>
+                                        <pre style={codeStyle}>{ml200StockOut.length === 0 ? "NO STOCK OUT ENTRIES FOR 200ml" : ml200StockOut.map((e, i) => {
+                                            const qty = Number(e.qty) || 1;
+                                            const rpu = Number(e.ratePerUnit || 0);
+                                            const gst = Number(e.gstRate || 0);
+                                            const stored = Number(e.totalAmount || 0);
+                                            const effFromTotal = stored > 0 ? stored / qty : 0;
+                                            const reconstructed = rpu * (1 + gst / 100);
+                                            const usedRate = stored > 0 ? effFromTotal : (rpu > 0 ? reconstructed : effFromTotal);
+                                            return `[${i}] billNo="${e.billNo||""}" godown="${e.godown}" qty=${qty} isReturn=${e.isReturn} date=${e.date}\n     ratePerUnit=₹${rpu} gstRate=${gst}% storedTotal=₹${stored.toFixed(2)}\n     effFromTotal=₹${effFromTotal.toFixed(2)} reconstructed=₹${reconstructed.toFixed(2)}\n     → USED outSaleRate=₹${usedRate.toFixed(2)} → salesContrib=₹${(qty*usedRate).toFixed(2)}`;
+                                        }).join("\n")}</pre>
 
                                         <div style={{ marginTop: 8, color: "#94a3b8", fontSize: 10, fontWeight: 700 }}>🧮 FIFO Result: 200ml_normal (inQty={fifoDebug200n.inQty} outQty={fifoDebug200n.outQty} balQty={fifoDebug200n.balQty} unfulfilledQty={fifoDebug200n.unfulfilledQty || 0})</div>
-                                        <pre style={codeStyle}>{fifoDebug200n.batches.length === 0 ? "NO BATCHES COMPUTED" : fifoDebug200n.batches.map((b, i) => `[${i}] batch="${b.batchNo}" godown="${b.godown}" origQty=${b.origQty} remQty=${b.remQty} issued=${b.origQty - b.remQty} rate=${b.rate}`).join("\n")}</pre>
+                                        <pre style={codeStyle}>{fifoDebug200n.batches.length === 0 ? "NO BATCHES COMPUTED" : fifoDebug200n.batches.map((b, i) => {
+                                            const deps = (b.depletions || []).map(d => `       → bill="${d.billNo}" date=${d.date} cat=${d.category} qty=${d.take} usedRate=₹${Number(d.usedRate).toFixed(2)} contrib=₹${Number(d.contrib).toFixed(2)}${d.ratePerUnit > 0 ? " rpu=₹"+d.ratePerUnit : " ⚠️NO-RPU"}${d.storedTotal > 0 ? " stored=₹"+Number(d.storedTotal).toFixed(2) : ""}${d.pass2 ? " [PASS2-crossGodown]" : ""}`).join("\n");
+                                            return `[${i}] batch="${b.batchNo}" godown="${b.godown}" origQty=${b.origQty} remQty=${b.remQty} issued=${b.origQty - b.remQty} purchaseRate=₹${b.rate}\n     salesValue=₹${(b.salesValue||0).toFixed(2)} cogs=₹${(b.cogs||0).toFixed(2)} profit=₹${(b.profit||0).toFixed(2)}${deps ? "\n  DEPLETIONS:\n" + deps : ""}`;
+                                        }).join("\n")}</pre>
 
                                         <div style={{ marginTop: 8, padding: "6px 10px", background: "#064e3b", borderRadius: 6, fontSize: 10, color: "#a7f3d0" }}>
                                             ℹ️ <strong>Unified Inventory:</strong> Customized Stock Out entries deduct directly from Normal Stock In batches for the bottle type.
@@ -7867,7 +7948,7 @@
                                                 <td style={TDS}>{e.linkedPartyName || "—"}</td>
                                                 <td style={TDS}>{cName ? <span style={{ color: C.teal, cursor: "pointer", fontWeight: 600 }} onClick={() => { setSelectedClient(e.clientId); setTab("Clients"); }}>{cName}</span> : "—"}</td>
                                                 <td style={{ ...TDS, fontSize: 11, color: C.muted }}>{e.description || "—"}</td>
-                                                <td style={TDS}><button style={BTND} onClick={() => cascadeDelete("stockOut", e.id)}>Del</button></td>
+                                                <td style={{ ...TDS, whiteSpace: "nowrap" }}>{isAdmin && <button style={{ ...BTNP("#0ea5e9"), padding: "2px 7px", fontSize: 10, marginRight: 4 }} onClick={() => openM("editStockOut", e)}>Edit</button>}{isAdmin && <button style={BTND} onClick={() => cascadeDelete("stockOut", e.id)}>Del</button>}</td>
                                             </tr>;
                                         })
                                     }
@@ -11223,6 +11304,74 @@
                             )}
                             <button style={{ ...BTNP("linear-gradient(90deg,#ef4444,#dc2626)"), width: "100%" }} onClick={applyStockOut}>Save</button>
                         </div>;
+                        })()}
+
+                        {modal === "editStockOut" && (() => {
+                            return <div>
+                                <div style={{ fontWeight: 800, fontSize: 15, color: C.blue, marginBottom: 12 }}>✏️ Edit Stock Out Entry</div>
+                                
+                                <label style={{ fontSize: 11, color: C.muted, fontWeight: 700 }}>Date</label>
+                                <DateInput value={form.date || today()} onChange={v => setForm(f => ({ ...f, date: v }))} />
+                                
+                                <label style={{ fontSize: 11, color: C.muted, fontWeight: 700 }}>Godown</label>
+                                <select style={INP} value={form.godown || ""} onChange={e => setForm(f => ({ ...f, godown: e.target.value }))}>
+                                    <option value="">Godown *</option>
+                                    {GODOWNS.map(g => <option key={g}>{g}</option>)}
+                                </select>
+                                
+                                <label style={{ fontSize: 11, color: C.muted, fontWeight: 700 }}>Bottle Type</label>
+                                <select style={INP} value={form.bottleType || ""} onChange={e => setForm(f => ({ ...f, bottleType: e.target.value }))}>
+                                    <option value="">Bottle Type *</option>
+                                    {BOTTLE_TYPES.map(b => <option key={b}>{b}</option>)}
+                                </select>
+
+                                <label style={{ fontSize: 11, color: C.muted, fontWeight: 700 }}>Category</label>
+                                <select style={INP} value={form.category || "normal"} onChange={e => setForm(f => ({ ...f, category: e.target.value }))}>
+                                    <option value="normal">Normal</option>
+                                    <option value="customized">Customized</option>
+                                </select>
+
+                                <label style={{ fontSize: 11, color: C.muted, fontWeight: 700 }}>Bill No.</label>
+                                <input style={INP} placeholder="Bill No." value={form.billNo || ""} onChange={e => setForm(f => ({ ...f, billNo: e.target.value }))} />
+
+                                <label style={{ fontSize: 11, color: C.muted, fontWeight: 700 }}>Quantity</label>
+                                <input type="number" style={INP} placeholder="Quantity" value={form.qty || ""} onChange={e => setForm(f => ({ ...f, qty: e.target.value }))} />
+
+                                <label style={{ fontSize: 11, color: C.muted, fontWeight: 700 }}>Ex-GST Rate / Unit (₹)</label>
+                                <input type="number" style={INP} placeholder="Rate per unit" value={form.ratePerUnit || ""} onChange={e => {
+                                    const r = Number(e.target.value || 0);
+                                    const q = Number(form.qty || 0);
+                                    const gst = form.enableGst === "yes" ? Number(form.gstRate || 18) : 0;
+                                    const tot = r * q * (1 + gst / 100);
+                                    setForm(f => ({ ...f, ratePerUnit: e.target.value, totalAmount: tot > 0 ? tot.toFixed(2) : f.totalAmount }));
+                                }} />
+
+                                <label style={{ fontSize: 11, color: C.muted, fontWeight: 700 }}>Enable GST</label>
+                                <select style={INP} value={form.enableGst || "no"} onChange={e => setForm(f => ({ ...f, enableGst: e.target.value }))}>
+                                    <option value="no">No</option>
+                                    <option value="yes">Yes</option>
+                                </select>
+
+                                {form.enableGst === "yes" && <>
+                                    <label style={{ fontSize: 11, color: C.muted, fontWeight: 700 }}>GST Rate (%)</label>
+                                    <input type="number" style={INP} placeholder="GST Rate %" value={form.gstRate || 18} onChange={e => setForm(f => ({ ...f, gstRate: e.target.value }))} />
+                                </>}
+
+                                <div style={{ background: "#0f172a", border: "1.5px solid #0ea5e9", borderRadius: 8, padding: 10, marginBottom: 12 }}>
+                                    <label style={{ fontSize: 11, color: "#38bdf8", fontWeight: 800, display: "block", marginBottom: 4 }}>
+                                        💰 Total Sales Value (Grand Total including GST) ₹ *
+                                    </label>
+                                    <input type="number" style={{ ...INP, fontSize: 14, fontWeight: "bold", color: "#38bdf8", borderColor: "#0ea5e9", marginBottom: 0 }} placeholder="Direct Total Sales Amount (e.g. 12000)" value={form.totalAmount || ""} onChange={e => setForm(f => ({ ...f, totalAmount: e.target.value }))} />
+                                    <div style={{ fontSize: 9, color: "#94a3b8", marginTop: 4 }}>
+                                        Entering the direct sales total here updates the sales value attributed to inventory stock batches.
+                                    </div>
+                                </div>
+
+                                <label style={{ fontSize: 11, color: C.muted, fontWeight: 700 }}>Description</label>
+                                <input style={INP} placeholder="Description" value={form.description || ""} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} />
+
+                                <button style={{ ...BTNP("linear-gradient(90deg,#0ea5e9,#0284c7)"), width: "100%" }} onClick={applyEditStockOut}>Save Changes</button>
+                            </div>;
                         })()}
 
                         {modal === "pl" && <div>
