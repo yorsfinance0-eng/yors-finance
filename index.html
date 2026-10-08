@@ -5760,7 +5760,8 @@
                             const itIgst = hasGst && gstType === "igst" ? itGstAmt : 0;
                             const itId = gid();
                             const itemDesc = it.description || form.description || "";
-                            np.stockIn = [...np.stockIn, { id: itId, date, godown, bottleType: it.bottleType, category: it.category, batchNo: it.batchNo, qty: Number(it.qty), ratePerUnit: Number(it.ratePerUnit), description: itemDesc, totalAmount: itTotal, gstAmount: itGstAmt, gstRate, hsnCode, supplierGstin, supplierStateCode, settleMode: "rawMaterial", linkedPartyId: null, linkedPartyName: "Raw Material Pool", linkedRawMaterials: idx === 0 ? deductions : [], linkedRawMaterialId: deductions[0] ? deductions[0].id : null, isReturn: false, paidAmount: 0, gstType, cgstAmount: itCgst, sgstAmount: itSgst, igstAmount: itIgst }];
+                            const siWithLabel = form.withLabel !== "no"; // true = with label (default)
+                            np.stockIn = [...np.stockIn, { id: itId, date, godown, bottleType: it.bottleType, category: it.category, batchNo: it.batchNo, qty: Number(it.qty), ratePerUnit: Number(it.ratePerUnit), description: itemDesc, totalAmount: itTotal, gstAmount: itGstAmt, gstRate, hsnCode, supplierGstin, supplierStateCode, settleMode: "rawMaterial", linkedPartyId: null, linkedPartyName: "Raw Material Pool", linkedRawMaterials: idx === 0 ? deductions : [], linkedRawMaterialId: deductions[0] ? deductions[0].id : null, isReturn: false, paidAmount: 0, gstType, cgstAmount: itCgst, sgstAmount: itSgst, igstAmount: itIgst, withLabel: siWithLabel }];
                             np = withLog(np, "CREATE", "stockIn", itId, `Added Stock In of ${it.qty} ${it.bottleType} (paid from Raw Material Pool)`);
                         });
                         return np;
@@ -5786,7 +5787,8 @@
                         const itIgst = hasGst && gstType === "igst" ? itGstAmt : 0;
                         const itId = idx === 0 ? firstId : gid();
                         const itemDesc = it.description || form.description || "";
-                        np.stockIn = [...np.stockIn, { id: itId, date, godown, bottleType: it.bottleType, category: it.category, batchNo: it.batchNo, qty: Number(it.qty), ratePerUnit: Number(it.ratePerUnit), description: itemDesc, totalAmount: itTotal, gstAmount: itGstAmt, gstRate, hsnCode, supplierGstin, supplierStateCode, settleMode: form.settleMode, linkedPartyId: res.partyId, linkedPartyName: res.partyName, createdCreditorId: idx === 0 ? res.createdCreditorId : null, isReturn: false, paidAmount: idx === 0 ? paidVal : 0, gstType, cgstAmount: itCgst, sgstAmount: itSgst, igstAmount: itIgst }];
+                        const siWithLabelCash = form.withLabel !== "no"; // true = with label (default)
+                        np.stockIn = [...np.stockIn, { id: itId, date, godown, bottleType: it.bottleType, category: it.category, batchNo: it.batchNo, qty: Number(it.qty), ratePerUnit: Number(it.ratePerUnit), description: itemDesc, totalAmount: itTotal, gstAmount: itGstAmt, gstRate, hsnCode, supplierGstin, supplierStateCode, settleMode: form.settleMode, linkedPartyId: res.partyId, linkedPartyName: res.partyName, createdCreditorId: idx === 0 ? res.createdCreditorId : null, isReturn: false, paidAmount: idx === 0 ? paidVal : 0, gstType, cgstAmount: itCgst, sgstAmount: itSgst, igstAmount: itIgst, withLabel: siWithLabelCash }];
                         np = withLog(np, "CREATE", "stockIn", itId, `Added Stock In of ${it.qty} ${it.bottleType}`);
                     });
                     if (res.createdCreditorId) np.creditors = [...np.creditors, { id: res.createdCreditorId, name: form.newPartyName, date, amount: 0, creditPeriod: form.newPartyCredit || "", notified: false, checked: false }];
@@ -5870,13 +5872,28 @@
                 }
                 if (!form.settleMode) { alert("Select a receipt mode"); return; }
 
-                // Stock availability check per item
-                const currentFIFOVal = computeFIFO(si, so);
+                // Label mode for this stock out
+                const soWithLabel = form.soWithLabel !== "no"; // true = with label (default)
+
+                // Stock availability check per item — filtered by label type
+                // Build a label-filtered FIFO: only count stockIn entries matching the label type
+                // For "without label": stockIn entries that have withLabel===false or withLabel==="no"
+                // For "with label": stockIn entries that have withLabel===true or withLabel==="yes" or withLabel===undefined (legacy entries default to with label)
+                const labelFilteredSi = si.filter(x => {
+                    if (soWithLabel) {
+                        // With label: include entries where withLabel is true/undefined/"yes" (legacy entries default to with-label)
+                        return x.withLabel !== false && x.withLabel !== "no";
+                    } else {
+                        // Without label: only entries explicitly marked without label
+                        return x.withLabel === false || x.withLabel === "no";
+                    }
+                });
+                const currentFIFOVal = computeFIFO(labelFilteredSi, so);
                 for (const it of soItems) {
                     const invNormal = currentFIFOVal[it.bottleType + "_normal"] || { batches: [] };
                     const avail = invNormal.batches.filter(b => b.godown === godown).reduce((a, b) => a + b.remQty, 0);
-                    if (avail <= 0) { alert(`⛔ No stock in ${godown} for ${it.bottleType}.`); return; }
-                    if (avail < Number(it.qty)) { alert(`⛔ Insufficient stock in ${godown} for ${it.bottleType}.\nAvailable: ${avail}, Requested: ${it.qty}`); return; }
+                    if (avail <= 0) { alert(`⛔ No ${soWithLabel ? "labeled" : "unlabeled"} stock in ${godown} for ${it.bottleType}.\n\nMake sure your Stock In entry was done ${soWithLabel ? "With Label" : "Without Label"}.`); return; }
+                    if (avail < Number(it.qty)) { alert(`⛔ Insufficient ${soWithLabel ? "labeled" : "unlabeled"} stock in ${godown} for ${it.bottleType}.\nAvailable: ${avail}, Requested: ${it.qty}\n\nMake sure your Stock In entry was done ${soWithLabel ? "With Label" : "Without Label"}.`); return; }
                 }
 
                 // ── Cash Discount Calculations ──
@@ -5940,6 +5957,7 @@
                             discountType: form.discountType || "%", discountValue: Number(form.discountValue || 0),
                             discountAmount: discountAmount, customerName: form.customerName || "",
                             customerAddress: form.customerAddress || "", subtotalBeforeDiscount: totalBeforeDiscountTaxable,
+                            withLabel: soWithLabel,
                             ...(hasGst ? { gstInvoiceId: autoInvoiceId } : {})
                         };
                         np.stockOut = [...np.stockOut, soEntry];
@@ -11115,6 +11133,21 @@
                                 <input type="number" style={INP} placeholder="Qty *" value={form.qty || ""} onChange={e => setForm(f => ({ ...f, qty: e.target.value }))} />
                                 <input type="number" style={INP} placeholder="Sale Rate/Unit (₹) *" value={form.ratePerUnit || ""} onChange={e => setForm(f => ({ ...f, ratePerUnit: e.target.value }))} />
                             </>) : (<>
+                                {/* Label Option Toggle for Stock Out */}
+                                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", background: "#0a1220", border: "1px solid " + C.border, borderRadius: 8, padding: "8px 12px", marginBottom: 9 }}>
+                                    <span style={{ fontSize: 11, color: C.muted, fontWeight: 700 }}>Label Option</span>
+                                    <div style={{ display: "flex", gap: 6 }}>
+                                        <button
+                                            onClick={() => setForm(f => ({ ...f, soWithLabel: "yes" }))}
+                                            style={{ padding: "5px 12px", borderRadius: 6, border: "2px solid " + ((form.soWithLabel || "yes") === "yes" ? C.blue : C.border), background: (form.soWithLabel || "yes") === "yes" ? C.blue + "22" : C.mid, color: (form.soWithLabel || "yes") === "yes" ? C.blue : C.muted, fontWeight: 700, fontSize: 11, cursor: "pointer" }}
+                                        >With Label</button>
+                                        <button
+                                            onClick={() => setForm(f => ({ ...f, soWithLabel: "no" }))}
+                                            style={{ padding: "5px 12px", borderRadius: 6, border: "2px solid " + (form.soWithLabel === "no" ? C.amber : C.border), background: form.soWithLabel === "no" ? C.amber + "22" : C.mid, color: form.soWithLabel === "no" ? C.amber : C.muted, fontWeight: 700, fontSize: 11, cursor: "pointer" }}
+                                        >Without Label</button>
+                                    </div>
+                                </div>
+                                {form.soWithLabel === "no" && <div style={{ fontSize: 10, color: C.amber, background: "#2d1a00", borderRadius: 6, padding: "5px 10px", marginBottom: 8, fontWeight: 600 }}>Warning: Stock will be deducted from unlabeled inventory (Stock In entries done Without Label).</div>}
                                 {/* Multi-item table */}
                                 {/* ── Bill No. for Normal Sale (multi-item) ── */}
                                 <div style={{ position: "relative", marginBottom: 9 }}>
