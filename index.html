@@ -79,12 +79,15 @@
 
             /* Step 2: Make only the invoice and all its children visible */
             #print-area,
-            #print-area * {
+            #print-area *,
+            #cb-print-area,
+            #cb-print-area * {
                 visibility: visible !important;
             }
 
             /* Step 3: Pull the invoice to the top-left of the page */
-            #print-area {
+            #print-area,
+            #cb-print-area {
                 position: absolute !important;
                 left: 0 !important;
                 top: 0 !important;
@@ -99,14 +102,15 @@
                 border-radius: 0 !important;
             }
 
-            #print-area * {
+            #print-area *,
+            #cb-print-area * {
                 color: black !important;
                 border-color: #000 !important;
-                background: white !important;
                 box-shadow: none !important;
             }
 
-            #print-area table th {
+            #print-area table th,
+            #cb-print-area table th {
                 background-color: #f1f5f9 !important;
                 color: black !important;
                 border: 1px solid #000 !important;
@@ -114,9 +118,30 @@
                 print-color-adjust: exact;
             }
 
-            #print-area table td {
+            #print-area table td,
+            #cb-print-area table td {
                 border: 1px solid #000 !important;
                 color: black !important;
+            }
+
+            /* Preserve Cash Bill header and accent colors during print */
+            #cb-print-area .cb-hbar,
+            #cb-print-area .cb-hbar * {
+                background: #334155 !important;
+                color: #fff !important;
+                -webkit-print-color-adjust: exact;
+                print-color-adjust: exact;
+            }
+            #cb-print-area .cb-th {
+                background: #334155 !important;
+                color: #fff !important;
+                -webkit-print-color-adjust: exact;
+                print-color-adjust: exact;
+            }
+            #cb-print-area .cb-alt {
+                background: #f8fafc !important;
+                -webkit-print-color-adjust: exact;
+                print-color-adjust: exact;
             }
         }
     </style>
@@ -3746,7 +3771,10 @@
             };
             const baseVal = getTransactionBase();
             const paidVal = Number(form.paidAmount || 0);
-            const availableRawMats = (rawMats || []).filter(r => (Number(r.amount) - (r.usedForStockIn || 0)) > 0.001);
+            const availableRawMats = (rawMats || []).filter(r => {
+                const tot = Number(r.totalAmount !== undefined ? r.totalAmount : r.amount);
+                return (tot - (r.usedForStockIn || 0)) > 0.001;
+            });
 
             return (<div style={{ background: "#0a0f1e", borderRadius: 8, padding: 12, marginBottom: 9, border: "1px solid #334155" }}>
                 <div style={{ fontSize: 11, color: "#94a3b8", fontWeight: 700, marginBottom: 7 }}>💳 Settlement Mode</div>
@@ -3754,7 +3782,10 @@
                     {options.map(opt => <button key={opt} onClick={() => setForm(f => ({ ...f, settleMode: opt, linkedPartyId: "", newPartyName: "", newPartyCredit: "", paidAmount: "", linkedRawMaterialId: "" }))} style={{ flex: 1, minWidth: 70, padding: "7px 4px", border: "2px solid " + (form.settleMode === opt ? mColors[opt] : C.border), borderRadius: 7, background: form.settleMode === opt ? mColors[opt] + "18" : C.mid, color: form.settleMode === opt ? mColors[opt] : C.muted, fontWeight: 700, fontSize: 11, cursor: "pointer" }}>{mLabels[opt]}</button>)}
                 </div>
                 {form.settleMode === "rawMaterial" && (() => {
-                    const totalRmAvail = availableRawMats.reduce((sum, r) => sum + (Number(r.amount) - (r.usedForStockIn || 0)), 0);
+                    const totalRmAvail = availableRawMats.reduce((sum, r) => {
+                        const tot = Number(r.totalAmount !== undefined ? r.totalAmount : r.amount);
+                        return sum + Math.max(0, tot - (r.usedForStockIn || 0));
+                    }, 0);
                     return (<div style={{ marginTop: 4 }}>
                         <div style={{ fontSize: 11, fontWeight: 700, color: baseVal > totalRmAvail ? C.red : C.teal }}>
                             Total Available Raw Material Pool (excl. GST): <strong>{fc(totalRmAvail)}</strong>
@@ -5506,23 +5537,33 @@
                     if (entry.createdDebtorId) np.debtors = (np.debtors || []).filter(d => d.id !== entry.createdDebtorId);
                     if (key === "creditors") np.cashEntries = (np.cashEntries || []).filter(e => !(e.dir === "out" && e.linkedId === id));
                     if (key === "debtors") np.cashEntries = (np.cashEntries || []).filter(e => !(e.dir === "in" && e.linkedId === id));
-                    // Stock In paid from raw material: restore pool balance (total-based tracking)
+                    // Stock In paid from raw material: restore pool balance (total and base tracking)
                     if (key === "stockIn" && entry.settleMode === "rawMaterial") {
                         if (entry.linkedRawMaterials && entry.linkedRawMaterials.length > 0) {
                             np.rawMaterialPayments = (np.rawMaterialPayments || []).map(r => {
                                 const deduction = entry.linkedRawMaterials.find(d => d.id === r.id);
-                                return deduction
-                                    ? { ...r, usedForStockIn: Math.max(0, (r.usedForStockIn || 0) - Number(deduction.amount)) }
-                                    : r;
+                                if (!deduction) return r;
+                                const gstMult = 1 + (Number(r.gstRate || 0) / 100);
+                                const refundTotal = Number(deduction.amount || 0);
+                                const refundBase = refundTotal / gstMult;
+                                return {
+                                    ...r,
+                                    usedForStockIn: Math.max(0, (r.usedForStockIn || 0) - refundTotal),
+                                    usedForStockInBase: Math.max(0, (r.usedForStockInBase || 0) - refundBase)
+                                };
                             });
                         } else if (entry.linkedRawMaterialId) {
                             // Fallback for older entries using base cost (qty * ratePerUnit) instead of totalAmount
                             const baseCost = Number(entry.qty || 0) * Number(entry.ratePerUnit || 0);
-                            np.rawMaterialPayments = (np.rawMaterialPayments || []).map(r =>
-                                r.id === entry.linkedRawMaterialId
-                                    ? { ...r, usedForStockIn: Math.max(0, (r.usedForStockIn || 0) - baseCost) }
-                                    : r
-                            );
+                            np.rawMaterialPayments = (np.rawMaterialPayments || []).map(r => {
+                                if (r.id !== entry.linkedRawMaterialId) return r;
+                                const gstMult = 1 + (Number(r.gstRate || 0) / 100);
+                                return {
+                                    ...r,
+                                    usedForStockIn: Math.max(0, (r.usedForStockIn || 0) - (baseCost * gstMult)),
+                                    usedForStockInBase: Math.max(0, (r.usedForStockInBase || 0) - baseCost)
+                                };
+                            });
                         }
                     }
                     if (key === "depreciationAssets" && entry.bsAssetId) {
@@ -5693,7 +5734,6 @@
                     // ── Category-wise availability check ──────────────────────────────────────
                     // IMPORTANT: usedForStockIn is tracked in TOTAL (incl. GST) terms.
                     // Available  = totalAmount - usedForStockIn   (both total — consistent)
-                    // Required   = base_rate × (1 + gstRate/100) — scaled to total per entry
                     for (const cat of Object.keys(reqCatAmounts)) {
                         const reqBase = reqCatAmounts[cat];
                         if (reqBase > 0) {
@@ -5703,13 +5743,19 @@
                                 const tot = Number(r.totalAmount !== undefined ? r.totalAmount : r.amount);
                                 return sum + Math.max(0, tot - (r.usedForStockIn || 0));
                             }, 0);
-                            // Required in TOTAL terms (weight by each entry's GST rate)
+                            // Available in BASE terms
+                            const availBaseForCat = catEntries.reduce((sum, r) => {
+                                const tot = Number(r.totalAmount !== undefined ? r.totalAmount : r.amount);
+                                const rem = Math.max(0, tot - (r.usedForStockIn || 0));
+                                const gstMult = 1 + (Number(r.gstRate || 0) / 100);
+                                return sum + (rem / gstMult);
+                            }, 0);
                             const weightedGstMult = catEntries.length > 0
                                 ? catEntries.reduce((s, r) => s + (1 + Number(r.gstRate || 0) / 100), 0) / catEntries.length
                                 : 1;
                             const reqTotal = reqBase * weightedGstMult;
 
-                            if (reqTotal > availForCat + 0.001) {
+                            if (reqBase > availBaseForCat + 0.001) {
                                 const totalUnits = siItems.reduce((a, b) => a + Number(b.qty || 0), 0);
                                 const noEntry = catEntries.length === 0;
                                 if (noEntry) {
@@ -5723,30 +5769,41 @@
                     }
 
                     // ── Deduction loop ────────────────────────────────────────────────────────
+                    // Strict FIFO (First-In, First-Out): Older payment dates MUST be fully exhausted
+                    // before any newer payment is touched.
                     const deductions = [];
                     let currentRms = rawMatPayments.map(r => ({ ...r }));
 
                     Object.keys(reqCatAmounts).forEach(cat => {
                         let neededBase = reqCatAmounts[cat]; // base remaining to satisfy
                         if (neededBase <= 0) return;
-                        currentRms = currentRms.map(r => {
-                            if (r.rawMatType !== cat || neededBase <= 0) return r;
+
+                        // Sort indices of this category strictly chronologically ascending (oldest date first)
+                        const catIndices = currentRms
+                            .map((r, idx) => ({ r, idx }))
+                            .filter(x => x.r.rawMatType === cat)
+                            .sort((a, b) => (a.r.date || "").localeCompare(b.r.date || "") || (a.r.id || "").localeCompare(b.r.id || ""));
+
+                        for (const { idx } of catIndices) {
+                            if (neededBase <= 0.0001) break;
+                            const r = currentRms[idx];
                             const gstMult = 1 + (Number(r.gstRate || 0) / 100);
                             const totalAvail = Number(r.totalAmount !== undefined ? r.totalAmount : r.amount);
-                            const availTotal = totalAvail - (r.usedForStockIn || 0); // total remaining
-                            if (availTotal <= 0) return r;
+                            const availTotal = Math.max(0, totalAvail - (r.usedForStockIn || 0)); // total remaining
+                            if (availTotal <= 0.0001) continue; // Old entry exhausted, move to next oldest
+
                             // Convert base needed to total needed for this entry's GST rate
                             const neededTotal = neededBase * gstMult;
                             const takeTotal = Math.min(neededTotal, availTotal);  // take in total
                             const takeBase = takeTotal / gstMult;                 // equivalent base
                             neededBase -= takeBase;
-                            deductions.push({ id: r.id, amount: takeTotal, rawMatType: r.rawMatType });
-                            return {
+                            deductions.push({ id: r.id, amount: Math.round(takeTotal * 100) / 100, rawMatType: r.rawMatType });
+                            currentRms[idx] = {
                                 ...r,
-                                usedForStockIn: (r.usedForStockIn || 0) + takeTotal,      // total tracker
-                                usedForStockInBase: (r.usedForStockInBase || 0) + takeBase // base tracker for Trading A/C
+                                usedForStockIn: Math.round(((r.usedForStockIn || 0) + takeTotal) * 100) / 100,      // total tracker
+                                usedForStockInBase: Math.round(((r.usedForStockInBase || 0) + takeBase) * 100) / 100 // base tracker for Trading A/C
                             };
-                        });
+                        }
                     });
 
                     upd(p => {
@@ -6892,6 +6949,122 @@
                 alert("Done! The Preform portion has been refunded back into the Conversion Cost available balance.");
             };
 
+            // Rebalance all Raw Material categories strictly in FIFO (First-In, First-Out) order.
+            // Ensures older payments are 100% exhausted before newer payments are touched.
+            const rebalanceRawMaterialsFIFO = () => {
+                if (!isAdmin) {
+                    const pin = window.prompt("Enter Admin PIN to Rebalance Raw Materials (Default: 0000):");
+                    if (pin === (state.settings?.adminPin || "0000")) {
+                        setIsAdmin(true);
+                    } else {
+                        if (pin !== null) alert("Incorrect PIN");
+                        return;
+                    }
+                }
+
+                if (!window.confirm("Rebalance Raw Material Usage (FIFO)?\n\nThis will reallocate Used amounts across payments strictly in First-In-First-Out order:\n• Older payments will be fully exhausted first before newer payments are touched.\n• Total invested, used, and available balances across all entries remain identical.\n\nContinue?")) return;
+
+                upd(p => {
+                    let np = { ...p };
+                    let rms = (np.rawMaterialPayments || []).map(r => ({ ...r }));
+
+                    // Group by category
+                    const categories = [...new Set(rms.map(r => r.rawMatType).filter(Boolean))];
+
+                    categories.forEach(cat => {
+                        const catEntries = rms.filter(r => r.rawMatType === cat);
+                        const totalUsed = catEntries.reduce((s, r) => s + Number(r.usedForStockIn || 0), 0);
+
+                        // Sort chronologically ascending (oldest first: FIFO)
+                        const sorted = [...catEntries].sort((a, b) =>
+                            (a.date || "").localeCompare(b.date || "") || (a.id || "").localeCompare(b.id || "")
+                        );
+
+                        let remToAllocate = totalUsed;
+                        const updatedMap = {};
+
+                        sorted.forEach(entry => {
+                            const tot = Number(entry.totalAmount !== undefined ? entry.totalAmount : entry.amount);
+                            const gstMult = 1 + (Number(entry.gstRate || 0) / 100);
+                            const takeTotal = Math.min(remToAllocate, tot);
+                            remToAllocate -= takeTotal;
+                            const takeBase = takeTotal / gstMult;
+                            updatedMap[entry.id] = {
+                                usedForStockIn: Math.round(takeTotal * 100) / 100,
+                                usedForStockInBase: Math.round(takeBase * 100) / 100
+                            };
+                        });
+
+                        rms = rms.map(r => {
+                            if (updatedMap[r.id]) {
+                                return {
+                                    ...r,
+                                    usedForStockIn: updatedMap[r.id].usedForStockIn,
+                                    usedForStockInBase: updatedMap[r.id].usedForStockInBase
+                                };
+                            }
+                            return r;
+                        });
+                    });
+
+                    // Also re-link stockIn entries' linkedRawMaterials in FIFO order
+                    const allSIs = (np.stockIn || []).filter(si => si.settleMode === "rawMaterial" && !si.isReturn);
+                    if (allSIs.length > 0) {
+                        const pools = {};
+                        rms.forEach(r => {
+                            pools[r.id] = Number(r.totalAmount !== undefined ? r.totalAmount : r.amount);
+                        });
+
+                        const sortedSIs = [...allSIs].sort((a, b) =>
+                            (a.date || "").localeCompare(b.date || "") || (a.id || "").localeCompare(b.id || "")
+                        );
+
+                        const updatedSIs = {};
+                        sortedSIs.forEach(si => {
+                            if (!si.linkedRawMaterials || si.linkedRawMaterials.length === 0) return;
+                            const newDeductions = [];
+                            si.linkedRawMaterials.forEach(ded => {
+                                const cat = ded.rawMatType;
+                                let needed = Number(ded.amount || 0);
+                                if (!cat || needed <= 0) return;
+
+                                const availRms = rms
+                                    .filter(r => r.rawMatType === cat)
+                                    .sort((a, b) => (a.date || "").localeCompare(b.date || "") || (a.id || "").localeCompare(b.id || ""));
+
+                                for (const r of availRms) {
+                                    if (needed <= 0.0001) break;
+                                    const availInPool = pools[r.id] || 0;
+                                    if (availInPool <= 0.0001) continue;
+                                    const take = Math.min(needed, availInPool);
+                                    pools[r.id] -= take;
+                                    needed -= take;
+                                    newDeductions.push({ id: r.id, amount: Math.round(take * 100) / 100, rawMatType: cat });
+                                }
+                            });
+                            updatedSIs[si.id] = newDeductions;
+                        });
+
+                        np.stockIn = (np.stockIn || []).map(si => {
+                            if (updatedSIs[si.id]) {
+                                return {
+                                    ...si,
+                                    linkedRawMaterials: updatedSIs[si.id],
+                                    linkedRawMaterialId: updatedSIs[si.id][0]?.id || si.linkedRawMaterialId
+                                };
+                            }
+                            return si;
+                        });
+                    }
+
+                    np.rawMaterialPayments = rms;
+                    np = withLog(np, "UPDATE", "rawMaterialPayments", null, "Rebalanced Raw Material payments strictly in FIFO order (oldest payments exhausted first)");
+                    return np;
+                });
+
+                alert("✅ Success! Raw Material payments have been rebalanced strictly in FIFO order.\n\nOlder payments are now fully used first, and new conversion costs will not be touched until older ones are finished.");
+            };
+
             const sp = { form, setForm, creds, debs, rawMats: state.rawMaterialPayments || [] };
 
             
@@ -7511,6 +7684,7 @@
                         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
                             <div style={{ fontSize: 16, fontWeight: 800, color: C.teal }}>🏭 Raw Material Payments</div>
                             <div style={{ display: "flex", gap: 8 }}>
+                                <button style={BTNP("linear-gradient(90deg,#0d9488,#0f766e)")} onClick={rebalanceRawMaterialsFIFO} title="Reallocate used balances strictly in FIFO order (oldest payments exhausted first)">⚡ Rebalance FIFO</button>
                                 {isAdmin && <button style={BTNP("linear-gradient(90deg,#dc2626,#b91c1c)")} onClick={fixPreformRefund} title="One-time fix: add back the Preform amount over-deducted from Conversion Cost">🔧 Refund Preform from Conv. Cost</button>}
                                 {isAdmin && <button style={BTNP("linear-gradient(90deg,#0891b2,#0ea5e9)")} onClick={() => openM("rawMaterial")}>+ Add Payment</button>}
                             </div>
@@ -7522,7 +7696,40 @@
                             const totalInvested = rms.reduce((a, b) => a + Number(b.totalAmount !== undefined ? b.totalAmount : b.amount), 0);
                             const totalUsed = rms.reduce((a, b) => a + Number(b.usedForStockIn || 0), 0);
                             const totalAvail = totalInvested - totalUsed;
+
+                            // Check for any FIFO imbalance (earlier payment has remaining > 0 while later payment has used > 0)
+                            const fifoImbalances = [];
+                            RAW_MAT_TYPES.forEach(type => {
+                                const entries = [...rms.filter(r => r.rawMatType === type)]
+                                    .sort((a, b) => (a.date || "").localeCompare(b.date || "") || (a.id || "").localeCompare(b.id || ""));
+                                let seenRemaining = 0;
+                                for (let i = 0; i < entries.length; i++) {
+                                    const tot = Number(entries[i].totalAmount !== undefined ? entries[i].totalAmount : entries[i].amount);
+                                    const rem = Math.max(0, tot - Number(entries[i].usedForStockIn || 0));
+                                    const used = Number(entries[i].usedForStockIn || 0);
+                                    if (seenRemaining > 0.01 && used > 0.01) {
+                                        fifoImbalances.push({ type, unusedOld: seenRemaining });
+                                        break;
+                                    }
+                                    if (rem > 0.01) seenRemaining += rem;
+                                }
+                            });
+
                             return (<>
+                                {fifoImbalances.length > 0 && (
+                                    <div style={{ background: "#451a03", border: "1.5px solid #f59e0b", borderRadius: 10, padding: "12px 16px", marginBottom: 14, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
+                                        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                                            <span style={{ fontSize: 20 }}>⚠️</span>
+                                            <div>
+                                                <div style={{ fontSize: 13, fontWeight: 800, color: "#fbbf24" }}>FIFO Usage Imbalance Detected: {fifoImbalances.map(x => x.type).join(", ")}</div>
+                                                <div style={{ fontSize: 11, color: "#cbd5e1", marginTop: 2 }}>
+                                                    Newer payments were used by Stock In while previous payments still have remaining balance (₹{fifoImbalances.reduce((s, x) => s + x.unusedOld, 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}). Click <strong>Rebalance FIFO Now</strong> to strictly use up old payments first.
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <button style={{ ...BTNP("linear-gradient(90deg,#0d9488,#0f766e)"), padding: "7px 16px", fontSize: 11, fontWeight: 800 }} onClick={rebalanceRawMaterialsFIFO}>⚡ Rebalance FIFO Now</button>
+                                    </div>
+                                )}
                                 <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
                                     <div style={CARD("#0891b2,#0ea5e9")}><div style={{ fontSize: 9 }}>Total Invested (incl. GST)</div><div style={{ fontSize: 14, fontWeight: 900 }}>{fc(totalInvested)}</div></div>
                                     <div style={CARD("#ef4444,#b91c1c")}><div style={{ fontSize: 9 }}>Used for Stock In (incl. GST)</div><div style={{ fontSize: 14, fontWeight: 900 }}>{fc(totalUsed)}</div></div>
@@ -7548,7 +7755,7 @@
                                         </tr></thead>
                                         <tbody>
                                             {rms.length === 0 ? <tr><td colSpan={11} style={{ ...TDS, textAlign: "center", color: C.muted }}>No raw material payments yet</td></tr> :
-                                                rms.sort((a, b) => (b.date || "").localeCompare(a.date || "")).map(r => {
+                                                [...rms].sort((a, b) => (b.date || "").localeCompare(a.date || "") || (b.id || "").localeCompare(a.id || "")).map(r => {
                                                     const tot = r.totalAmount !== undefined ? r.totalAmount : r.amount;
                                                     // Remaining = totalAmount - usedForStockIn (both in total/GST-inclusive terms)
                                                     const usedTotal = Number(r.usedForStockIn || 0);
