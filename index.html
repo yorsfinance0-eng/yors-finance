@@ -203,7 +203,7 @@
         const { useState, useEffect, useMemo, useRef, useCallback } = React;
 
         // ─── Constants ────────────────────────────────────────
-        const BOTTLE_TYPES = ["200ml", "500ml", "1L", "Premium"];
+        const BOTTLE_TYPES = ["200ml", "500ml", "1L", "2Litre", "20Litre", "Premium"];
         const GODOWNS = ["Hazra", "Dunlop", "Bhawanipur", "Alipore", "Gariahat"];
         const TABS = ["Dashboard", "Excel Transport", "Inventory", "Stock In", "Stock Out", "Cash Bills", "GST Invoice", "Quotations", "Raw Materials", "Debtors", "Creditors", "Clients", "Cash Book", "Trading A/C", "P&L Account", "Balance Sheet", "Trial Balance", "Cash Flow", "Journal", "Audit Trail", "Depreciation", "Charts"];
         // ── GST-REPORTABLE COLLECTIONS ────────────────────────────────────────────
@@ -216,9 +216,11 @@
         // ─────────────────────────────────────────────────────────────────────────
         const RAW_MAT_TYPES = ["Label", "Cap", "Conversion Cost", "Shrink"];
         const RAW_MAT_RATES = {
-            "200ml": { "Conversion Cost": 113.20, "Cap": 14.88, "Label": 5.28 },
-            "500ml": { "Conversion Cost": 80.88,  "Cap": 7.44,  "Label": 5.76 },
-            "1L":    { "Conversion Cost": 64.68,  "Cap": 3.72,  "Label": 4.92 },
+            "200ml":  { "Conversion Cost": 113.20, "Cap": 14.88, "Label": 5.28 },
+            "500ml":  { "Conversion Cost": 80.88,  "Cap": 7.44,  "Label": 5.76 },
+            "1L":     { "Conversion Cost": 64.68,  "Cap": 3.72,  "Label": 4.92 },
+            "2Litre": { "Conversion Cost": 55.00,  "Cap": 3.00,  "Label": 4.50 },
+            "20Litre": { "Conversion Cost": 45.00, "Cap": 2.50,  "Label": 4.00 },
             "Premium": { "Conversion Cost": 64.68, "Cap": 3.72, "Label": 4.92 }
         };
         const CLIENT_TYPES = ["Retailer", "Distributor"];
@@ -9595,7 +9597,10 @@
                             setQuotForm(prev => { const ni = [...prev.items]; ni[idx] = { ...ni[idx], [field]: value }; const rec = recalcGSTTotals(ni, prev.gstType || "cgst_sgst"); return { ...prev, ...rec }; });
                         };
                         const addQuotItem = () => {
-                            setQuotForm(prev => { const ni = [...prev.items, { itemName: "", hsnCode: "2201", qty: 1, ratePerUnit: 0, discountPct: 0, gstRate: 18 }]; const rec = recalcGSTTotals(ni, prev.gstType || "cgst_sgst"); return { ...prev, ...rec }; });
+                            setQuotForm(prev => { const ni = [...prev.items, { itemType: "bottle", bottleType: "1L", itemName: "Packaged Drinking Water", hsnCode: "2201", qty: 1, ratePerUnit: 0, discountPct: 0, gstRate: 18 }]; const rec = recalcGSTTotals(ni, prev.gstType || "cgst_sgst"); return { ...prev, ...rec }; });
+                        };
+                        const addExpenseItem = () => {
+                            setQuotForm(prev => { const ni = [...prev.items, { itemType: "expense", bottleType: "", itemName: "", hsnCode: "9997", qty: 1, ratePerUnit: 0, discountPct: 0, gstRate: 18 }]; const rec = recalcGSTTotals(ni, prev.gstType || "cgst_sgst"); return { ...prev, ...rec }; });
                         };
                         const removeQuotItem = (idx) => {
                             setQuotForm(prev => { const ni = prev.items.filter((_, i) => i !== idx); const rec = recalcGSTTotals(ni, prev.gstType || "cgst_sgst"); return { ...prev, ...rec }; });
@@ -9707,7 +9712,7 @@
                                             {(q.items||[]).map((item,i) => (
                                                 <tr key={i} className={i%2===1?"quo-alt":""} style={{ background:i%2===1?"#f8fafc":"#fff" }}>
                                                     <td style={{ ...tdB, textAlign:"center", fontWeight:700 }}>{i+1}</td>
-                                                    <td style={tdB}><div style={{ fontWeight:700 }}>{item.itemName||"—"}</div></td>
+                                                    <td style={tdB}><div style={{ fontWeight:700 }}>{item.itemName||"—"}{item.bottleType ? <span style={{ fontSize:9, marginLeft:5, background:"#1e3a5f", color:"#93c5fd", borderRadius:3, padding:"1px 4px" }}>{item.bottleType}</span> : null}{item.itemType==="expense"&&item.expenseLabel ? <span style={{ fontSize:9, marginLeft:4, background:"#451a03", color:"#fbbf24", borderRadius:3, padding:"1px 4px" }}>Exp: {item.expenseLabel}</span> : null}</div></td>
                                                     <td style={{ ...tdB, textAlign:"center" }}>{item.hsnCode||"—"}</td>
                                                     <td style={{ ...tdB, textAlign:"right" }}>{item.qty}</td>
                                                     <td style={{ ...tdB, textAlign:"right" }}>{fc(item.ratePerUnit||0)}</td>
@@ -9812,18 +9817,36 @@
                                         <div style={{ background:C.mid, borderRadius:14, padding:16, border:"1px solid "+C.border, marginBottom:14 }}>
                                             <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12, borderBottom:"1px solid #334155", paddingBottom:6 }}>
                                                 <div style={{ fontWeight:800, fontSize:13, color:C.violet }}>📦 Line Items</div>
-                                                <button onClick={addQuotItem} style={BTNP("linear-gradient(90deg,#7c3aed,#6366f1)")}>+ Add Item</button>
+                                                <div style={{ display:"flex", gap:6 }}>
+                                                    <button onClick={addQuotItem} style={BTNP("linear-gradient(90deg,#7c3aed,#6366f1)")}>+ Add Bottle</button>
+                                                    <button onClick={addExpenseItem} style={BTNP("linear-gradient(90deg,#d97706,#b45309)")}>+ Add Expense</button>
+                                                </div>
                                             </div>
                                             {quotForm.items.length === 0 ? (
                                                 <div style={{ textAlign:"center", color:C.muted, padding:20, fontSize:12 }}>No items yet. Click "+ Add Item" to start.</div>
                                             ) : (
                                                 <div style={{ overflowX:"auto" }}>
                                                     <table style={{ width:"100%", borderCollapse:"collapse", fontSize:11 }}>
-                                                        <thead><tr>{["Item / Description","HSN/SAC","Qty","Rate ₹","Disc%","GST%","Taxable","Tax Amt","Total",""].map(h => <th key={h} style={THS}>{h}</th>)}</tr></thead>
+                                                        <thead><tr>{["Type","Bottle/Expense","Item / Description","HSN/SAC","Qty","Rate ₹","Disc%","GST%","Taxable","Tax Amt","Total",""].map(h => <th key={h} style={THS}>{h}</th>)}</tr></thead>
                                                         <tbody>
                                                             {quotForm.items.map((item,idx) => (
-                                                                <tr key={idx}>
-                                                                    <td style={TDS}><input style={{ ...INP, marginBottom:0, minWidth:130 }} placeholder="Item name *" value={item.itemName||""} onChange={e => updateQuotItem(idx,"itemName",e.target.value)} /></td>
+                                                                <tr key={idx} style={{ background: item.itemType==="expense" ? "rgba(217,119,6,0.07)" : undefined }}>
+                                                                    <td style={TDS}>
+                                                                        <select style={{ ...INP, marginBottom:0, width:80, fontSize:10 }} value={item.itemType||"bottle"} onChange={e => { const t=e.target.value; updateQuotItem(idx,"itemType",t); if(t==="expense"){ updateQuotItem(idx,"bottleType",""); } }}>
+                                                                            <option value="bottle">🫙 Bottle</option>
+                                                                            <option value="expense">💸 Expense</option>
+                                                                        </select>
+                                                                    </td>
+                                                                    <td style={TDS}>
+                                                                        {(item.itemType||"bottle")==="bottle" ? (
+                                                                            <select style={{ ...INP, marginBottom:0, width:80 }} value={item.bottleType||"1L"} onChange={e => updateQuotItem(idx,"bottleType",e.target.value)}>
+                                                                                {BOTTLE_TYPES.map(b => <option key={b} value={b}>{b}</option>)}
+                                                                            </select>
+                                                                        ) : (
+                                                                            <input style={{ ...INP, marginBottom:0, width:100, fontSize:10 }} placeholder="Expense label" value={item.expenseLabel||""} onChange={e => updateQuotItem(idx,"expenseLabel",e.target.value)} />
+                                                                        )}
+                                                                    </td>
+                                                                    <td style={TDS}><input style={{ ...INP, marginBottom:0, minWidth:120 }} placeholder="Item name *" value={item.itemName||""} onChange={e => updateQuotItem(idx,"itemName",e.target.value)} /></td>
                                                                     <td style={TDS}><input style={{ ...INP, marginBottom:0, width:65 }} placeholder="HSN/SAC" value={item.hsnCode||""} onChange={e => updateQuotItem(idx,"hsnCode",e.target.value)} /></td>
                                                                     <td style={TDS}><input type="number" style={{ ...INP, marginBottom:0, width:60 }} value={item.qty} onChange={e => updateQuotItem(idx,"qty",e.target.value)} /></td>
                                                                     <td style={TDS}><input type="number" style={{ ...INP, marginBottom:0, width:75 }} value={item.ratePerUnit} onChange={e => updateQuotItem(idx,"ratePerUnit",e.target.value)} /></td>
@@ -9831,7 +9854,7 @@
                                                                     <td style={TDS}><select style={{ ...INP, marginBottom:0, width:68 }} value={item.gstRate||18} onChange={e => updateQuotItem(idx,"gstRate",Number(e.target.value))}>{[0,5,12,18,28].map(r=><option key={r} value={r}>{r}%</option>)}</select></td>
                                                                     <td style={{ ...TDS, fontWeight:700, color:C.text }}>{fc(item.taxableValue||0)}</td>
                                                                     <td style={{ ...TDS, color:C.amber, fontSize:10 }}>{(quotForm.gstType||"cgst_sgst")==="cgst_sgst"?`C:${fc(item.cgstAmount||0)} S:${fc(item.sgstAmount||0)}`:`I:${fc(item.igstAmount||0)}`}</td>
-                                                                    <td style={{ ...TDS, fontWeight:900, color:C.green }}>{fc(item.totalAmount||0)}</td>
+                                                                    <td style={{ ...TDS, fontWeight:900, color: item.itemType==="expense"?C.amber:C.green }}>{fc(item.totalAmount||0)}</td>
                                                                     <td style={TDS}><button style={BTND} onClick={() => removeQuotItem(idx)}>✕</button></td>
                                                                 </tr>
                                                             ))}
